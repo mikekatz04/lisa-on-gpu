@@ -61,10 +61,10 @@ void xi_projections(double *xi_p, double *xi_c, double *u, double *v, double *n)
 }
 
 __device__
-double interp_h(double delay)
+double interp_h(double delay, double out)
 {
 
-    return 1.0;
+    return out;
 
 }
 
@@ -99,16 +99,18 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
         k[i] = k_in[i];
         u[i] = u_in[i];
         v[i] = v_in[i];
+         //if (threadIdx.x == 1) printf("%e %e %e\n", k[i], u[i], v[i]);
     }
     __syncthreads();
 
     for (int i=threadIdx.x; i<6; i+=blockDim.x){
-        link_space_craft_0[i] = link_space_craft_0_in[i];
-        link_space_craft_1[i] = link_space_craft_1_in[i];
+        link_space_craft_0[i] = link_space_craft_1_in[i];
+        link_space_craft_1[i] = link_space_craft_0_in[i];
+        //if (threadIdx.x == 1) printf("%d %d %d %d\n", link_space_craft_0_in[i],link_space_craft_1_in[i], link_space_craft_1[i], link_space_craft_0[i]);
     }
     __syncthreads();
 
-    for (int link_i=blockDim.y; link_i<6; link_i+=gridDim.y){
+    for (int link_i=blockIdx.y; link_i<6; link_i+=gridDim.y){
 
         int sc0 = link_space_craft_0[link_i];
         int sc1 = link_space_craft_1[link_i];
@@ -132,7 +134,7 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
          n[1] = n_in[(link_i*3 + 1)*num + i];
          n[2] = n_in[(link_i*3 + 2)*num + i];
 
-         L = L_vals[6*num + i];
+         L = L_vals[link_i*num + i];
          t = i*dt;
 
          xi_projections(&xi_p, &xi_c, u, v, n);
@@ -143,10 +145,10 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
          delay0 = t - L*C_inv - k_dot_x0*C_inv;
          delay1 = t - k_dot_x1*C_inv;
 
-         hp_del0 = interp_h(delay0);
-         hc_del0 = interp_h(delay0);
-         hp_del1 = interp_h(delay1);
-         hc_del1 = interp_h(delay1);
+         hp_del0 = interp_h(delay0, 1.0);
+         hc_del0 = interp_h(delay0, 2.0);
+         hp_del1 = interp_h(delay1, 3.0);
+         hc_del1 = interp_h(delay1, 3.0);
 
          pre_factor = 1./(2*(1. - k_dot_n));
          large_factor = (hp_del0 - hp_del1)*xi_p + (hc_del0 - hc_del1)*xi_c;
@@ -288,12 +290,17 @@ int main()
     int nblocks = (int) ceil((num + NUM_THREADS - 1)/NUM_THREADS);
 
     dim3 gridDim(nblocks, nlinks);
-    response<<<gridDim, NUM_THREADS>>>(d_y_gw, d_k, d_u, d_v, dt, d_x, d_n_in,
+    response<<<1, NUM_THREADS>>>(d_y_gw, d_k, d_u, d_v, dt, d_x, d_n_in,
                   num, d_link_space_craft_0, d_link_space_craft_1,
                   d_L_vals);
 
     cudaDeviceSynchronize();
     gpuErrchk(cudaGetLastError());
+
+    double *y_gw = new double[num];
+
+    gpuErrchk(cudaMemcpy(y_gw, d_y_gw, num*sizeof(double), cudaMemcpyDeviceToHost));
+    for (int i=0; i<500; i++) printf("%e\n", y_gw[i]);
 
     delete[] n_in;
     delete[] x;
@@ -314,4 +321,5 @@ int main()
     gpuErrchk(cudaFree(d_L_vals));
 
     gpuErrchk(cudaFree(d_y_gw));
+    delete[] y_gw;
 }
