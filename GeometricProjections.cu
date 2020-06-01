@@ -1,7 +1,10 @@
 #include "stdio.h"
+#include "cuda_complex.hpp"
 
 #define C_inv 3.3356409519815204e-09
 #define NUM_THREADS 256
+
+typedef gcmplx::complex<double> cmplx;
 
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
@@ -69,8 +72,7 @@ double interp_h(double delay, double out)
 }
 
 __device__
-
-double interp(double *input, int h, int d, double e, double *factorials, int start_input_ind)
+void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, double e, double *factorials, int start_input_ind)
 {
 
 	double A = 1.0;
@@ -84,7 +86,9 @@ double interp(double *input, int h, int d, double e, double *factorials, int sta
 	double C = e;
 	double D = e * (1.0 - e);
 
-	double sum = 0.0;
+	double sum_hp = 0.0;
+    double sum_hc = 0.0;
+    cmplx temp_up, temp_down;
     //printf("in: %d %d\n", d, start_input_ind);
 	for (int j = 1; j< h; j += 1){
 
@@ -104,23 +108,28 @@ double interp(double *input, int h, int d, double e, double *factorials, int sta
         //printf("mid: %d %d %d\n", j, d, start_input_ind);
 
 		// perform calculation
-		sum += E * (input[d + 1 + j - start_input_ind] / F + input[d - j - start_input_ind] / G);
+        temp_up = input[d + 1 + j - start_input_ind];
+        temp_down = input[d - j - start_input_ind];
+		sum_hp += E * (temp_up.real() / F + temp_down.real() / G);
+        sum_hc += E * (temp_up.imag() / F + temp_down.imag() / G);
 
 	}
+    temp_up = input[d + 1 - start_input_ind];
+    temp_down = input[d - start_input_ind];
     //printf("out: %d %d\n", d, start_input_ind);
-	double result = A * (B * input[d + 1 - start_input_ind] + C * input[d - start_input_ind] + D * sum);
-    return result;
+	*result_hp = A * (B * temp_up.real() + C * temp_down.real() + D * sum_hp);
+    *result_hc = A * (B * temp_up.imag() + C * temp_down.imag() + D * sum_hc);
 }
 
 __global__
 void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt, double *x, double *n_in,
               int num_delays, int *link_space_craft_0_in, int *link_space_craft_1_in,
-              double *L_vals, double *new_vals, double *input_in, int num_inputs, double *delays_arr, int order, double sampling_frequency, int buffer_integer, double *factorials_in, int num_factorials, double input_start_time)
+              double *L_vals, double *new_vals, cmplx *input_in, int num_inputs, int order, double sampling_frequency, int buffer_integer, double *factorials_in, int num_factorials, double input_start_time)
 {
 
 
         __shared__ double factorials[100];
-        __shared__ double input[2000];
+        __shared__ cmplx input[1500];
         __shared__ double first_delay;
         __shared__ double last_delay;
         __shared__ int start_input_ind;
@@ -243,16 +252,14 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
          integer_delay = (int) ceil(clipped_delay * sampling_frequency) - 1;
          fraction = 1.0 + integer_delay - clipped_delay * sampling_frequency;
 
-         hp_del0 = interp(input, half_point_count, integer_delay, fraction, factorials, start_input_ind);
-         hc_del0 = interp(input, half_point_count, integer_delay, fraction, factorials, start_input_ind);
+         interp(&hp_del0, &hc_del0, input, half_point_count, integer_delay, fraction, factorials, start_input_ind);
 
          clipped_delay = delay1 - input_start_time;
          integer_delay = (int) ceil(clipped_delay * sampling_frequency) - 1;
          fraction = 1.0 + integer_delay - clipped_delay * sampling_frequency;
 
          //printf("%d %d\n", i, integer_delay);
-         hp_del1 = interp(input, half_point_count, integer_delay, fraction, factorials, start_input_ind);
-         hc_del1 = interp(input, half_point_count, integer_delay, fraction, factorials, start_input_ind);
+         interp(&hp_del1, &hc_del1, input, half_point_count, integer_delay, fraction, factorials, start_input_ind);
 
          //hp_del0 = interp_h(delay0, 1.0);
          //if (i <500) printf("%d %d: %e \n", i, link_i, hp_del1);
@@ -294,30 +301,20 @@ int main()
 	int num_pts_in = int(5e7);
 
 
-	double *input_in = new double[num_pts_in];
-	double *d_input_in;
+	cmplx *input_in = new cmplx[num_pts_in];
+	cmplx *d_input_in;
 
-	gpuErrchk(cudaMalloc(&d_input_in, num_pts_in*sizeof(double)));
+	gpuErrchk(cudaMalloc(&d_input_in, num_pts_in*sizeof(cmplx)));
 
 	double sampling_frequency = 1.0;
 	double dt = 1./sampling_frequency;
     double input_start_time = -10000.0;
-	for (int i=0; i<num_pts_in; i+=1) input_in[i] = sin(i*dt + input_start_time);
+    cmplx I(0.0, 1.0);
+	for (int i=0; i<num_pts_in; i+=1) input_in[i] = sin(i*dt + input_start_time) + I*cos(i*dt + input_start_time);
 
-	gpuErrchk(cudaMemcpy(d_input_in, input_in, num_pts_in*sizeof(double), cudaMemcpyHostToDevice));
+	gpuErrchk(cudaMemcpy(d_input_in, input_in, num_pts_in*sizeof(cmplx), cudaMemcpyHostToDevice));
 
 	int num_delays = int(3.15576E+07);
-
-	double *delays_arr = new double[num_delays];
-
-	double start_delay = 1000.0;
-	for (int i=0; i<num_delays; i+=1){
-		delays_arr[i] = start_delay + 1.33333333 * i;
-	}
-
-	double *d_delays_arr;
-	gpuErrchk(cudaMalloc(&d_delays_arr, num_delays*sizeof(double)));
-	gpuErrchk(cudaMemcpy(d_delays_arr, delays_arr, num_delays*sizeof(double), cudaMemcpyHostToDevice));
 
 	double *d_new_vals;
 	gpuErrchk(cudaMalloc(&d_new_vals, num_delays*sizeof(double)));
@@ -455,7 +452,7 @@ int main()
     response<<<gridDim, NUM_THREADS>>>(d_y_gw, d_k, d_u, d_v, dt, d_x, d_n_in,
                   num_delays, d_link_space_craft_0, d_link_space_craft_1,
                   d_L_vals,
-                    d_new_vals, d_input_in, num_pts_in, d_delays_arr, order, sampling_frequency, buffer_integer, d_factorials_in, num_fac, input_start_time);
+                    d_new_vals, d_input_in, num_pts_in, order, sampling_frequency, buffer_integer, d_factorials_in, num_fac, input_start_time);
 
     cudaDeviceSynchronize();
     gpuErrchk(cudaGetLastError());
@@ -494,11 +491,9 @@ int main()
 
 
 	gpuErrchk(cudaFree(d_input_in));
-	gpuErrchk(cudaFree(d_delays_arr));
 	gpuErrchk(cudaFree(d_factorials_in));
 	gpuErrchk(cudaFree(d_new_vals));
 
 	delete[] input_in;
-	delete[] delays_arr;
 	delete[] new_vals;
 }
