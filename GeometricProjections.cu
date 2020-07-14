@@ -1,10 +1,6 @@
 #include "stdio.h"
 #include "cuda_complex.hpp"
-
-#define C_inv 3.3356409519815204e-09
-#define NUM_THREADS 256
-
-typedef gcmplx::complex<double> cmplx;
+#include "GeometricProjections.hh"
 
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
@@ -124,12 +120,12 @@ void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, do
 __global__
 void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt, double *x, double *n_in,
               int num_delays, int *link_space_craft_0_in, int *link_space_craft_1_in,
-              double *L_vals, double *new_vals, cmplx *input_in, int num_inputs, int order, double sampling_frequency, int buffer_integer, double *factorials_in, int num_factorials, double input_start_time)
+              double *L_vals, cmplx *input_in, int num_inputs, int order, double sampling_frequency, int buffer_integer, double *factorials_in, int num_factorials, double input_start_time)
 {
 
 
         __shared__ double factorials[100];
-        __shared__ cmplx input[1500];
+        __shared__ cmplx input[1000];
         __shared__ double first_delay;
         __shared__ double last_delay;
         __shared__ int start_input_ind;
@@ -156,8 +152,8 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
             double hp_del0, hp_del1, hc_del0, hc_del1;
 
             double large_factor, pre_factor;
-            double clipped_delay, out, fraction;
-            int integer_delay;
+            double clipped_delay0, clipped_delay1, out, fraction0, fraction1;
+            int integer_delay0, integer_delay1, max_integer_delay, min_integer_delay;
 
 
         int start, end;
@@ -197,31 +193,8 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
          i < num_delays;
          i += blockDim.x*gridDim.x){
 
-             if (threadIdx.x == 0){
-                 start = i;
-                 if (start + blockDim.x >= num_delays) end = num_delays - 1;
-                 else end = start + blockDim.x - 1;
+         int max_thread_num = (num_delays - blockDim.x*blockIdx.x > NUM_THREADS) ? NUM_THREADS : num_delays - blockDim.x*blockIdx.x;
 
-                 // makes assumption that delays and input vectors will be similar
-                 // buffer index should be conservative to no risk missing points
-                 // have to be careful: sampling frequency is assumed to be the same for inputs and outputs
-                 first_delay = start*dt - input_start_time;
-                 last_delay = end*dt - input_start_time;
-
-                 start_input_ind = (int) floor(first_delay*sampling_frequency) - buffer_integer;
-
-                 end_input_ind = (int) ceil(last_delay*sampling_frequency) + buffer_integer;
-             }
-
-
-
-        __syncthreads();
-
-        for (int jj = threadIdx.x + start_input_ind; jj < end_input_ind; jj+=blockDim.x){
-            input[jj - start_input_ind] = input_in[jj];
-        }
-
-        __syncthreads();
          x0[0] = x[(sc0*3 + 0)*num_delays + i];
          x0[1] = x[(sc0*3 + 1)*num_delays + i];
          x0[2] = x[(sc0*3 + 2)*num_delays + i];
@@ -245,21 +218,42 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
          k_dot_x0 = dot_product_1d(k, x0);
          k_dot_x1 = dot_product_1d(k, x1);
 
-         delay0 = t - L*C_inv - k_dot_x0*C_inv;
+         delay0 = t - L - k_dot_x0*C_inv;
          delay1 = t - k_dot_x1*C_inv;
 
-         clipped_delay = delay0 - input_start_time;
-         integer_delay = (int) ceil(clipped_delay * sampling_frequency) - 1;
-         fraction = 1.0 + integer_delay - clipped_delay * sampling_frequency;
+         clipped_delay0 = delay0 - input_start_time;
+         integer_delay0 = (int) ceil(clipped_delay0 * sampling_frequency) - 1;
+         fraction0 = 1.0 + integer_delay0 - clipped_delay0 * sampling_frequency;
 
-         interp(&hp_del0, &hc_del0, input, half_point_count, integer_delay, fraction, factorials, start_input_ind);
+         clipped_delay1 = delay1 - input_start_time;
+         integer_delay1 = (int) ceil(clipped_delay1 * sampling_frequency) - 1;
+         fraction1 = 1.0 + integer_delay1 - clipped_delay1 * sampling_frequency;
 
-         clipped_delay = delay1 - input_start_time;
-         integer_delay = (int) ceil(clipped_delay * sampling_frequency) - 1;
-         fraction = 1.0 + integer_delay - clipped_delay * sampling_frequency;
+         max_integer_delay = (integer_delay0 < integer_delay1) ? integer_delay1 : integer_delay0;
+         max_integer_delay += 2; // encompass all
+         min_integer_delay = (integer_delay0 < integer_delay1) ? integer_delay0 : integer_delay1;
 
-         //printf("%d %d\n", i, integer_delay);
-         interp(&hp_del1, &hc_del1, input, half_point_count, integer_delay, fraction, factorials, start_input_ind);
+         if (threadIdx.x == 0){
+              start_input_ind = min_integer_delay - buffer_integer;
+        }
+        if (threadIdx.x == max_thread_num - 1){
+              end_input_ind = max_integer_delay + buffer_integer;
+        }
+
+        //printf("%d %d %d %d\n", integer_delay0, integer_delay1, start_input_ind, end_input_ind);
+
+        __syncthreads();
+        //if (blockIdx.x == gridDim.x - 1) printf("%d %d %d %d %d %d %d %d %d %d\n", i, threadIdx.x, blockDim.x*blockIdx.x, num_delays, num_delays - blockDim.x*blockIdx.x, max_thread_num, start_input_ind, end_input_ind, integer_delay0, integer_delay1);
+         for (int jj = threadIdx.x + start_input_ind; jj < end_input_ind; jj+=max_thread_num){
+            //if (threadIdx.x == blockDim.x - 1) printf("%d, %d %d %d %d\n", blockIdx.x, link_i, jj - start_input_ind,  start_input_ind, end_input_ind);
+            input[jj - start_input_ind] = input_in[jj];
+         }
+
+
+         __syncthreads();
+
+         interp(&hp_del0, &hc_del0, input, half_point_count, integer_delay0, fraction0, factorials, start_input_ind);
+         interp(&hp_del1, &hc_del1, input, half_point_count, integer_delay1, fraction1, factorials, start_input_ind);
 
          //hp_del0 = interp_h(delay0, 1.0);
          //if (i <500) printf("%d %d: %e \n", i, link_i, hp_del1);
@@ -272,12 +266,35 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
 
          y_gw[link_i*num_delays + i] = pre_factor*large_factor;
 
+         //printf("%d %e %e %e %e %e %e %e %e \n", threadIdx.x, pre_factor, hp_del0, hp_del1, hc_del0, hc_del1, xi_p, xi_c, large_factor);
+
+
          __syncthreads();
     }
 }
 
 
         //double min_delay = (double) half_point_count / sampling_frequency;
+
+}
+
+
+void get_response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt, double *x, double *n_in,
+              int num_delays, int *link_space_craft_0_in, int *link_space_craft_1_in,
+              double *L_vals, cmplx *input_in, int num_inputs, int order, double sampling_frequency, int buffer_integer, double *factorials_in, int num_factorials, double input_start_time){
+
+      int nblocks = (int) ceil((num_delays + NUM_THREADS - 1)/NUM_THREADS);
+
+      dim3 gridDim(nblocks, 1);
+      response<<<gridDim, NUM_THREADS>>>
+      //response<<<1,1>>>
+                    (y_gw, k_in, u_in, v_in, dt, x, n_in,
+                    num_delays, link_space_craft_0_in, link_space_craft_1_in,
+                    L_vals,
+                      input_in, num_inputs, order, sampling_frequency, buffer_integer, factorials_in, num_factorials, input_start_time);
+
+      cudaDeviceSynchronize();
+      gpuErrchk(cudaGetLastError());
 
 }
 
@@ -298,7 +315,7 @@ int main()
 	gpuErrchk(cudaMalloc(&d_factorials_in, num_fac*sizeof(double)));
 	gpuErrchk(cudaMemcpy(d_factorials_in, factorials_in, num_fac*sizeof(double), cudaMemcpyHostToDevice));
 
-	int num_pts_in = int(5e7);
+	int num_pts_in = int(1e6);
 
 
 	cmplx *input_in = new cmplx[num_pts_in];
@@ -314,13 +331,11 @@ int main()
 
 	gpuErrchk(cudaMemcpy(d_input_in, input_in, num_pts_in*sizeof(cmplx), cudaMemcpyHostToDevice));
 
-	int num_delays = int(3.15576E+07);
-
-	double *d_new_vals;
-	gpuErrchk(cudaMalloc(&d_new_vals, num_delays*sizeof(double)));
+	int num_delays = int(1e5);
 
     int order = 25;
     int buffer_integer = order + 1;
+
 
 
     double beta = 0.5;
@@ -444,18 +459,11 @@ int main()
 
     gpuErrchk(cudaMalloc(&d_y_gw, nlinks*num_delays*sizeof(double)));
 
-    int nblocks = (int) ceil((num_delays + NUM_THREADS - 1)/NUM_THREADS);
-
-    dim3 gridDim(nblocks, nlinks);
-
     for (int i=0; i<1; i++){
-    response<<<gridDim, NUM_THREADS>>>(d_y_gw, d_k, d_u, d_v, dt, d_x, d_n_in,
-                  num_delays, d_link_space_craft_0, d_link_space_craft_1,
-                  d_L_vals,
-                    d_new_vals, d_input_in, num_pts_in, order, sampling_frequency, buffer_integer, d_factorials_in, num_fac, input_start_time);
 
-    cudaDeviceSynchronize();
-    gpuErrchk(cudaGetLastError());
+        get_response(d_y_gw, d_k, d_u, d_v, dt, d_x, d_n_in,
+                      num_delays, d_link_space_craft_0, d_link_space_craft_1,
+                      d_L_vals, d_input_in, num_pts_in, order, sampling_frequency, buffer_integer, d_factorials_in, num_fac,  input_start_time);
 }
 
     double *y_gw = new double[num_delays];
@@ -484,16 +492,8 @@ int main()
     gpuErrchk(cudaFree(d_y_gw));
     delete[] y_gw;
 
-    double *new_vals = new double[num_delays];
-	gpuErrchk(cudaMemcpy(new_vals, d_new_vals, num_delays*sizeof(double), cudaMemcpyDeviceToHost));
-
-	//for (int i=int(1e7); i<int(1e7) + 300; i+=1) printf("%lf\n", new_vals[i]);
-
-
 	gpuErrchk(cudaFree(d_input_in));
 	gpuErrchk(cudaFree(d_factorials_in));
-	gpuErrchk(cudaFree(d_new_vals));
 
 	delete[] input_in;
-	delete[] new_vals;
 }
