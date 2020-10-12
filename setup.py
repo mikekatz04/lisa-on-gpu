@@ -125,7 +125,7 @@ except AttributeError:
 if run_cuda_install:
 
     gpu_extension = dict(
-        libraries=["cudart", "cublas", "cusparse", "gsl", "gslcblas"],
+        libraries=["cudart", "cublas", "cusparse"],
         library_dirs=[CUDA["lib64"]],
         runtime_library_dirs=[CUDA["lib64"]],
         language="c++",
@@ -153,18 +153,16 @@ if run_cuda_install:
                 "'-fPIC'",
                 "-Xcompiler",
                 "-fopenmp",
-                "-G",
-                "-g",
-                "-O0",
+                #"-G",
+                #"-g",
+                #"-O0",
                 # "-lineinfo",
             ],  # for debugging
         },
         include_dirs=[
             numpy_include,
             CUDA["include"],
-            "few/src",
-            "include",
-            "/home/mlk667/.conda/envs/few_env/include/",
+            "./",
         ],
     )
 
@@ -183,7 +181,7 @@ else:
 
 
 setup(
-    name="few",
+    name="response",
     author="Michael Katz",
     author_email="mikekatz04@gmail.com",
     ext_modules=extensions,

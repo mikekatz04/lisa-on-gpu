@@ -68,6 +68,56 @@ double interp_h(double delay, double out)
 }
 
 __device__
+void interp_single(double *result_hp, double *result_hc, cmplx *input, int h, int d, double e, double *factorials, int start_input_ind)
+{
+
+	double A = 1.0;
+	for (int i = 1; i < h; i += 1){
+		A *= (i + e) * (i + 1 - e);
+	}
+	double denominator = factorials[h - 1] * factorials[h];
+    A /= denominator;
+
+	double B = 1.0 - e;
+	double C = e;
+	double D = e * (1.0 - e);
+
+	double sum_hp = 0.0;
+    double sum_hc = 0.0;
+    cmplx temp_up, temp_down;
+    //printf("in: %d %d\n", d, start_input_ind);
+	for (int j = 1; j< h; j += 1){
+
+		// get constants
+
+		double first_term = factorials[h - 1] / factorials[h - 1 - j];
+		double second_term = factorials[h] / factorials[h + j];
+		double value = first_term * second_term;
+
+		value = value * pow(-1.0, (double)j);
+
+		double E = value;
+
+		double F = j + e;
+		double G = j + (1 - e);
+
+        //printf("mid: %d %d %d\n", j, d, start_input_ind);
+
+		// perform calculation
+        temp_up = input[d + 1 + j - start_input_ind];
+        temp_down = input[d - j - start_input_ind];
+		sum_hp += E * (temp_up.real() / F + temp_down.real() / G);
+        sum_hc += E * (temp_up.imag() / F + temp_down.imag() / G);
+
+	}
+    temp_up = input[d + 1 - start_input_ind];
+    temp_down = input[d - start_input_ind];
+    //printf("out: %d %d\n", d, start_input_ind);
+	*result_hp = A * (B * temp_up.real() + C * temp_down.real() + D * sum_hp);
+    *result_hc = A * (B * temp_up.imag() + C * temp_down.imag() + D * sum_hc);
+}
+
+__device__
 void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, double e, double *factorials, int start_input_ind)
 {
 
