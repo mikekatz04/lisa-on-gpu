@@ -28,7 +28,7 @@ def get_factorial(n):
 from few.waveform import FastSchwarzschildEccentricFlux
 
 class pyResponseTDI(object):
-    def __init__(self, sampling_frequency, orbits_file="orbits.h5", num_interp_points=27, order=25, num_factorials=100):
+    def __init__(self, sampling_frequency, orbits_file="orbits.h5", num_interp_points=100, order=25, num_factorials=100):
 
         self.sampling_frequency = sampling_frequency
         self.dt = 1/sampling_frequency
@@ -90,7 +90,7 @@ class pyResponseTDI(object):
             inds = np.append(inds, length -1)
             self.init_len += 1
 
-        self.t_vals = self.t_vals[inds] * 100.0
+        self.t_vals = self.t_vals[inds] * 1000.0
         interp_in = xp.zeros((self.ninterps, self.init_len))
 
         for i in range(3):  # number of spacecraft
@@ -159,6 +159,7 @@ class pyResponseTDI(object):
         num = 200
 
         for i in range(num):
+
             get_response_wrap(
                 y_gw,
                 k_in,
@@ -221,7 +222,7 @@ few = FastSchwarzschildEccentricFlux(
 
 input_start_time = -10000.0
 
-num_pts_in = int(3e7)
+num_pts_in = int(4e7)
 A = 1e-22
 
 M = 1e6
@@ -240,15 +241,11 @@ lam = 1.3
 
 input_in = A * few(M, mu, p0, e0, theta, phi, dt=dt, T=T)
 
-response = pyResponseTDI(sampling_frequency, orbits_file="orbits.h5", order=25, num_factorials=100)
-<<<<<<< Updated upstream
-rep = 1
-=======
+response = pyResponseTDI(sampling_frequency, orbits_file="orbits.h5", order=16, num_factorials=100)
 
->>>>>>> Stashed changes
 if gpu:
 
-    y_gw = response(int(1e6), input_in, beta, lam, input_start_time)
+    y_gw = response(int(3.2e7), input_in, beta, lam, input_start_time)
         # print(i)
 
 breakpoint()

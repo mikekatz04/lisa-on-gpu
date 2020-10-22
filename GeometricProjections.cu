@@ -67,11 +67,7 @@ double interp_h(double delay, double out)
 
 }
 
-<<<<<<< Updated upstream
-
-=======
 /*
->>>>>>> Stashed changes
 __device__
 void interp_single(double *result, double *input, int h, int d, double e, double *factorials, int start_input_ind)
 {
@@ -174,7 +170,7 @@ void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, do
 #define NUM_PARS  33
 #define NUM_COEFFS 4
 #define NLINKS  6
-
+#define BUFFER_SIZE 1000
 
 __global__
 void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
@@ -277,7 +273,7 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
     int point_count = order + 1;
     int half_point_count = int(point_count / 2);
 
-    for (int link_i=blockIdx.y; link_i<2; link_i+=gridDim.y){
+    for (int link_i=blockIdx.y; link_i<NLINKS; link_i+=gridDim.y){
 
         int sc0 = link_space_craft_0[link_i];
         int sc1 = link_space_craft_1[link_i];
@@ -346,6 +342,7 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
 
         __syncthreads();
 
+    num_delays = end_ind - start_ind;
     for (int i=start_ind + threadIdx.x + blockDim.x*blockIdx.x;
          i < end_ind;
          i += blockDim.x * gridDim.x){
@@ -397,17 +394,20 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
         }
 
         if (threadIdx.x == max_thread_num - 1){
+            //if (blockIdx.x == gridDim.x - 1)
+                //printf("%e %e %d %d\n", clipped_delay0, clipped_delay1, integer_delay0, integer_delay1);
               end_input_ind = max_integer_delay + buffer_integer;
         }
 
         __syncthreads();
 
-        //if (blockIdx.x == gridDim.x - 1) printf("%d %d %d %d %d %d %d %d %d %d\n", i, threadIdx.x, blockDim.x*blockIdx.x, num_delays, num_delays - blockDim.x*blockIdx.x, max_thread_num, start_input_ind, end_input_ind, integer_delay0, integer_delay1);
-         for (int jj = threadIdx.x + start_input_ind; jj < end_input_ind; jj+=max_thread_num){
-            //if (threadIdx.x == blockDim.x - 1) printf("%d, %d %d %d %d\n", blockIdx.x, link_i, jj - start_input_ind,  start_input_ind, end_input_ind);
+        //if (blockIdx.x == gridDim.x - 1) printf("%d %e %d %d %d %d %d %d %d %d %d %d %d\n", i, L, blockIdx.x, gridDim.x, threadIdx.x, blockDim.x*blockIdx.x, num_delays, num_delays - blockDim.x*blockIdx.x, max_thread_num, start_input_ind, end_input_ind, integer_delay0, integer_delay1);
+        if (end_input_ind - start_input_ind > BUFFER_SIZE) printf("%d %d %d %d %d %d %d %d\n", threadIdx.x, max_integer_delay, start_input_ind, end_input_ind, i, max_thread_num, num_delays, blockIdx.x*blockDim.x);
+
+        for (int jj = threadIdx.x + start_input_ind; jj < end_input_ind; jj+=max_thread_num){
+            //cmplx temp = input_in[jj];
             input[jj - start_input_ind] = input_in[jj];
          }
-
 
          __syncthreads();
 
@@ -424,9 +424,7 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
          large_factor = (hp_del0 - hp_del1)*xi_p + (hc_del0 - hc_del1)*xi_c;
 
          y_gw[link_i*num_delays + i] = pre_factor*large_factor;
-
          //printf("%d %e %e %e %e %e %e %e %e \n", threadIdx.x, pre_factor, hp_del0, hp_del1, hc_del0, hc_del1, xi_p, xi_c, large_factor);
-
          __syncthreads();
     }
 
