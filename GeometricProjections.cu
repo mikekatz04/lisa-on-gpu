@@ -67,6 +67,7 @@ double interp_h(double delay, double out)
 
 }
 
+/*
 __device__
 void interp_single(double *result, double *input, int h, int d, double e, double *factorials, int start_input_ind)
 {
@@ -113,6 +114,7 @@ void interp_single(double *result, double *input, int h, int d, double e, double
     //printf("out: %d %d\n", d, start_input_ind);
 	*result = A * (B * temp_up + C * temp_down + D * sum_hp);
 }
+*/
 
 __device__
 void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, double e, double *factorials, int start_input_ind)
@@ -182,8 +184,8 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
             __shared__ double k[3];
             __shared__ double u[3];
             __shared__ double v[3];
-            __shared__ double link_space_craft_0[6];
-            __shared__ double link_space_craft_1[6];
+            __shared__ int link_space_craft_0[6];
+            __shared__ int link_space_craft_1[6];
 
             __shared__ double x0_all[3*NUM_THREADS];
             __shared__ double x1_all[3*NUM_THREADS];
@@ -218,7 +220,8 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
     for (int i=threadIdx.x; i<6; i+=blockDim.x){
         link_space_craft_0[i] = link_space_craft_1_in[i];
         link_space_craft_1[i] = link_space_craft_0_in[i];
-        //if (threadIdx.x == 1) printf("%d %d %d %d\n", link_space_craft_0_in[i],link_space_craft_1_in[i], link_space_craft_1[i], link_space_craft_0[i]);
+
+        //if (blockIdx.x == 0) printf("%d %d %d\n", threadIdx.x, link_space_craft_0[i], link_space_craft_1[i]);
     }
     __syncthreads();
 

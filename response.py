@@ -61,8 +61,8 @@ class pyResponseTDI(object):
         link_space_craft_0[5] = 2
         link_space_craft_1[5] = 1
 
-        self.link_space_craft_0_in = xp.asarray(link_space_craft_0)
-        self.link_space_craft_1_in = xp.asarray(link_space_craft_1)
+        self.link_space_craft_0_in = xp.asarray(link_space_craft_0).astype(xp.int32)
+        self.link_space_craft_1_in = xp.asarray(link_space_craft_1).astype(xp.int32)
 
     def _init_orbit_information(self, orbits_file):
         out = {}
@@ -233,7 +233,7 @@ lam = 1.3
 input_in = A * few(M, mu, p0, e0, theta, phi, dt=dt, T=T)
 
 response = pyResponseTDI(sampling_frequency, orbits_file="orbits.h5", order=25, num_factorials=100)
-rep = 32
+rep = 1
 if gpu:
 
     y_gw = response(input_in, beta, lam, input_start_time, rep=rep)
