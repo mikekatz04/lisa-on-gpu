@@ -14,6 +14,8 @@ except (ImportError, ModuleNotFoundError) as e:
 import time
 import h5py
 
+from few.summation.interpolatedmodesum import CubicSplineInterpolant
+from few.utils.constants import *
 
 def get_factorial(n):
     fact = 1
@@ -26,7 +28,7 @@ def get_factorial(n):
 from few.waveform import FastSchwarzschildEccentricFlux
 
 class pyResponseTDI(object):
-    def __init__(self, sampling_frequency, orbits_file="orbits.h5", order=25, num_factorials=100):
+    def __init__(self, sampling_frequency, orbits_file="orbits.h5", num_interp_points=27, order=25, num_factorials=100):
 
         self.sampling_frequency = sampling_frequency
         self.dt = 1/sampling_frequency
@@ -38,6 +40,7 @@ class pyResponseTDI(object):
         factorials = np.asarray([float(get_factorial(n)) for n in range(num_factorials)])
         self.factorials_in = xp.asarray(factorials)
 
+        self.num_interp_points = num_interp_points
         self._init_link_indices()
         self._init_orbit_information(orbits_file)
 
@@ -70,17 +73,40 @@ class pyResponseTDI(object):
             for key in f:
                 out[key] = f[key][:]
 
+        self.num_spacecraft_inputs = length = len(out['n12_1'])
         L_vals = []
         n_in = []
+
+        self.t_vals = out['n12_1'].T[0].astype(xp.float64)
+
+        slice_int = int(length / self.num_interp_points)
+
+        inds = np.arange(0, length, slice_int)
+
+        self.init_len = len(inds)
+        self.ninterps = 33
+
+        if inds[-1] != length - 1:
+            inds = np.append(inds, length -1)
+            self.init_len += 1
+
+        self.t_vals = self.t_vals[inds] * 100.0
+        interp_in = xp.zeros((self.ninterps, self.init_len))
+
+        for i in range(3):  # number of spacecraft
+
+            interp_in[i * 3 + 0] = xp.asarray(out["x" + str(i + 1) + "_1"].T[1][inds]).astype(xp.float64)
+            interp_in[i * 3 + 1] = xp.asarray(out["x" + str(i + 1) + "_2"].T[1][inds]).astype(xp.float64)
+            interp_in[i * 3 + 2] = xp.asarray(out["x" + str(i + 1) + "_3"].T[1][inds]).astype(xp.float64)
+
         for i in range(self.nlinks):
+            start_ind = 3 * 3
             link_0 = self.link_space_craft_0_in[i]
             link_1 = self.link_space_craft_1_in[i]
 
-            L_vals.append(out["L" + str(link_0 + 1) + str(link_1 + 1)].T[1])
-
-            x_val = out["n" + str(link_0 + 1) + str(link_1 + 1) + "_1"].T[1]
-            y_val = out["n" + str(link_0 + 1) + str(link_1 + 1) + "_2"].T[1]
-            z_val = out["n" + str(link_0 + 1) + str(link_1 + 1) + "_3"].T[1]
+            x_val = xp.asarray(out["n" + str(link_0 + 1) + str(link_1 + 1) + "_1"].T[1][inds]).astype(xp.float64)
+            y_val = xp.asarray(out["n" + str(link_0 + 1) + str(link_1 + 1) + "_2"].T[1][inds]).astype(xp.float64)
+            z_val = xp.asarray(out["n" + str(link_0 + 1) + str(link_1 + 1) + "_3"].T[1][inds]).astype(xp.float64)
 
             norm = (x_val ** 2 + y_val ** 2 + z_val ** 2) ** (1 / 2)
 
@@ -88,23 +114,18 @@ class pyResponseTDI(object):
             n_ij_y = y_val / norm
             n_ij_z = z_val / norm
 
-            n_in.append(np.concatenate([n_ij_x, n_ij_y, n_ij_z]))
+            interp_in[start_ind + i * 3 + 0] = n_ij_x
+            interp_in[start_ind + i * 3 + 1] = n_ij_y
+            interp_in[start_ind + i * 3 + 2] = n_ij_z
 
-        self.L_vals = np.concatenate(L_vals)
-        self.n_in = np.concatenate(n_in)
+            start_ind = start_ind + 6 * 3
 
-        x = []
-        for i in range(3):  # number of spacecraft
-            x_i_x = out["x" + str(i + 1) + "_1"].T[1]
-            x_i_y = out["x" + str(i + 1) + "_2"].T[1]
-            x_i_z = out["x" + str(i + 1) + "_3"].T[1]
+            interp_in[start_ind + i] = xp.asarray(out["L" + str(link_0 + 1) + str(link_1 + 1)].T[1][inds]).astype(xp.float64)
 
-            x.append(np.concatenate([x_i_x, x_i_y, x_i_z]))
+        self.spline = CubicSplineInterpolant(xp.asarray(self.t_vals), interp_in, use_gpu=gpu)
 
-        self.num_spacecraft_inputs = len(out["x1_1"])
-        self.x = np.concatenate(x)
 
-    def __call__(self, input_in, beta, lam, input_start_time, rep=32):
+    def __call__(self, num_delays, input_in, beta, lam, input_start_time):
 
         k = np.zeros(3, dtype=np.float)
         u = np.zeros(3, dtype=np.float)
@@ -126,43 +147,27 @@ class pyResponseTDI(object):
         k[1] = -cosbeta * sinlam
         k[2] = -cosbeta
 
-        num_delays = rep * self.num_spacecraft_inputs
-
         y_gw = xp.zeros((self.nlinks * num_delays,), dtype=xp.float)
         k_in = xp.asarray(k)
         u_in = xp.asarray(u)
         v_in = xp.asarray(v)
 
-        x = xp.concatenate(
-            [xp.asarray(self.x).reshape(3, 3, self.num_spacecraft_inputs) for i in range(rep)], axis=-1
-        ).flatten()
-
-        n_in = xp.concatenate(
-            [xp.asarray(self.n_in).reshape(self.nlinks, 3, self.num_spacecraft_inputs) for i in range(rep)], axis=-1
-        ).flatten()
-
-        L_vals = xp.concatenate(
-            [xp.asarray(self.L_vals).reshape(self.nlinks, self.num_spacecraft_inputs) for i in range(rep)]
-        ).flatten()
-
         input_in = xp.asarray(input_in)
         num_pts_in = len(input_in)
 
         st = time.perf_counter()
-        num = 25
+        num = 200
+
         for i in range(num):
             get_response_wrap(
                 y_gw,
                 k_in,
                 u_in,
                 v_in,
-                dt,
-                x,
-                n_in,
+                self.dt,
                 num_delays,
                 self.link_space_craft_0_in,
                 self.link_space_craft_1_in,
-                L_vals,
                 input_in,
                 num_pts_in,
                 self.order,
@@ -171,14 +176,17 @@ class pyResponseTDI(object):
                 self.factorials_in,
                 self.num_factorials,
                 input_start_time,
+                self.spline.interp_array,
+                len(self.t_vals),
+                self.t_vals,
             )
         et = time.perf_counter()
-        print("Num delays:", self.num_spacecraft_inputs * rep, (et - st) / num)
+        print("Num delays:", num_delays, (et - st) / num)
 
         return y_gw.reshape(self.nlinks, -1)
 
 
-use_gpu = True
+use_gpu = gpu
 
 # keyword arguments for inspiral generator (RunSchwarzEccFluxInspiral)
 inspiral_kwargs={
@@ -213,7 +221,7 @@ few = FastSchwarzschildEccentricFlux(
 
 input_start_time = -10000.0
 
-num_pts_in = int(1e7)
+num_pts_in = int(3e7)
 A = 1e-22
 
 M = 1e6
@@ -225,7 +233,7 @@ phi = np.pi/4  # azimuthal viewing angle
 
 sampling_frequency = 1.0
 dt = 1/sampling_frequency
-T = num_pts_in * dt
+T = (num_pts_in * dt) / YRSID_SI
 
 beta = 0.4
 lam = 1.3
@@ -233,10 +241,14 @@ lam = 1.3
 input_in = A * few(M, mu, p0, e0, theta, phi, dt=dt, T=T)
 
 response = pyResponseTDI(sampling_frequency, orbits_file="orbits.h5", order=25, num_factorials=100)
+<<<<<<< Updated upstream
 rep = 1
+=======
+
+>>>>>>> Stashed changes
 if gpu:
 
-    y_gw = response(input_in, beta, lam, input_start_time, rep=rep)
+    y_gw = response(int(1e6), input_in, beta, lam, input_start_time)
         # print(i)
 
 breakpoint()

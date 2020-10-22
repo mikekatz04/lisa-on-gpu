@@ -67,7 +67,11 @@ double interp_h(double delay, double out)
 
 }
 
+<<<<<<< Updated upstream
 
+=======
+/*
+>>>>>>> Stashed changes
 __device__
 void interp_single(double *result, double *input, int h, int d, double e, double *factorials, int start_input_ind)
 {
@@ -114,6 +118,7 @@ void interp_single(double *result, double *input, int h, int d, double e, double
     //printf("out: %d %d\n", d, start_input_ind);
 	*result = A * (B * temp_up + C * temp_down + D * sum);
 }
+*/
 
 
 __device__
@@ -166,12 +171,17 @@ void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, do
     *result_hc = A * (B * temp_up.imag() + C * temp_down.imag() + D * sum_hc);
 }
 
-#define  BUFFER_SIZE 1000
+#define NUM_PARS  33
+#define NUM_COEFFS 4
+#define NLINKS  6
+
 
 __global__
-void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt, double *x, double *n_in,
+void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
               int num_delays, int *link_space_craft_0_in, int *link_space_craft_1_in,
-              double *L_vals, cmplx *input_in, int num_inputs, int order, double sampling_frequency, int buffer_integer, double *factorials_in, int num_factorials, double input_start_time)
+              cmplx *input_in, int num_inputs, int order, double sampling_frequency,
+              int buffer_integer, double *factorials_in, int num_factorials, double input_start_time,
+              double* interp_array, double old_time, int old_ind, int start_ind, int end_ind, int init_length)
 {
 
 
@@ -181,21 +191,39 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
         __shared__ double last_delay;
         __shared__ int start_input_ind;
         __shared__ int end_input_ind;
+        __shared__ double spline_coeffs[NUM_PARS * NUM_COEFFS];
 
 
             __shared__ double k[3];
             __shared__ double u[3];
             __shared__ double v[3];
-            __shared__ int link_space_craft_0[6];
-            __shared__ int link_space_craft_1[6];
+            __shared__ int link_space_craft_0[NLINKS];
+            __shared__ int link_space_craft_1[NLINKS];
 
-            __shared__ double x0_all[3*NUM_THREADS];
-            __shared__ double x1_all[3*NUM_THREADS];
-            __shared__ double n_all[3*NUM_THREADS];
+            __shared__ double x0_y[3];
+            __shared__ double x0_c1[3];
+            __shared__ double x0_c2[3];
+            __shared__ double x0_c3[3];
 
-            double *x0 = &x0_all[3*threadIdx.x];
-            double *x1 = &x1_all[3*threadIdx.x];
-            double *n = &n_all[3*threadIdx.x];
+            __shared__ double x1_y[3];
+            __shared__ double x1_c1[3];
+            __shared__ double x1_c2[3];
+            __shared__ double x1_c3[3];
+
+            __shared__ double n_y[3];
+            __shared__ double n_c1[3];
+            __shared__ double n_c2[3];
+            __shared__ double n_c3[3];
+
+            __shared__ double x0_all[3 * NUM_THREADS];
+            __shared__ double x1_all[3 * NUM_THREADS];
+            __shared__ double n_all[3 * NUM_THREADS];
+
+            double* x0 = &x0_all[3 * threadIdx.x];
+            double* x1 = &x1_all[3 * threadIdx.x];
+            double* n = &n_all[3 * threadIdx.x];
+
+            __shared__ double L_y, L_c1, L_c2, L_c3;
 
             double xi_p, xi_c;
             double k_dot_n, k_dot_x0, k_dot_x1;
@@ -219,50 +247,128 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
     }
     __syncthreads();
 
-    for (int i=threadIdx.x; i<6; i+=blockDim.x){
-        link_space_craft_0[i] = link_space_craft_1_in[i];
-        link_space_craft_1[i] = link_space_craft_0_in[i];
+    for (int i=threadIdx.x; i<NLINKS; i+=blockDim.x){
+        link_space_craft_0[i] = link_space_craft_0_in[i];
+        link_space_craft_1[i] = link_space_craft_1_in[i];
 
-        //if (blockIdx.x == 0) printf("%d %d %d\n", threadIdx.x, link_space_craft_0[i], link_space_craft_1[i]);
+        //if (threadIdx.x == 1) printf("%d %d %d %d\n", link_space_craft_0_in[i],link_space_craft_1_in[i], link_space_craft_1[i], link_space_craft_0[i]);
     }
     __syncthreads();
-
 
     for (int i = threadIdx.x; i<num_factorials; i += blockDim.x){
         factorials[i] = factorials_in[i];
     }
     __syncthreads();
 
+    for (int i = threadIdx.x; i < NUM_PARS * NUM_COEFFS; i += blockDim.x)
+      {
+          int coeff_num = (int) (i / NUM_PARS);
+          int par_num = i % NUM_PARS;
+
+          int index = (coeff_num * init_length + old_ind) * NUM_PARS + par_num;
+
+          spline_coeffs[par_num * 4 + coeff_num] = interp_array[index];
+
+      }
+
+    __syncthreads();
+
+
     int point_count = order + 1;
     int half_point_count = int(point_count / 2);
 
-    for (int link_i=blockIdx.y; link_i<6; link_i+=gridDim.y){
+    for (int link_i=blockIdx.y; link_i<2; link_i+=gridDim.y){
 
         int sc0 = link_space_craft_0[link_i];
         int sc1 = link_space_craft_1[link_i];
 
-    for (int i=threadIdx.x + blockDim.x*blockIdx.x;
-         i < num_delays;
-         i += blockDim.x*gridDim.x){
+
+
+        if (threadIdx.x == 0)
+        {
+            x0_y[0] = spline_coeffs[(3 * sc0 + 0) * 4 + 0];
+            x0_y[1] = spline_coeffs[(3 * sc0 + 1) * 4 + 0];
+            x0_y[2] = spline_coeffs[(3 * sc0 + 2) * 4 + 0];
+
+            x0_c1[0] = spline_coeffs[(3 * sc0 + 0) * 4 + 1];
+            x0_c1[1] = spline_coeffs[(3 * sc0 + 1) * 4 + 1];
+            x0_c1[2] = spline_coeffs[(3 * sc0 + 2) * 4 + 1];
+
+            x0_c2[0] = spline_coeffs[(3 * sc0 + 0) * 4 + 2];
+            x0_c2[1] = spline_coeffs[(3 * sc0 + 1) * 4 + 2];
+            x0_c2[2] = spline_coeffs[(3 * sc0 + 2) * 4 + 2];
+
+            x0_c3[0] = spline_coeffs[(3 * sc0 + 0) * 4 + 3];
+            x0_c3[1] = spline_coeffs[(3 * sc0 + 1) * 4 + 3];
+            x0_c3[2] = spline_coeffs[(3 * sc0 + 2) * 4 + 3];
+
+            x1_y[0] = spline_coeffs[(3 * sc1 + 0) * 4 + 0];
+            x1_y[1] = spline_coeffs[(3 * sc1 + 1) * 4 + 0];
+            x1_y[2] = spline_coeffs[(3 * sc1 + 2) * 4 + 0];
+
+            x1_c1[0] = spline_coeffs[(3 * sc1 + 0) * 4 + 1];
+            x1_c1[1] = spline_coeffs[(3 * sc1 + 1) * 4 + 1];
+            x1_c1[2] = spline_coeffs[(3 * sc1 + 2) * 4 + 1];
+
+            x1_c2[0] = spline_coeffs[(3 * sc1 + 0) * 4 + 2];
+            x1_c2[1] = spline_coeffs[(3 * sc1 + 1) * 4 + 2];
+            x1_c2[2] = spline_coeffs[(3 * sc1 + 2) * 4 + 2];
+
+            x1_c3[0] = spline_coeffs[(3 * sc1 + 0) * 4 + 3];
+            x1_c3[1] = spline_coeffs[(3 * sc1 + 1) * 4 + 3];
+            x1_c3[2] = spline_coeffs[(3 * sc1 + 2) * 4 + 3];
+
+            int start_ind = 3 * 3 * 4;
+            n_y[0] = spline_coeffs[start_ind + (link_i * 3 + 0) * 4 + 0];
+            n_y[1] = spline_coeffs[start_ind + (link_i * 3 + 1) * 4 + 0];
+            n_y[2] = spline_coeffs[start_ind + (link_i * 3 + 2) * 4 + 0];
+
+            n_c1[0] = spline_coeffs[start_ind + (link_i * 3 + 0) * 4 + 1];
+            n_c1[1] = spline_coeffs[start_ind + (link_i * 3 + 1) * 4 + 1];
+            n_c1[2] = spline_coeffs[start_ind + (link_i * 3 + 2) * 4 + 1];
+
+            n_c2[0] = spline_coeffs[start_ind + (link_i * 3 + 0) * 4 + 2];
+            n_c2[1] = spline_coeffs[start_ind + (link_i * 3 + 1) * 4 + 2];
+            n_c2[2] = spline_coeffs[start_ind + (link_i * 3 + 2) * 4 + 2];
+
+            n_c3[0] = spline_coeffs[start_ind + (link_i * 3 + 0) * 4 + 3];
+            n_c3[1] = spline_coeffs[start_ind + (link_i * 3 + 1) * 4 + 3];
+            n_c3[2] = spline_coeffs[start_ind + (link_i * 3 + 2) * 4 + 3];
+
+            start_ind = start_ind + 6 * 3 * 4;
+
+            L_y = spline_coeffs[start_ind + (link_i) * 4 + 0];
+            L_c1 = spline_coeffs[start_ind + (link_i) * 4 + 1];
+            L_c2 = spline_coeffs[start_ind + (link_i) * 4 + 2];
+            L_c3 = spline_coeffs[start_ind + (link_i) * 4 + 3];
+
+        }
+
+        __syncthreads();
+
+    for (int i=start_ind + threadIdx.x + blockDim.x*blockIdx.x;
+         i < end_ind;
+         i += blockDim.x * gridDim.x){
 
          int max_thread_num = (num_delays - blockDim.x*blockIdx.x > NUM_THREADS) ? NUM_THREADS : num_delays - blockDim.x*blockIdx.x;
 
-         x0[0] = x[(sc0*3 + 0)*num_delays + i];
-         x0[1] = x[(sc0*3 + 1)*num_delays + i];
-         x0[2] = x[(sc0*3 + 2)*num_delays + i];
-
-         x1[0] = x[(sc1*3 + 0)*num_delays + i];
-         x1[1] = x[(sc1*3 + 1)*num_delays + i];
-         x1[2] = x[(sc1*3 + 2)*num_delays + i];
-
-
-
-         n[0] = n_in[(link_i*3 + 0)*num_delays + i];
-         n[1] = n_in[(link_i*3 + 1)*num_delays + i];
-         n[2] = n_in[(link_i*3 + 2)*num_delays + i];
-
-         L = L_vals[link_i*num_delays + i];
          t = i*dt;
+
+         // Interpolate everything
+         double x_spl = t - old_time;
+         double x2_spl = x_spl * x_spl;
+         double x3_spl = x2_spl * x_spl;
+
+         #pragma unroll
+         for (int coord = 0; coord < 3; coord +=1)
+         {
+             x0[coord] = x0_y[coord] + x0_c1[coord] * x_spl + x0_c2[coord] * x2_spl + x0_c3[coord] * x3_spl;
+             x1[coord] = x1_y[coord] + x1_c1[coord] * x_spl + x1_c2[coord] * x2_spl + x1_c3[coord] * x3_spl;
+             n[coord] = n_y[coord] + n_c1[coord] * x_spl + n_c2[coord] * x2_spl + n_c3[coord] * x3_spl;
+         }
+
+         L = L_y + L_c1 * x_spl + L_c2 * x2_spl + L_c3 * x3_spl;
+
             //if (i <500) printf("%d %d: start \n", i, link_i);
 
          xi_projections(&xi_p, &xi_c, u, v, n);
@@ -272,6 +378,7 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
 
          delay0 = t - L - k_dot_x0*C_inv;
          delay1 = t - k_dot_x1*C_inv;
+
 
          clipped_delay0 = delay0 - input_start_time;
          integer_delay0 = (int) ceil(clipped_delay0 * sampling_frequency) - 1;
@@ -288,13 +395,13 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
          if (threadIdx.x == 0){
               start_input_ind = min_integer_delay - buffer_integer;
         }
+
         if (threadIdx.x == max_thread_num - 1){
               end_input_ind = max_integer_delay + buffer_integer;
         }
 
-        //printf("%d %d %d %d\n", integer_delay0, integer_delay1, start_input_ind, end_input_ind);
-
         __syncthreads();
+
         //if (blockIdx.x == gridDim.x - 1) printf("%d %d %d %d %d %d %d %d %d %d\n", i, threadIdx.x, blockDim.x*blockIdx.x, num_delays, num_delays - blockDim.x*blockIdx.x, max_thread_num, start_input_ind, end_input_ind, integer_delay0, integer_delay1);
          for (int jj = threadIdx.x + start_input_ind; jj < end_input_ind; jj+=max_thread_num){
             //if (threadIdx.x == blockDim.x - 1) printf("%d, %d %d %d %d\n", blockIdx.x, link_i, jj - start_input_ind,  start_input_ind, end_input_ind);
@@ -320,37 +427,122 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
 
          //printf("%d %e %e %e %e %e %e %e %e \n", threadIdx.x, pre_factor, hp_del0, hp_del1, hc_del0, hc_del1, xi_p, xi_c, large_factor);
 
-
          __syncthreads();
     }
+
 }
-
-
         //double min_delay = (double) half_point_count / sampling_frequency;
 
 }
 
+// with uneven spacing in t in the sparse arrays, need to determine which timesteps the dense arrays fall into
+// for interpolation
+// effectively the boundaries and length of each interpolation segment of the dense array in the sparse array
+void find_start_inds(int start_inds[], int unit_length[], double *t_arr, double delta_t, int *length, int new_length)
+{
 
-void get_response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt, double *x, double *n_in,
-              int num_delays, int *link_space_craft_0_in, int *link_space_craft_1_in,
-              double *L_vals, cmplx *input_in, int num_inputs, int order, double sampling_frequency, int buffer_integer, double *factorials_in, int num_factorials, double input_start_time){
+    double T = (new_length - 1) * delta_t;
+  start_inds[0] = 0;
+  int i = 1;
+  for (i = 1;
+       i < *length;
+       i += 1){
 
-      int nblocks = (int) ceil((num_delays + NUM_THREADS - 1)/NUM_THREADS);
+          double t = t_arr[i];
 
-      dim3 gridDim(nblocks, 1);
-      response<<<gridDim, NUM_THREADS>>>
-      //response<<<1,1>>>
-                    (y_gw, k_in, u_in, v_in, dt, x, n_in,
-                    num_delays, link_space_craft_0_in, link_space_craft_1_in,
-                    L_vals,
-                      input_in, num_inputs, order, sampling_frequency, buffer_integer, factorials_in, num_factorials, input_start_time);
+          // adjust for waveforms that hit the end of the trajectory
+          if (t < T){
+              start_inds[i] = (int)std::ceil(t/delta_t);
+              unit_length[i-1] = start_inds[i] - start_inds[i-1];
+          } else {
+            start_inds[i] = new_length;
+            unit_length[i-1] = new_length - start_inds[i-1];
+            break;
+        }
 
-      cudaDeviceSynchronize();
-      gpuErrchk(cudaGetLastError());
+      }
 
+  // fixes for not using certain segments for the interpolation
+  *length = i + 1;
 }
 
 
+void get_response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
+              int num_delays, int *link_space_craft_0_in, int *link_space_craft_1_in,
+              cmplx *input_in, int num_inputs, int order,
+              double sampling_frequency, int buffer_integer, double *factorials_in,
+              int num_factorials, double input_start_time,
+              double *interp_array, int init_len, double* h_t){
+
+  int out_len = num_delays;
+
+  // arrays for determining spline windows for new arrays
+  int start_inds[init_len];
+  int unit_length[init_len-1];
+
+  int number_of_old_spline_points = init_len;
+
+  // find the spline window information based on equally spaced new array
+  find_start_inds(start_inds, unit_length, h_t, dt, &number_of_old_spline_points, out_len);
+
+  #ifdef __CUDACC__
+
+  // prepare streams for CUDA
+  cudaStream_t streams[number_of_old_spline_points-1];
+
+  #endif
+
+  #ifdef __USE_OMP__
+  #pragma omp parallel for
+  #endif
+  for (int i = 0; i < number_of_old_spline_points-1; i++) {
+        #ifdef __CUDACC__
+
+        // create and execute with streams
+        cudaStreamCreate(&streams[i]);
+        int num_blocks = std::ceil((unit_length[i] + NUM_THREADS -1)/NUM_THREADS);
+
+        // sometimes a spline interval will have zero points
+        if (num_blocks <= 0) continue;
+
+        dim3 gridDim(num_blocks, NLINKS);
+
+        //printf("RUNNING: %d\n", i);
+        response<<<gridDim, NUM_THREADS>>>
+                      (y_gw, k_in, u_in, v_in, dt,
+                      num_delays, link_space_craft_0_in, link_space_craft_1_in,
+                        input_in, num_inputs, order, sampling_frequency, buffer_integer,
+                        factorials_in, num_factorials, input_start_time,
+                        interp_array, h_t[i], i, start_inds[i], start_inds[i+1], init_len);
+       #else
+
+       // CPU waveform generation
+       make_waveform(waveform,
+                     interp_array,
+                     M_phys, mu, qS, phiS, qK, phiK, dist,
+                     nmodes, mich,
+                     delta_t, h_t[i], i, start_inds[i], start_inds[i+1], init_len);
+       #endif
+
+    }
+
+    //synchronize after all streams finish
+    #ifdef __CUDACC__
+    cudaDeviceSynchronize();
+    gpuErrchk(cudaGetLastError());
+
+    #ifdef __USE_OMP__
+    #pragma omp parallel for
+    #endif
+    for (int i = 0; i < number_of_old_spline_points-1; i++) {
+          //destroy the streams
+          cudaStreamDestroy(streams[i]);
+      }
+    #endif
+}
+
+
+/*
 int main()
 {
 
@@ -399,7 +591,7 @@ int main()
 
     get_basis_vecs(lam, beta, u, v, k);
 
-    int nlinks = 6;
+    int nlinks = NLINKS;
     double *n_in = new double[num_delays*nlinks*3];
     double *x = new double[num_delays*3*3];
     double *L_vals = new double[num_delays*nlinks];
@@ -463,7 +655,7 @@ int main()
         x[(2*3 + 1)*num_delays + i] = ynew;
         x[(2*3 + 2)*num_delays + i] = znew;
 
-        for (int j=0; j<6; j++){
+        for (int j=0; j<NLINKS; j++){
             link_ind_0 = link_space_craft_0[j];
             link_ind_1 = link_space_craft_1[j];
 
@@ -549,3 +741,4 @@ int main()
 
 	delete[] input_in;
 }
+*/
