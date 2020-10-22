@@ -67,7 +67,7 @@ double interp_h(double delay, double out)
 
 }
 
-/*
+
 __device__
 void interp_single(double *result, double *input, int h, int d, double e, double *factorials, int start_input_ind)
 {
@@ -84,7 +84,7 @@ void interp_single(double *result, double *input, int h, int d, double e, double
 	double D = e * (1.0 - e);
 
 	double sum = 0.0;
-    cmplx temp_up, temp_down;
+    double temp_up, temp_down;
     //printf("in: %d %d\n", d, start_input_ind);
 	for (int j = 1; j< h; j += 1){
 
@@ -112,9 +112,9 @@ void interp_single(double *result, double *input, int h, int d, double e, double
     temp_up = input[d + 1 - start_input_ind];
     temp_down = input[d - start_input_ind];
     //printf("out: %d %d\n", d, start_input_ind);
-	*result = A * (B * temp_up + C * temp_down + D * sum_hp);
+	*result = A * (B * temp_up + C * temp_down + D * sum);
 }
-*/
+
 
 __device__
 void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, double e, double *factorials, int start_input_ind)
@@ -166,6 +166,8 @@ void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, do
     *result_hc = A * (B * temp_up.imag() + C * temp_down.imag() + D * sum_hc);
 }
 
+#define  BUFFER_SIZE 1000
+
 __global__
 void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt, double *x, double *n_in,
               int num_delays, int *link_space_craft_0_in, int *link_space_craft_1_in,
@@ -174,7 +176,7 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
 
 
         __shared__ double factorials[100];
-        __shared__ cmplx input[1000];
+        __shared__ cmplx input[BUFFER_SIZE];
         __shared__ double first_delay;
         __shared__ double last_delay;
         __shared__ int start_input_ind;
