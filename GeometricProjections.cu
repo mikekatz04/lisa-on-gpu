@@ -67,7 +67,42 @@ double interp_h(double delay, double out)
 
 }
 
-/*
+
+// with uneven spacing in t in the sparse arrays, need to determine which timesteps the dense arrays fall into
+// for interpolation
+// effectively the boundaries and length of each interpolation segment of the dense array in the sparse array
+void find_start_inds(int start_inds[], int unit_length[], double *t_arr, double delta_t, int *length, int new_length)
+{
+
+    double T = (new_length - 1) * delta_t;
+  start_inds[0] = 0;
+  int i = 1;
+  for (i = 1;
+       i < *length;
+       i += 1){
+
+          double t = t_arr[i];
+
+          // adjust for waveforms that hit the end of the trajectory
+          if (t < T){
+              start_inds[i] = (int)std::ceil(t/delta_t);
+              unit_length[i-1] = start_inds[i] - start_inds[i-1];
+          } else {
+            start_inds[i] = new_length;
+            unit_length[i-1] = new_length - start_inds[i-1];
+            break;
+        }
+
+      }
+
+  // fixes for not using certain segments for the interpolation
+  *length = i + 1;
+}
+
+
+
+
+
 __device__
 void interp_single(double *result, double *input, int h, int d, double e, double *factorials, int start_input_ind)
 {
@@ -114,7 +149,7 @@ void interp_single(double *result, double *input, int h, int d, double e, double
     //printf("out: %d %d\n", d, start_input_ind);
 	*result = A * (B * temp_up + C * temp_down + D * sum);
 }
-*/
+
 
 
 __device__
@@ -171,6 +206,202 @@ void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, do
 #define NUM_COEFFS 4
 #define NLINKS  6
 #define BUFFER_SIZE 1000
+#define MAX_UNITS 30
+
+__global__
+void TDI_delay(double* delayed_links, double* input_links, int num_inputs, double dt, int* link_inds_in, int* delay_factor_in, int num_units,
+               int order, double sampling_frequency, int buffer_integer, double* factorials_in, int num_factorials, double input_start_time,
+               double* L_interp_array, double old_time, int old_ind, int start_ind, int end_ind, int init_length)
+{
+    __shared__ double factorials[100];
+    __shared__ double input[BUFFER_SIZE];
+    __shared__ double first_delay;
+    __shared__ double last_delay;
+    __shared__ int start_input_ind;
+    __shared__ int end_input_ind;
+    __shared__ double spline_coeffs[NLINKS * NUM_COEFFS];
+    __shared__ int link_inds[MAX_UNITS];
+    __shared__ int delay_factor[MAX_UNITS];
+
+    __shared__ double L_y, L_c1, L_c2, L_c3;
+
+
+    double t, L, delay;
+
+    double large_factor, pre_factor;
+    double clipped_delay, out, fraction;
+    double link_delayed_out;
+    int integer_delay, max_integer_delay, min_integer_delay;
+    int start, end;
+
+    for (int i = threadIdx.x; i<num_factorials; i += blockDim.x){
+        factorials[i] = factorials_in[i];
+    }
+    __syncthreads();
+
+    for (int i = threadIdx.x; i<num_units; i += blockDim.x){
+        link_inds[i] = link_inds_in[i];
+        delay_factor[i] = delay_factor_in[i];
+    }
+    __syncthreads();
+
+    for (int i = threadIdx.x; i < NLINKS * NUM_COEFFS; i += blockDim.x)
+      {
+          int coeff_num = (int) (i / NLINKS);
+          int par_num = i % NLINKS;
+
+          int index = (coeff_num * init_length + old_ind) * NLINKS + par_num;
+
+          spline_coeffs[par_num * 4 + coeff_num] = L_interp_array[index];
+
+      }
+
+    __syncthreads();
+
+    for (int unit_i=blockIdx.y; unit_i<num_units; unit_i+=gridDim.y)
+    {
+        int link_i = link_inds[unit_i];
+        int delay_factor_i = delay_factor[unit_i];
+        if (threadIdx.x == 0)
+        {
+
+            L_y = spline_coeffs[(link_i) * 4 + 0];
+            L_c1 = spline_coeffs[(link_i) * 4 + 1];
+            L_c2 = spline_coeffs[(link_i) * 4 + 2];
+            L_c3 = spline_coeffs[(link_i) * 4 + 3];
+
+        }
+        __syncthreads();
+
+        int point_count = order + 1;
+        int half_point_count = int(point_count / 2);
+
+        int num_delays = end_ind - start_ind;
+
+        for (int i=start_ind + threadIdx.x + blockDim.x*blockIdx.x;
+             i < end_ind;
+             i += blockDim.x * gridDim.x)
+        {
+
+             int max_thread_num = (num_delays - blockDim.x*blockIdx.x > NUM_THREADS) ? NUM_THREADS : num_delays - blockDim.x*blockIdx.x;
+
+             t = i*dt;
+
+             // Interpolate everything
+             double x_spl = t - old_time;
+             double x2_spl = x_spl * x_spl;
+             double x3_spl = x2_spl * x_spl;
+
+             L = L_y + L_c1 * x_spl + L_c2 * x2_spl + L_c3 * x3_spl;
+
+             delay = t - L * delay_factor_i;
+
+             clipped_delay = delay - input_start_time;
+             integer_delay = (int) ceil(clipped_delay * sampling_frequency) - 1;
+             fraction = 1.0 + integer_delay - clipped_delay * sampling_frequency;
+
+             max_integer_delay = integer_delay;
+             max_integer_delay += 2; // encompass all
+             min_integer_delay = integer_delay;
+
+             if (threadIdx.x == 0){
+                  start_input_ind = min_integer_delay - buffer_integer;
+            }
+
+            if (threadIdx.x == max_thread_num - 1){
+                //if (blockIdx.x == gridDim.x - 1)
+                    //printf("%e %e %d %d\n", clipped_delay0, clipped_delay1, integer_delay0, integer_delay1);
+                  end_input_ind = max_integer_delay + buffer_integer;
+            }
+
+            __syncthreads();
+
+            //if (blockIdx.x == gridDim.x - 1) printf("%d %e %d %d %d %d %d %d %d %d %d %d %d\n", i, L, blockIdx.x, gridDim.x, threadIdx.x, blockDim.x*blockIdx.x, num_delays, num_delays - blockDim.x*blockIdx.x, max_thread_num, start_input_ind, end_input_ind, integer_delay0, integer_delay1);
+            if (end_input_ind - start_input_ind > BUFFER_SIZE) printf("%d %d %d %d %d %d %d %d\n", threadIdx.x, max_integer_delay, start_input_ind, end_input_ind, i, max_thread_num, num_delays, blockIdx.x*blockDim.x);
+
+            for (int jj = threadIdx.x + start_input_ind; jj < end_input_ind; jj+=max_thread_num){
+                //cmplx temp = input_in[jj];
+                input[jj - start_input_ind] = input_links[link_i * NLINKS + jj];
+             }
+
+             __syncthreads();
+
+             interp_single(&link_delayed_out, input, half_point_count, integer_delay, fraction, factorials, start_input_ind);
+
+             delayed_links[unit_i * num_delays + i] = link_delayed_out;
+
+             __syncthreads();
+        }
+    }
+}
+
+void get_tdi_delays(double* delayed_links, double *y_gw, int num_inputs, int num_delays, double dt, int* link_inds, int* delay_factor, int num_units,
+              int order, double sampling_frequency, int buffer_integer, double *factorials_in, int num_factorials, double input_start_time,
+              double *interp_array, int init_len, double* h_t){
+
+  int out_len = num_delays;
+
+  // arrays for determining spline windows for new arrays
+  int start_inds[init_len];
+  int unit_length[init_len-1];
+
+  int number_of_old_spline_points = init_len;
+
+  // find the spline window information based on equally spaced new array
+  find_start_inds(start_inds, unit_length, h_t, dt, &number_of_old_spline_points, out_len);
+
+  #ifdef __CUDACC__
+
+  // prepare streams for CUDA
+  cudaStream_t streams[number_of_old_spline_points-1];
+
+  #endif
+
+  #ifdef __USE_OMP__
+  #pragma omp parallel for
+  #endif
+  for (int i = 0; i < number_of_old_spline_points-1; i++) {
+        #ifdef __CUDACC__
+
+        // create and execute with streams
+        cudaStreamCreate(&streams[i]);
+        int num_blocks = std::ceil((unit_length[i] + NUM_THREADS -1)/NUM_THREADS);
+
+        // sometimes a spline interval will have zero points
+        if (num_blocks <= 0) continue;
+
+        dim3 gridDim(num_blocks, num_units);
+
+        //printf("RUNNING: %d\n", i);
+        TDI_delay<<<gridDim, NUM_THREADS>>>
+                      (delayed_links, y_gw, num_inputs, dt, link_inds, delay_factor, num_units,
+                        order, sampling_frequency, buffer_integer, factorials_in, num_factorials, input_start_time,
+                        interp_array, h_t[i], i, start_inds[i], start_inds[i+1], init_len);
+       #else
+
+       // CPU waveform generation
+       TDI_delay(delayed_links, y_gw, num_inputs, dt, link_inds, delay_factor, num_units,
+                       order, sampling_frequency, buffer_integer, factorials_in, num_factorials, input_start_time,
+                       interp_array, h_t[i], i, start_inds[i], start_inds[i+1], init_len);
+       #endif
+
+    }
+
+    //synchronize after all streams finish
+    #ifdef __CUDACC__
+    cudaDeviceSynchronize();
+    gpuErrchk(cudaGetLastError());
+
+    #ifdef __USE_OMP__
+    #pragma omp parallel for
+    #endif
+    for (int i = 0; i < number_of_old_spline_points-1; i++) {
+          //destroy the streams
+          cudaStreamDestroy(streams[i]);
+      }
+    #endif
+}
+
 
 __global__
 void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
@@ -431,37 +662,6 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
 }
         //double min_delay = (double) half_point_count / sampling_frequency;
 
-}
-
-// with uneven spacing in t in the sparse arrays, need to determine which timesteps the dense arrays fall into
-// for interpolation
-// effectively the boundaries and length of each interpolation segment of the dense array in the sparse array
-void find_start_inds(int start_inds[], int unit_length[], double *t_arr, double delta_t, int *length, int new_length)
-{
-
-    double T = (new_length - 1) * delta_t;
-  start_inds[0] = 0;
-  int i = 1;
-  for (i = 1;
-       i < *length;
-       i += 1){
-
-          double t = t_arr[i];
-
-          // adjust for waveforms that hit the end of the trajectory
-          if (t < T){
-              start_inds[i] = (int)std::ceil(t/delta_t);
-              unit_length[i-1] = start_inds[i] - start_inds[i-1];
-          } else {
-            start_inds[i] = new_length;
-            unit_length[i-1] = new_length - start_inds[i-1];
-            break;
-        }
-
-      }
-
-  // fixes for not using certain segments for the interpolation
-  *length = i + 1;
 }
 
 

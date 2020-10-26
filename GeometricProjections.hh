@@ -16,4 +16,8 @@ void get_response(double *y_gw, double *k_in, double *u_in, double *v_in, double
               int num_factorials, double input_start_time,
               double *interp_array, int init_len, double* h_t);
 
+void get_tdi_delays(double* delayed_links, double *y_gw, int num_inputs, int num_delays, double dt, int* link_inds, int* delay_factor, int num_units,
+              int order, double sampling_frequency, int buffer_integer, double *factorials_in, int num_factorials, double input_start_time,
+              double *interp_array, int init_len, double* h_t);
+
 #endif // __GEO_PROJ__

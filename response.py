@@ -2,7 +2,7 @@ import numpy as np
 
 try:
     import cupy as xp
-    from pyresponse import get_response_wrap
+    from pyresponse import get_response_wrap, get_tdi_delays_wrap
 
     gpu = True
 
@@ -118,14 +118,19 @@ class pyResponseTDI(object):
             interp_in[start_ind + i * 3 + 1] = n_ij_y
             interp_in[start_ind + i * 3 + 2] = n_ij_z
 
-            start_ind = start_ind + 6 * 3
+            start_ind = 3 * 3 + 6 * 3
 
             interp_in[start_ind + i] = xp.asarray(out["L" + str(link_0 + 1) + str(link_1 + 1)].T[1][inds]).astype(xp.float64)
 
+        L_start_ind = 3 * 3 + 6 * 3
         self.spline = CubicSplineInterpolant(xp.asarray(self.t_vals), interp_in, use_gpu=gpu)
+        self.L_only_spline = CubicSplineInterpolant(xp.asarray(self.t_vals), interp_in[L_start_ind:], use_gpu=gpu)
 
+    @property
+    def y_gw(self):
+        return self.y_gw_flat.reshape(self.nlinks, -1)
 
-    def __call__(self, num_delays, input_in, beta, lam, input_start_time):
+    def get_projections(self, num_delays, input_in, beta, lam, input_start_time):
 
         k = np.zeros(3, dtype=np.float)
         u = np.zeros(3, dtype=np.float)
@@ -184,7 +189,31 @@ class pyResponseTDI(object):
         et = time.perf_counter()
         print("Num delays:", num_delays, (et - st) / num)
 
-        return y_gw.reshape(self.nlinks, -1)
+        self.y_gw_flat = y_gw
+        self.y_gw_length = num_delays
+
+    @property
+    def delayed_links(self):
+        return self.delayed_links_flat.reshape(self.num_units, -1)
+
+    @property
+    def tdi_delay_info(self):
+        temp = self.delayed_links
+        return [dict(unit=i, link=self.link_inds[i], factor=self.delay_factor[i], delayed_link=temp[i]) for i in range(self.num_units)]
+
+    def get_tdi_delays(self, num_delays, link_inds, delay_factor, input_start_time):
+
+        self.num_delays_tdi = num_delays
+        self.num_units = len(link_inds)
+        self.delayed_links_flat = xp.zeros(self.num_units * self.num_delays_tdi, dtype=xp.float64)
+        self.link_inds = xp.asarray(link_inds).astype(xp.int32)
+        self.delay_factor = xp.asarray(delay_factor).astype(xp.int32)
+
+        get_tdi_delays_wrap(self.delayed_links_flat, self.y_gw_flat, self.y_gw_length,
+                            self.num_delays_tdi, self.dt, self.link_inds, self.delay_factor, self.num_units,
+                            self.order, self.sampling_frequency, self.buffer_integer, self.factorials_in,
+                            self.num_factorials, input_start_time,
+                            self.L_only_spline.interp_array, len(self.t_vals), self.t_vals)
 
 
 use_gpu = gpu
@@ -243,9 +272,15 @@ input_in = A * few(M, mu, p0, e0, theta, phi, dt=dt, T=T)
 
 response = pyResponseTDI(sampling_frequency, orbits_file="orbits.h5", order=16, num_factorials=100)
 
+link_inds = np.concatenate([np.arange(6), np.arange(6)]).astype(dtype=np.int32)
+delay_factor = np.ones_like(link_inds)
+delay_factor[6:] = 2
+link_inds = delay_factor.copy()
+
 if gpu:
 
-    y_gw = response(int(3.2e7), input_in, beta, lam, input_start_time)
+    response.get_projections(int(1e5), input_in, beta, lam, input_start_time)
+    response.get_tdi_delays(int(1e4), link_inds, delay_factor, input_start_time)
         # print(i)
 
 breakpoint()
