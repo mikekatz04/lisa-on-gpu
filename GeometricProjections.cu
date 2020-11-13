@@ -104,15 +104,13 @@ void find_start_inds(int start_inds[], int unit_length[], double *t_arr, double 
 
 
 __device__
-void interp_single(double *result, double *input, int h, int d, double e, double *factorials, int start_input_ind)
+void interp_single(double *result, double *input, int h, int d, double e, double *A_arr, double deps, double* E_arr, int start_input_ind)
 {
 
-	double A = 1.0;
-	for (int i = 1; i < h; i += 1){
-		A *= (i + e) * (i + 1 - e);
-	}
-	double denominator = factorials[h - 1] * factorials[h];
-    A /= denominator;
+    int ind = (int) (e / deps);
+
+    double frac = (e - ind * deps)/deps;
+    double A = A_arr[ind] * (1. - frac) + A_arr[ind + 1] * frac;
 
 	double B = 1.0 - e;
 	double C = e;
@@ -125,13 +123,7 @@ void interp_single(double *result, double *input, int h, int d, double e, double
 
 		// get constants
 
-		double first_term = factorials[h - 1] / factorials[h - 1 - j];
-		double second_term = factorials[h] / factorials[h + j];
-		double value = first_term * second_term;
-
-		value = value * pow(-1.0, (double)j);
-
-		double E = value;
+		double E = E_arr[j - 1];
 
 		double F = j + e;
 		double G = j + (1 - e);
@@ -216,23 +208,21 @@ void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, do
 #define BUFFER_SIZE 1000
 #define MAX_UNITS 30
 
+#define  MAX_A_VALS 1001
+#define  MAX_ORDER 40
+
 __global__
-void TDI_delay(double* delayed_links, double* input_links, int num_inputs, double dt, int* link_inds_in, int* delay_factor_in, int num_units,
-               int order, double sampling_frequency, int buffer_integer, double* factorials_in, int num_factorials, double input_start_time,
-               double* L_interp_array, double old_time, int old_ind, int start_ind, int end_ind, int init_length)
+void TDI_delay(double* delayed_links, double* input_links, int num_inputs, double* delays, int num_delays, double dt, int* link_inds_in, int num_units,
+               int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, double input_start_time)
 {
-    __shared__ double factorials[100];
     __shared__ double input[BUFFER_SIZE];
     __shared__ double first_delay;
     __shared__ double last_delay;
     __shared__ int start_input_ind;
     __shared__ int end_input_ind;
-    __shared__ double spline_coeffs[NLINKS * NUM_COEFFS];
     __shared__ int link_inds[MAX_UNITS];
-    __shared__ int delay_factor[MAX_UNITS];
-
-    __shared__ double L_y, L_c1, L_c2, L_c3;
-
+    __shared__ double A_arr[MAX_A_VALS];
+    __shared__ double E_arr[MAX_ORDER];
 
     double t, L, delay;
 
@@ -242,52 +232,33 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, doubl
     int integer_delay, max_integer_delay, min_integer_delay;
     int start, end;
 
-    for (int i = threadIdx.x; i<num_factorials; i += blockDim.x){
-        factorials[i] = factorials_in[i];
-    }
-    __syncthreads();
-
     for (int i = threadIdx.x; i<num_units; i += blockDim.x){
         link_inds[i] = link_inds_in[i];
-        delay_factor[i] = delay_factor_in[i];
     }
     __syncthreads();
 
-    for (int i = threadIdx.x; i < NLINKS * NUM_COEFFS; i += blockDim.x)
-      {
-          int coeff_num = (int) (i / NLINKS);
-          int par_num = i % NLINKS;
-
-          int index = (coeff_num * init_length + old_ind) * NLINKS + par_num;
-
-          spline_coeffs[par_num * 4 + coeff_num] = L_interp_array[index];
-
-      }
-
+    for (int i=threadIdx.x; i<num_A; i+=blockDim.x){
+        A_arr[i] = A_in[i];
+         //if (threadIdx.x == 1) printf("%e %e %e\n", k[i], u[i], v[i]);
+    }
     __syncthreads();
+
+    for (int i=threadIdx.x; i< (order + 1)/2 - 1; i+=blockDim.x){
+        E_arr[i] = E_in[i];
+         //if (threadIdx.x == 1) printf("%e %e %e\n", k[i], u[i], v[i]);
+    }
+    __syncthreads();
+
 
     for (int unit_i=blockIdx.y; unit_i<num_units; unit_i+=gridDim.y)
     {
         int link_i = link_inds[unit_i];
-        int delay_factor_i = delay_factor[unit_i];
-        if (threadIdx.x == 0)
-        {
-
-            L_y = spline_coeffs[(link_i) * 4 + 0];
-            L_c1 = spline_coeffs[(link_i) * 4 + 1];
-            L_c2 = spline_coeffs[(link_i) * 4 + 2];
-            L_c3 = spline_coeffs[(link_i) * 4 + 3];
-
-        }
-        __syncthreads();
 
         int point_count = order + 1;
         int half_point_count = int(point_count / 2);
 
-        int num_delays = end_ind - start_ind;
-
-        for (int i=start_ind + threadIdx.x + blockDim.x*blockIdx.x;
-             i < end_ind;
+        for (int i=threadIdx.x + blockDim.x*blockIdx.x;
+             i < num_delays;
              i += blockDim.x * gridDim.x)
         {
 
@@ -296,13 +267,8 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, doubl
              t = i*dt;
 
              // Interpolate everything
-             double x_spl = t - old_time;
-             double x2_spl = x_spl * x_spl;
-             double x3_spl = x2_spl * x_spl;
-
-             L = L_y + L_c1 * x_spl + L_c2 * x2_spl + L_c3 * x3_spl;
-
-             delay = t - L * delay_factor_i;
+             int delay_ind = unit_i * num_delays + i;
+             delay = delays[delay_ind];
 
              clipped_delay = delay - input_start_time;
              integer_delay = (int) ceil(clipped_delay * sampling_frequency) - 1;
@@ -324,17 +290,15 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, doubl
 
             __syncthreads();
 
-            //if (blockIdx.x == gridDim.x - 1) printf("%d %e %d %d %d %d %d %d %d %d %d %d %d\n", i, L, blockIdx.x, gridDim.x, threadIdx.x, blockDim.x*blockIdx.x, num_delays, num_delays - blockDim.x*blockIdx.x, max_thread_num, start_input_ind, end_input_ind, integer_delay0, integer_delay1);
-            if (end_input_ind - start_input_ind > BUFFER_SIZE) printf("%d %d %d %d %d %d %d %d\n", threadIdx.x, max_integer_delay, start_input_ind, end_input_ind, i, max_thread_num, num_delays, blockIdx.x*blockDim.x);
 
             for (int jj = threadIdx.x + start_input_ind; jj < end_input_ind; jj+=max_thread_num){
                 //cmplx temp = input_in[jj];
-                input[jj - start_input_ind] = input_links[link_i * NLINKS + jj];
+                input[jj - start_input_ind] = input_links[link_i * num_inputs + jj];
              }
 
              __syncthreads();
 
-             interp_single(&link_delayed_out, input, half_point_count, integer_delay, fraction, factorials, start_input_ind);
+             interp_single(&link_delayed_out, input, half_point_count, integer_delay, fraction, A_arr, deps, E_arr, start_input_ind);
 
              delayed_links[unit_i * num_delays + i] = link_delayed_out;
 
@@ -343,75 +307,23 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, doubl
     }
 }
 
-void get_tdi_delays(double* delayed_links, double *y_gw, int num_inputs, int num_delays, double dt, int* link_inds, int* delay_factor, int num_units,
-              int order, double sampling_frequency, int buffer_integer, double *factorials_in, int num_factorials, double input_start_time,
-              double *interp_array, int init_len, double* h_t){
+void get_tdi_delays(double* delayed_links, double* input_links, int num_inputs, double* delays, int num_delays, double dt, int* link_inds_in, int num_units,
+               int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, double input_start_time){
 
-  int out_len = num_delays;
 
-  // arrays for determining spline windows for new arrays
-  int start_inds[init_len];
-  int unit_length[init_len-1];
-
-  int number_of_old_spline_points = init_len;
-
-  // find the spline window information based on equally spaced new array
-  find_start_inds(start_inds, unit_length, h_t, dt, &number_of_old_spline_points, out_len);
-
-  #ifdef __CUDACC__
-
-  // prepare streams for CUDA
-  cudaStream_t streams[number_of_old_spline_points-1];
-
-  #endif
-
-  #ifdef __USE_OMP__
-  #pragma omp parallel for
-  #endif
-  for (int i = 0; i < number_of_old_spline_points-1; i++) {
-        #ifdef __CUDACC__
-
-        // create and execute with streams
-        cudaStreamCreate(&streams[i]);
-        int num_blocks = std::ceil((unit_length[i] + NUM_THREADS -1)/NUM_THREADS);
-
-        // sometimes a spline interval will have zero points
-        if (num_blocks <= 0) continue;
+        int num_blocks = std::ceil((num_delays + NUM_THREADS -1)/NUM_THREADS);
 
         dim3 gridDim(num_blocks, num_units);
 
         //printf("RUNNING: %d\n", i);
         TDI_delay<<<gridDim, NUM_THREADS>>>
-                      (delayed_links, y_gw, num_inputs, dt, link_inds, delay_factor, num_units,
-                        order, sampling_frequency, buffer_integer, factorials_in, num_factorials, input_start_time,
-                        interp_array, h_t[i], i, start_inds[i], start_inds[i+1], init_len);
-       #else
+                      (delayed_links, input_links, num_inputs, delays, num_delays, dt, link_inds_in, num_units,
+                         order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, input_start_time);
 
-       // CPU waveform generation
-       TDI_delay(delayed_links, y_gw, num_inputs, dt, link_inds, delay_factor, num_units,
-                       order, sampling_frequency, buffer_integer, factorials_in, num_factorials, input_start_time,
-                       interp_array, h_t[i], i, start_inds[i], start_inds[i+1], init_len);
-       #endif
-
-    }
-
-    //synchronize after all streams finish
-    #ifdef __CUDACC__
     cudaDeviceSynchronize();
     gpuErrchk(cudaGetLastError());
-
-    #ifdef __USE_OMP__
-    #pragma omp parallel for
-    #endif
-    for (int i = 0; i < number_of_old_spline_points-1; i++) {
-          //destroy the streams
-          cudaStreamDestroy(streams[i]);
-      }
-    #endif
 }
 
-#define  MAX_A_VALS 1001
-#define  MAX_ORDER 40
 
 __global__
 void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,

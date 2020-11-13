@@ -53,6 +53,7 @@ class pyResponseTDI(object):
         self._fill_A_E()
         self._init_link_indices()
         self._init_orbit_information(orbits_file)
+        self._init_TDI_delays()
 
     def _init_link_indices(self):
         self.nlinks = 6
@@ -158,10 +159,48 @@ class pyResponseTDI(object):
 
         self.x_in = xp.asarray(np.concatenate(x_in))
         self.n_in = xp.asarray(np.concatenate(n_in))
+
+        self.L_in_for_TDI = L_in
         self.L_in = xp.asarray(np.concatenate(L_in))
 
         self.num_orbit_inputs = len(t_new)
+        self.t_data = t_new
         self.final_t = t_new[-1]
+
+    def _init_TDI_delays(self):
+        self.num_delays_tdi = int(3e6)
+        tdi_combinations = [
+            {"link": 0, "links_for_delay": [1, 2, 3], "factors": [1, 1, 2]},
+            {"link": 1, "links_for_delay": [1, 2, 2], "factors": [2, 1, 2]},
+            {"link": 2, "links_for_delay": [1, 2, 3], "factors": [1, 1, 2]},
+            {"link": 0, "links_for_delay": [1, 2, 3], "factors": [1, 1, 2]},
+            {"link": 1, "links_for_delay": [2, 3], "factors": [1, 2]},
+            {"link": 5, "links_for_delay": [1], "factors": [1]},
+            {"link": 3, "links_for_delay": [1, 2, 3], "factors": [1, 1, 2]},
+            {"link": 0, "links_for_delay": [1, 2, 3], "factors": [1, 1, 2]},
+            {"link": 1, "links_for_delay": [1, 2, 2], "factors": [2, 1, 2]},
+            {"link": 2, "links_for_delay": [1, 2, 3], "factors": [1, 1, 2]},
+            {"link": 0, "links_for_delay": [1, 2, 3], "factors": [1, 1, 2]},
+            {"link": 1, "links_for_delay": [2, 3], "factors": [1, 2]},
+            {"link": 5, "links_for_delay": [1], "factors": [1]},
+            {"link": 3, "links_for_delay": [1, 2, 3], "factors": [1, 1, 2]},
+        ]
+
+        delays = np.zeros((len(tdi_combinations), self.num_delays_tdi))
+
+        delays[:] = self.t_data[: self.num_delays_tdi]
+        link_inds = np.zeros(len(tdi_combinations), dtype=np.int32)
+        for i, tdi in enumerate(tdi_combinations):
+            assert len(tdi["links_for_delay"]) == len(tdi["factors"])
+
+            link_inds[i] = tdi["link"]
+
+            for link, factor in zip(tdi["links_for_delay"], tdi["factors"]):
+                delays[i] -= factor * self.L_in_for_TDI[link][: self.num_delays_tdi]
+
+        self.num_units = len(tdi_combinations)
+        self.link_inds = xp.asarray(link_inds).astype(xp.int32)
+        self.tdi_delays = xp.asarray(delays.flatten())
 
     @property
     def y_gw(self):
@@ -250,34 +289,45 @@ class pyResponseTDI(object):
             for i in range(self.num_units)
         ]
 
-    def get_tdi_delays(self, num_delays, link_inds, delay_factor, input_start_time):
+    def get_tdi_delays(self):
+        assert self.y_gw_length >= self.num_delays_tdi
 
-        self.num_delays_tdi = num_delays
-        self.num_units = len(link_inds)
+        input_start_time = -1000.00
         self.delayed_links_flat = xp.zeros(
             self.num_units * self.num_delays_tdi, dtype=xp.float64
         )
-        self.link_inds = xp.asarray(link_inds).astype(xp.int32)
-        self.delay_factor = xp.asarray(delay_factor).astype(xp.int32)
 
-        get_tdi_delays_wrap(
-            self.delayed_links_flat,
-            self.y_gw_flat,
-            self.y_gw_length,
+        st = time.perf_counter()
+        num = 200
+        for i in range(num):
+            get_tdi_delays_wrap(
+                self.delayed_links_flat,
+                self.y_gw_flat,
+                self.y_gw_length,
+                self.tdi_delays,
+                self.num_delays_tdi,
+                self.dt,
+                self.link_inds,
+                self.num_units,
+                self.order,
+                self.sampling_frequency,
+                self.buffer_integer,
+                self.A_in,
+                self.deps,
+                len(self.A_in),
+                self.E_in,
+                input_start_time,
+            )
+        et = time.perf_counter()
+        print(
+            "Num delays:",
             self.num_delays_tdi,
-            self.dt,
-            self.link_inds,
-            self.delay_factor,
+            "num links:",
             self.num_units,
-            self.order,
-            self.sampling_frequency,
-            self.buffer_integer,
-            self.factorials_in,
-            self.num_factorials,
-            input_start_time,
-            self.L_only_spline.interp_array,
-            len(self.t_vals),
-            self.t_vals,
+            "per unit:",
+            (et - st) / (num * self.num_units),
+            "all units:",
+            (et - st) / (num),
         )
 
 
@@ -316,7 +366,7 @@ few = FastSchwarzschildEccentricFlux(
 
 input_start_time = -10000.0
 
-num_pts_in = int(4e6)
+num_pts_in = int(1.1e7)
 
 M = 1e6
 mu = 1e1
@@ -326,7 +376,7 @@ theta = np.pi / 3  # polar viewing angle
 phi = np.pi / 4  # azimuthal viewing angle
 dist = 1.0
 
-sampling_frequency = 1.0
+sampling_frequency = 0.1
 dt = 1 / sampling_frequency
 T = (num_pts_in * dt) / YRSID_SI
 
@@ -346,8 +396,8 @@ link_inds = delay_factor.copy()
 
 if gpu:
 
-    response.get_projections(int(3.2e6), input_in, beta, lam, input_start_time)
-    # response.get_tdi_delays(int(1e4), link_inds, delay_factor, input_start_time)
+    response.get_projections(int(3.1e6), input_in, beta, lam, input_start_time)
+    response.get_tdi_delays()
     # print(i)
 
 breakpoint()
