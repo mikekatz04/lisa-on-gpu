@@ -2,6 +2,20 @@
 #include "cuda_complex.hpp"
 #include "GeometricProjections.hh"
 
+
+#ifdef __CUDACC__
+#define CUDA_CALLABLE_MEMBER __host__ __device__
+#define CUDA_KERNEL __global__
+#define CUDA_SHARED __shared__
+#define CUDA_SYNC_THREADS __syncthreads();
+#else
+#define CUDA_CALLABLE_MEMBER
+#define CUDA_KERNEL
+#define CUDA_SHARED
+#define CUDA_SYNC_THREADS
+#endif
+
+#ifdef __CUDACC__
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
 {
@@ -12,7 +26,9 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=t
    }
 }
 
-__host__ __device__
+#endif
+
+CUDA_CALLABLE_MEMBER
 void get_basis_vecs(double lam, double beta, double u[], double v[], double k[])
 {
 	long i;
@@ -39,7 +55,7 @@ void get_basis_vecs(double lam, double beta, double u[], double v[], double k[])
 	return;
 }
 
-__device__
+CUDA_CALLABLE_MEMBER
 double dot_product_1d(double *arr1, double *arr2){
     double out = 0.0;
     for (int i=0; i<3; i++){
@@ -49,7 +65,7 @@ double dot_product_1d(double *arr1, double *arr2){
 }
 
 
-__device__
+CUDA_CALLABLE_MEMBER
 void xi_projections(double *xi_p, double *xi_c, double *u, double *v, double *n)
 {
     double u_dot_n = dot_product_1d(u, n);
@@ -59,7 +75,7 @@ void xi_projections(double *xi_p, double *xi_c, double *u, double *v, double *n)
     *xi_c = 2.0*u_dot_n*v_dot_n;
 }
 
-__device__
+CUDA_CALLABLE_MEMBER
 double interp_h(double delay, double out)
 {
 
@@ -103,7 +119,7 @@ void find_start_inds(int start_inds[], int unit_length[], double *t_arr, double 
 
 
 
-__device__
+CUDA_CALLABLE_MEMBER
 void interp_single(double *result, double *input, int h, int d, double e, double *A_arr, double deps, double* E_arr, int start_input_ind)
 {
 
@@ -144,8 +160,8 @@ void interp_single(double *result, double *input, int h, int d, double e, double
 
 
 
-__device__
-void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, double e, double *A_arr, double deps, double* E_arr, int start_input_ind)
+CUDA_CALLABLE_MEMBER
+void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, double e, double *A_arr, double deps, double* E_arr, int start_input_ind, int i, int link_i)
 {
     /*
 	double A = 1.0;
@@ -168,6 +184,7 @@ void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, do
 	double sum_hp = 0.0;
     double sum_hc = 0.0;
     cmplx temp_up, temp_down;
+    //if ((i == 100) && (link_i == 0)) printf("%d %e %e %e %e %e\n", d, e, A, B, C, D);
     //printf("in: %d %d\n", d, start_input_ind);
 	for (int j = 1; j< h; j += 1){
 
@@ -186,11 +203,11 @@ void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, do
 		double F = j + e;
 		double G = j + (1 - e);
 
-        //printf("mid: %d %d %d\n", j, d, start_input_ind);
-
 		// perform calculation
         temp_up = input[d + 1 + j - start_input_ind];
         temp_down = input[d - j - start_input_ind];
+
+        //if ((i == 100) && (link_i == 0)) printf("mid: %d %d %d %e %e %e %e %e %e %e\n", j, d + 1 + j - start_input_ind, d - j - start_input_ind, temp_up, temp_down, E, F, G);
 		sum_hp += E * (temp_up.real() / F + temp_down.real() / G);
         sum_hc += E * (temp_up.imag() / F + temp_down.imag() / G);
 
@@ -200,6 +217,7 @@ void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, do
     //printf("out: %d %d\n", d, start_input_ind);
 	*result_hp = A * (B * temp_up.real() + C * temp_down.real() + D * sum_hp);
     *result_hc = A * (B * temp_up.imag() + C * temp_down.imag() + D * sum_hc);
+    //if ((i == 100) && (link_i == 0)) printf("end: %e %e\n", *result_hp, *result_hc);
 }
 
 #define NUM_PARS  33
@@ -211,18 +229,18 @@ void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, do
 #define  MAX_A_VALS 1001
 #define  MAX_ORDER 40
 
-__global__
-void TDI_delay(double* delayed_links, double* input_links, int num_inputs, double* delays, int num_delays, double dt, int* link_inds_in, int num_units,
+CUDA_KERNEL
+void TDI_delay(double* delayed_links, double* input_links, int num_inputs, double* delays, int num_delays, double dt, int* link_inds_in, int num_units, int num_channels,
                int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, double input_start_time)
 {
-    __shared__ double input[BUFFER_SIZE];
-    __shared__ double first_delay;
-    __shared__ double last_delay;
-    __shared__ int start_input_ind;
-    __shared__ int end_input_ind;
-    __shared__ int link_inds[MAX_UNITS];
-    __shared__ double A_arr[MAX_A_VALS];
-    __shared__ double E_arr[MAX_ORDER];
+    CUDA_SHARED double input[BUFFER_SIZE];
+    CUDA_SHARED double first_delay;
+    CUDA_SHARED double last_delay;
+    CUDA_SHARED int start_input_ind;
+    CUDA_SHARED int end_input_ind;
+    CUDA_SHARED int link_inds[MAX_UNITS];
+    CUDA_SHARED double A_arr[MAX_A_VALS];
+    CUDA_SHARED double E_arr[MAX_ORDER];
 
     double t, L, delay;
 
@@ -230,41 +248,78 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, doubl
     double clipped_delay, out, fraction;
     double link_delayed_out;
     int integer_delay, max_integer_delay, min_integer_delay;
-    int start, end;
+    int start, end, increment;
 
-    for (int i = threadIdx.x; i<num_units; i += blockDim.x){
+    #ifdef __CUDACC__
+    start = threadIdx.x;
+    increment = blockDim.x;
+    #else
+    start = 0;
+    increment = 1;
+    #pragma omp parallel for
+    #endif
+    for (int i = start; i<num_units * num_channels; i += increment)
+    {
         link_inds[i] = link_inds_in[i];
     }
-    __syncthreads();
+    CUDA_SYNC_THREADS;
 
-    for (int i=threadIdx.x; i<num_A; i+=blockDim.x){
+    #ifdef __CUDACC__
+    #else
+    #pragma omp parallel for
+    #endif
+    for (int i=start; i<num_A; i+=increment)
+    {
         A_arr[i] = A_in[i];
          //if (threadIdx.x == 1) printf("%e %e %e\n", k[i], u[i], v[i]);
     }
-    __syncthreads();
+    CUDA_SYNC_THREADS;
 
-    for (int i=threadIdx.x; i< (order + 1)/2 - 1; i+=blockDim.x){
+    #ifdef __CUDACC__
+    #else
+    #pragma omp parallel for
+    #endif
+    for (int i=start; i< (order + 1)/2 - 1; i+=increment)
+    {
         E_arr[i] = E_in[i];
          //if (threadIdx.x == 1) printf("%e %e %e\n", k[i], u[i], v[i]);
     }
-    __syncthreads();
+    CUDA_SYNC_THREADS;
 
+    int start1, increment1;
+    #ifdef __CUDACC__
+    start1 = blockIdx.y;
+    increment1 = gridDim.y;
+    #else
+    start1 = 0;
+    increment1 = 1;
+    #endif
 
-    for (int unit_i=blockIdx.y; unit_i<num_units; unit_i+=gridDim.y)
+    for (int unit_i=start1; unit_i<num_units * num_channels; unit_i+=increment1)
     {
         int link_i = link_inds[unit_i];
 
         int point_count = order + 1;
         int half_point_count = int(point_count / 2);
 
-        for (int i=threadIdx.x + blockDim.x*blockIdx.x;
+        int start2, increment2;
+        #ifdef __CUDACC__
+        start2 = threadIdx.x + blockDim.x*blockIdx.x;
+        increment2 = blockDim.x * gridDim.x;
+        #else
+        start2 = 0;
+        increment2 = 1;
+        #pragma omp parallel for
+        #endif
+        for (int i=start;
              i < num_delays;
-             i += blockDim.x * gridDim.x)
+             i += increment)
         {
 
              int max_thread_num = (num_delays - blockDim.x*blockIdx.x > NUM_THREADS) ? NUM_THREADS : num_delays - blockDim.x*blockIdx.x;
 
              t = i*dt;
+             /*
 
              // Interpolate everything
              int delay_ind = unit_i * num_delays + i;
@@ -300,24 +355,25 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, doubl
 
              interp_single(&link_delayed_out, input, half_point_count, integer_delay, fraction, A_arr, deps, E_arr, start_input_ind);
 
-             delayed_links[unit_i * num_delays + i] = link_delayed_out;
+             int channel = (int) unit_i / num_units;
+             //atomicAdd(&delayed_links[channel * num_delays + i], link_delayed_out);
 
-             __syncthreads();
+             __syncthreads();*/
         }
     }
 }
 
-void get_tdi_delays(double* delayed_links, double* input_links, int num_inputs, double* delays, int num_delays, double dt, int* link_inds_in, int num_units,
+void get_tdi_delays(double* delayed_links, double* input_links, int num_inputs, double* delays, int num_delays, double dt, int* link_inds_in, int num_units, int num_channels,
                int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, double input_start_time){
 
 
         int num_blocks = std::ceil((num_delays + NUM_THREADS -1)/NUM_THREADS);
 
-        dim3 gridDim(num_blocks, num_units);
+        dim3 gridDim(num_blocks, num_units * num_channels);
 
         //printf("RUNNING: %d\n", i);
         TDI_delay<<<gridDim, NUM_THREADS>>>
-                      (delayed_links, input_links, num_inputs, delays, num_delays, dt, link_inds_in, num_units,
+                      (delayed_links, input_links, num_inputs, delays, num_delays, dt, link_inds_in, num_units, num_channels,
                          order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, input_start_time);
 
     cudaDeviceSynchronize();
@@ -433,6 +489,8 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
 
             //if (i <500) printf("%d %d: start \n", i, link_i);
 
+         // TODO: COULD remove n completely for memory
+
          xi_projections(&xi_p, &xi_c, u, v, n);
          k_dot_n = dot_product_1d(k, n);
          k_dot_x0 = dot_product_1d(k, x0);
@@ -476,8 +534,8 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
 
          __syncthreads();
 
-         interp(&hp_del0, &hc_del0, input, half_point_count, integer_delay0, fraction0, A_arr, deps, E_arr, start_input_ind);
-         interp(&hp_del1, &hc_del1, input, half_point_count, integer_delay1, fraction1, A_arr, deps, E_arr, start_input_ind);
+         interp(&hp_del0, &hc_del0, input, half_point_count, integer_delay0, fraction0, A_arr, deps, E_arr, start_input_ind, i, link_i);
+         interp(&hp_del1, &hc_del1, input, half_point_count, integer_delay1, fraction1, A_arr, deps, E_arr, start_input_ind, i, link_i);
 
          //hp_del0 = interp_h(delay0, 1.0);
          //if (i <500) printf("%d %d: %e \n", i, link_i, hp_del1);
@@ -485,6 +543,7 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
          //hp_del1 = interp_h(delay1, 3.0);
          //hc_del1 = interp_h(delay1, 3.0);
 
+         //if ((i == 100) && (link_i == 0)) printf("%e %e %e %e %e %e %e\n", hp_del0, hc_del0, hp_del1, hc_del1, k_dot_n, xi_p, xi_c);
          pre_factor = 1./(2*(1. - k_dot_n));
          large_factor = (hp_del0 - hp_del1)*xi_p + (hc_del0 - hc_del1)*xi_c;
 

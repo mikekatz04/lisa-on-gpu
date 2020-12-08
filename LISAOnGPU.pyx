@@ -15,7 +15,7 @@ cdef extern from "GeometricProjections.hh":
                   double input_start_time,
                   double* x_in, double* n_in, double* L_in, int num_orbit_inputs);
 
-    void get_tdi_delays(double* delayed_links, double* input_links, int num_inputs, double* delays, int num_delays, double dt, int* link_inds_in, int num_units,
+    void get_tdi_delays(double* delayed_links, double* input_links, int num_inputs, double* delays, int num_delays, double dt, int* link_inds_in, int num_units, int num_channels,
                    int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, double input_start_time);
 
 @pointer_adjust
@@ -49,7 +49,7 @@ def get_response_wrap(y_gw, k_in, u_in, v_in, dt,
 
 
 @pointer_adjust
-def get_tdi_delays_wrap(delayed_links, y_gw, num_inputs, delays, num_delays, dt, link_inds, num_units,
+def get_tdi_delays_wrap(delayed_links, y_gw, num_inputs, delays, num_delays, dt, link_inds, num_units, num_channels,
                order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, input_start_time):
 
     cdef size_t delayed_links_in = delayed_links
@@ -59,5 +59,5 @@ def get_tdi_delays_wrap(delayed_links, y_gw, num_inputs, delays, num_delays, dt,
     cdef size_t A_in_in = A_in
     cdef size_t E_in_in = E_in
 
-    get_tdi_delays(<double*> delayed_links_in, <double*> y_gw_in, num_inputs, <double*> delays_in, num_delays, dt, <int*> link_inds_in, num_units,
+    get_tdi_delays(<double*> delayed_links_in, <double*> y_gw_in, num_inputs, <double*> delays_in, num_delays, dt, <int*> link_inds_in, num_units, num_channels,
                    order, sampling_frequency, buffer_integer, <double*> A_in_in, deps, num_A, <double*> E_in_in, input_start_time)
