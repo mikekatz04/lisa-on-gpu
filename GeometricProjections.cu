@@ -224,7 +224,7 @@ void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, do
 #define NUM_COEFFS 4
 #define NLINKS  6
 #define BUFFER_SIZE 1000
-#define MAX_UNITS 30
+#define MAX_UNITS 200
 
 #define  MAX_A_VALS 1001
 #define  MAX_ORDER 40
@@ -299,6 +299,7 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, doubl
     {
         int link_i = link_inds[unit_i];
 
+
         int point_count = order + 1;
         int half_point_count = int(point_count / 2);
 
@@ -311,15 +312,14 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, doubl
         increment2 = 1;
         #pragma omp parallel for
         #endif
-        for (int i=start;
+        for (int i=start2;
              i < num_delays;
-             i += increment)
+             i += increment2)
         {
 
              int max_thread_num = (num_delays - blockDim.x*blockIdx.x > NUM_THREADS) ? NUM_THREADS : num_delays - blockDim.x*blockIdx.x;
 
              t = i*dt;
-             /*
 
              // Interpolate everything
              int delay_ind = unit_i * num_delays + i;
@@ -356,9 +356,9 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, doubl
              interp_single(&link_delayed_out, input, half_point_count, integer_delay, fraction, A_arr, deps, E_arr, start_input_ind);
 
              int channel = (int) unit_i / num_units;
-             //atomicAdd(&delayed_links[channel * num_delays + i], link_delayed_out);
+             atomicAdd(&delayed_links[channel * num_delays + i], link_delayed_out);
 
-             __syncthreads();*/
+             __syncthreads();
         }
     }
 }

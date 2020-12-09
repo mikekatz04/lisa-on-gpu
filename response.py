@@ -58,6 +58,9 @@ class VariableFractionDelay:
         self.max_delay = 100000.0
         self.max_integer_delay = int(np.floor(self.max_delay * self.sampling_frequency))
 
+        self.delays0 = []
+        self.delays1 = []
+
     def update_coefficients(self, fraction):
 
         e = fraction
@@ -150,6 +153,10 @@ class VariableFractionDelay:
 
         delay0 = t - L - k_dot_x0 * C_inv
         delay1 = t - k_dot_x1 * C_inv
+
+        if link_i == 0:
+            self.delays0.append(delay0)
+            self.delays1.append(delay1)
 
         clipped_delay0 = delay0 - input_start_time
         integer_delay0 = int(np.ceil(clipped_delay0 * sampling_frequency)) - 1
@@ -311,7 +318,7 @@ class pyResponseTDI(object):
 
     def get_xnL(self, i, link_i):
         sc0 = self.link_space_craft_0_in[link_i]
-        sc1 = self.link_space_craft_1_in[laink_i]
+        sc1 = self.link_space_craft_1_in[link_i]
         x0 = np.zeros(3)
         x1 = np.zeros(3)
         n = np.zeros(3)
@@ -478,7 +485,7 @@ class pyResponseTDI(object):
         num_pts_in = len(input_in)
 
         st = time.perf_counter()
-        num = 1
+        num = 500
         for i in range(num):
             get_response_wrap(
                 y_gw,
@@ -517,7 +524,7 @@ class pyResponseTDI(object):
     def get_tdi_delays(self):
         assert self.y_gw_length >= self.num_delays_tdi
 
-        input_start_time = -3000.00
+        input_start_time = -10000.00
         self.delayed_links_flat = xp.zeros((3, self.num_delays_tdi), dtype=xp.float64)
 
         for j in range(3):
@@ -528,8 +535,9 @@ class pyResponseTDI(object):
                 )
 
         self.delayed_links_flat = self.delayed_links_flat.flatten()
+
         st = time.perf_counter()
-        num = 100
+        num = 500
         for i in range(num):
             get_tdi_delays_wrap(
                 self.delayed_links_flat,
@@ -624,7 +632,7 @@ response = pyResponseTDI(
     orbits_file="orbits.h5",
     order=order,
     num_factorials=100,
-    tdi="1st generation",
+    tdi="2nd generation",
 )
 
 
@@ -647,6 +655,12 @@ if gpu is False:
 
     out = np.asarray(out)
     import matplotlib.pyplot as plt
+
+    plt.plot(frac_delay_check.delays0)
+    plt.plot(frac_delay_check.delays1)
+    plt.show()
+
+    breakpoint()
 
     check = np.load("test_resp.npy")
 
