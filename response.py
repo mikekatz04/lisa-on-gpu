@@ -18,6 +18,7 @@ from scipy.interpolate import CubicSpline
 
 from few.summation.interpolatedmodesum import CubicSplineInterpolant
 from few.utils.constants import *
+import matplotlib.pyplot as plt
 
 
 def get_factorial(n):
@@ -155,8 +156,8 @@ class VariableFractionDelay:
         delay1 = t - k_dot_x1 * C_inv
 
         if link_i == 0:
-            self.delays0.append(delay0)
-            self.delays1.append(delay1)
+            self.delays0.append(t - delay0)
+            self.delays1.append(t - delay1)
 
         clipped_delay0 = delay0 - input_start_time
         integer_delay0 = int(np.ceil(clipped_delay0 * sampling_frequency)) - 1
@@ -203,6 +204,8 @@ class pyResponseTDI(object):
         self._init_link_indices()
         self._init_orbit_information(orbits_file)
         self._init_TDI_delays()
+
+        self.total_buffer = self.tdi_buffer + self.projection_buffer
 
     def _init_link_indices(self):
         self.nlinks = 6
@@ -306,6 +309,9 @@ class pyResponseTDI(object):
         for i in range(self.nlinks):
             L_in[i] = CubicSpline(t_in, L_in[i])(t_new)
 
+        # get max buffer for projections
+        self.projection_buffer = int(np.max(x_in) * C_inv + np.max(np.abs(L_in))) + 4 * self.order
+
         self.x_in = xp.asarray(np.concatenate(x_in))
         self.n_in = xp.asarray(np.concatenate(n_in))
 
@@ -338,8 +344,6 @@ class pyResponseTDI(object):
         return x0, x1, n, L
 
     def _init_TDI_delays(self):
-        self.num_delays_tdi = int(3.1e6)
-
         link_dict = {12: 0, 21: 1, 13: 2, 31: 3, 23: 4, 32: 5}
         if self.tdi == "1st generation":
             tdi_combinations = [
@@ -406,9 +410,9 @@ class pyResponseTDI(object):
         self.num_tdi_combinations = len(tdi_combinations)
         self.num_tdi_delay_comps = num_delay_comps
 
-        delays = np.zeros((3, self.num_tdi_delay_comps, self.num_delays_tdi))
+        delays = np.zeros((3, self.num_tdi_delay_comps, self.num_orbit_inputs))
 
-        delays[:] = self.t_data[: self.num_delays_tdi]
+        delays[:] = self.t_data
         link_inds = np.zeros((3, self.num_tdi_delay_comps), dtype=np.int32)
 
         # cyclic permuatations for X, Y, Z
@@ -422,11 +426,22 @@ class pyResponseTDI(object):
                 link = self._cyclic_permutation(tdi["link"], j)
                 link_inds[j][i] = link_dict[link]
 
+                temp_delay = 0.0
                 for link in tdi["links_for_delay"]:
                     link = self._cyclic_permutation(link, j)
                     link_index = link_dict[link]
-                    delays[j][i] -= self.L_in_for_TDI[link_index][: self.num_delays_tdi]
+                    delays[j][i] -= self.L_in_for_TDI[link_index]
+
                 i += 1
+
+
+        self.max_delay = np.max(np.abs(self.t_data - delays[:]))
+
+        # get necessary buffer for TDI
+        check_tdi_buffer = int(self.max_delay * self.sampling_frequency) + 4 * self.order
+        self.tdi_buffer = 200
+
+        assert check_tdi_buffer < self.tdi_buffer
 
         self.num_units = self.num_tdi_delay_comps
         self.num_channels = 3
@@ -451,14 +466,17 @@ class pyResponseTDI(object):
     def y_gw(self):
         return self.y_gw_flat.reshape(self.nlinks, -1)
 
-    def get_projections(self, num_delays, input_in, beta, lam, input_start_time):
+    def get_projections(self, input_in, beta, lam):
 
         k = np.zeros(3, dtype=np.float)
         u = np.zeros(3, dtype=np.float)
         v = np.zeros(3, dtype=np.float)
 
-        assert num_delays <= self.num_orbit_inputs
-        assert num_delays * self.dt < self.final_t
+        self.num_total_points = len(input_in)
+        num_delays_proj = self.num_total_points - 2 * self.projection_buffer
+
+        assert num_delays_proj <= self.num_orbit_inputs
+        assert num_delays_proj * self.dt < self.final_t
 
         cosbeta = np.cos(beta)
         sinbeta = np.sin(beta)
@@ -476,28 +494,24 @@ class pyResponseTDI(object):
         k[1] = -cosbeta * sinlam
         k[2] = -sinbeta
 
-        y_gw = xp.zeros((self.nlinks * num_delays,), dtype=xp.float)
+        y_gw = xp.zeros((self.nlinks * num_delays_proj,), dtype=xp.float)
         k_in = xp.asarray(k)
         u_in = xp.asarray(u)
         v_in = xp.asarray(v)
 
         input_in = xp.asarray(input_in)
-        num_pts_in = len(input_in)
 
-        st = time.perf_counter()
-        num = 500
-        for i in range(num):
-            get_response_wrap(
+        get_response_wrap(
                 y_gw,
                 k_in,
                 u_in,
                 v_in,
                 self.dt,
-                num_delays,
+                num_delays_proj,
                 self.link_space_craft_0_in,
                 self.link_space_craft_1_in,
                 input_in,
-                num_pts_in,
+                self.num_total_points,
                 self.order,
                 self.sampling_frequency,
                 self.buffer_integer,
@@ -505,44 +519,41 @@ class pyResponseTDI(object):
                 self.deps,
                 len(self.A_in),
                 self.E_in,
-                input_start_time,
+                self.projection_buffer,
                 self.x_in,
                 self.n_in,
                 self.L_in,
                 self.num_orbit_inputs,
             )
-        et = time.perf_counter()
-        print("Num delays:", num_delays, (et - st) / num)
 
         self.y_gw_flat = y_gw
-        self.y_gw_length = num_delays
+        self.y_gw_length = num_delays_proj
 
     @property
     def XYZ(self):
         return self.delayed_links_flat.reshape(3, -1)
 
     def get_tdi_delays(self):
+
+        self.num_delays_tdi = self.num_total_points - 2 * self.total_buffer
         assert self.y_gw_length >= self.num_delays_tdi
 
-        input_start_time = -10000.00
         self.delayed_links_flat = xp.zeros((3, self.num_delays_tdi), dtype=xp.float64)
 
         for j in range(3):
             for link_ind, sign in self.channels_no_delays[j]:
                 # TODO: check boundaries
                 self.delayed_links_flat[j] += (
-                    sign * self.y_gw[link_ind, : self.num_delays_tdi]
+                    sign * self.y_gw[link_ind, self.tdi_buffer : self.num_delays_tdi + self.tdi_buffer]
                 )
 
         self.delayed_links_flat = self.delayed_links_flat.flatten()
 
-        st = time.perf_counter()
-        num = 500
-        for i in range(num):
-            get_tdi_delays_wrap(
+        get_tdi_delays_wrap(
                 self.delayed_links_flat,
                 self.y_gw_flat,
                 self.y_gw_length,
+                self.num_orbit_inputs,
                 self.tdi_delays,
                 self.num_delays_tdi,
                 self.dt,
@@ -556,75 +567,49 @@ class pyResponseTDI(object):
                 self.deps,
                 len(self.A_in),
                 self.E_in,
-                input_start_time,
+                self.projection_buffer,
+                self.total_buffer,
             )
 
-        et = time.perf_counter()
-        print(
-            "Num delays:",
-            self.num_delays_tdi,
-            "num total units:",
-            self.num_units * self.num_channels,
-            "per unit:",
-            (et - st) / (num * self.num_units * self.num_channels),
-            "all units:",
-            (et - st) / (num),
-        )
+
+def galactic_binary_td_waveform(A, f, fdot, iota, phi0, psi, T=1.0, dt=10.0, buffer=0, return_t=False):
+
+    cosps = xp.cos(2.*psi)
+    sinps = xp.sin(2.*psi)
+    cosiota = xp.cos(iota)
+
+    Aplus  = A*(1. + cosiota*cosiota);
+    Across = -2.0*A*cosiota;
+
+    plus_factor   =  Aplus*cosps - 1j * -Across*sinps
+    cross_factor   =  -Aplus*sinps - 1j * -Across*cosps
+
+    n = int(T * YRSID_SI / dt)
+    t_buffer = buffer * dt
+    t = xp.arange(0, n + 2 * buffer) * dt
+    t_in = t - t_buffer
+
+    # phi0 is phi(t = t_buffer)
+    inner = 2 * np.pi * (f * t_in + 1./2. * fdot * t_in **2) + phi0
+    plus = xp.cos(inner)
+    cross = xp.sin(inner)
+
+    h = plus_factor * plus + cross_factor * cross
+
+    if return_t:
+        return h, t
+
+    return h
 
 
 use_gpu = gpu
 
-# keyword arguments for inspiral generator (RunSchwarzEccFluxInspiral)
-inspiral_kwargs = {
-    "DENSE_STEPPING": 0,  # we want a sparsely sampled trajectory
-    "max_init_len": int(1e3),  # all of the trajectories will be well under len = 1000
-}
+num_pts_in = int(3e6)
 
-# keyword arguments for inspiral generator (RomanAmplitude)
-amplitude_kwargs = {
-    "max_init_len": int(1e3),  # all of the trajectories will be well under len = 1000
-    "use_gpu": use_gpu,  # GPU is available in this class
-}
-
-# keyword arguments for Ylm generator (GetYlms)
-Ylm_kwargs = {
-    "assume_positive_m": False  # if we assume positive m, it will generate negative m for all m>0
-}
-
-# keyword arguments for summation generator (InterpolatedModeSum)
-sum_kwargs = {
-    "use_gpu": use_gpu,  # GPU is availabel for this type of summation
-    "pad_output": False,
-}
-
-few = FastSchwarzschildEccentricFlux(
-    inspiral_kwargs=inspiral_kwargs,
-    amplitude_kwargs=amplitude_kwargs,
-    Ylm_kwargs=Ylm_kwargs,
-    sum_kwargs=sum_kwargs,
-    use_gpu=use_gpu,
-)
-
-input_start_time = -10000.0
-
-num_pts_in = int(4e6)
-
-M = 1e6
-mu = 1e1
-p0 = 12.0
-e0 = 0.1
-theta = np.pi / 3  # polar viewing angle
-phi = np.pi / 4  # azimuthal viewing angle
-dist = 1.0
-
-sampling_frequency = 0.2
+sampling_frequency = 0.1
 dt = 1 / sampling_frequency
 T = (num_pts_in * dt) / YRSID_SI
 
-beta = 0.4
-lam = 1.3
-
-input_in = few(M, mu, p0, e0, theta, phi, dist, dt=dt, T=T)
 
 order = 25
 response = pyResponseTDI(
@@ -632,10 +617,27 @@ response = pyResponseTDI(
     orbits_file="orbits.h5",
     order=order,
     num_factorials=100,
-    tdi="2nd generation",
+    tdi="1st generation",
 )
 
 
+A = 1e-19
+f = 1e-3
+fdot = 1e-16
+iota = np.pi/3.
+phi0 = np.pi/4.
+psi = np.pi/5.
+
+beta = 0.0
+lam = 0.0
+
+input_in = galactic_binary_td_waveform(A, f, fdot, iota, phi0, psi, T=T, dt=dt, buffer=response.total_buffer)
+
+#plt.plot(input_in.real)
+#plt.plot(input_in.imag)
+#plt.show()
+
+"""
 link_inds = np.concatenate([np.arange(6), np.arange(6)]).astype(dtype=np.int32)
 delay_factor = np.ones_like(link_inds)
 delay_factor[6:] = 2
@@ -646,37 +648,38 @@ if gpu is False:
     out = []
     for link_i in range(6):
         out.append([])
-        for i in range(1000):
+        for i in range(10000):
             x0, x1, n, L = response.get_xnL(i, link_i)
             tt1 = frac_delay_check(
                 input_in, i, dt, x0, x1, n, L, lam, beta, input_start_time
             )
             out[link_i].append(tt1)
 
+    breakpoint()
     out = np.asarray(out)
     import matplotlib.pyplot as plt
 
-    plt.plot(frac_delay_check.delays0)
-    plt.plot(frac_delay_check.delays1)
-    plt.show()
 
-    breakpoint()
+    #check = np.load("test_resp.npy")
 
-    check = np.load("test_resp.npy")
-
-    fig, ax = plt.subplots(1, 1)
+    fig, ax = plt.subplots(3, 2)
     fig.set_size_inches(10, 10)
-
-    ax = [ax]
+    ax = ax.ravel()
     for link_i, ax_i in zip(range(6), ax):
         ax_i.plot(out[link_i])
-        ax_i.plot(check[link_i][:1000], ls="--")
+        #ax_i.plot(check[link_i][:1000], ls="--")
     plt.show()
     breakpoint()
-
+"""
 if gpu:
-    response.get_projections(int(3.3e6), input_in, beta, lam, input_start_time)
-    response.get_tdi_delays()
+    num = 200
+    st = time.perf_counter()
+    for i in range(num):
+        response.get_projections(input_in, beta, lam)
+        response.get_tdi_delays()
+    et = time.perf_counter()
+
+    print('num delays:', len(input_in), (et - st)/num)
     # print(i)
 
 breakpoint()
