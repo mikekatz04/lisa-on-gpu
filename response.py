@@ -188,6 +188,7 @@ class pyResponseTDI(object):
         order=25,
         num_factorials=100,
         tdi="1st generation",
+        max_t_orbits=3.15576e7,
     ):
 
         self.sampling_frequency = sampling_frequency
@@ -202,7 +203,7 @@ class pyResponseTDI(object):
         self.num_interp_points = num_interp_points
         self._fill_A_E()
         self._init_link_indices()
-        self._init_orbit_information(orbits_file)
+        self._init_orbit_information(orbits_file, max_t_orbits=max_t_orbits)
         self._init_TDI_delays()
 
         self.total_buffer = self.tdi_buffer + self.projection_buffer
@@ -265,13 +266,15 @@ class pyResponseTDI(object):
 
         self.E_in = xp.asarray(E_in)
 
-    def _init_orbit_information(self, orbits_file):
+    def _init_orbit_information(self, orbits_file, max_t_orbits=3.15576e7):
+
         out = {}
         with h5py.File(orbits_file, "r") as f:
             for key in f:
                 out[key] = f[key][:]
 
-        t_in = out["t"]
+        t_in = out['t']
+        t_in = t_in - t_in[0]
         length_in = len(t_in)
 
         x_in = []
@@ -296,9 +299,10 @@ class pyResponseTDI(object):
             n_in.append(y_val / norm)
             n_in.append(z_val / norm)
 
-            L_in.append(out["l_" + str(sc0) + str(sc1)]["delay"])
+            L_in.append(out["l_" + str(sc0) + str(sc1)]["tt"])
 
-        t_new = np.arange(0.0, t_in[-1] + self.dt, self.dt)
+        t_max = t_in[-1] if t_in[-1] < max_t_orbits else max_t_orbits
+        t_new = np.arange(0.0, t_max + self.dt, self.dt)
 
         for i in range(9):
             x_in[i] = CubicSpline(t_in, x_in[i])(t_new)
@@ -614,7 +618,7 @@ T = (num_pts_in * dt) / YRSID_SI
 order = 25
 response = pyResponseTDI(
     sampling_frequency,
-    orbits_file="orbits.h5",
+    orbits_file="esa-orbits.h5",
     order=order,
     num_factorials=100,
     tdi="1st generation",
