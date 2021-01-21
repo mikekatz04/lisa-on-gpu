@@ -2,7 +2,8 @@ import numpy as np
 
 try:
     import cupy as xp
-    from pyresponse import get_response_wrap, get_tdi_delays_wrap
+    from pyresponse import get_response_wrap as get_response_wrap_gpu
+    from pyresponse import get_tdi_delays_wrap as get_tdi_delays_wrap_gpu
 
     gpu = True
 
@@ -11,6 +12,8 @@ except (ImportError, ModuleNotFoundError) as e:
 
     gpu = False
 
+from pyresponse_cpu import get_response_wrap as get_response_wrap_cpu
+from pyresponse_cpu import get_tdi_delays_wrap as get_tdi_delays_wrap_cpu
 import time
 import h5py
 
@@ -53,6 +56,7 @@ class pyResponseTDI(object):
         tdi="1st generation",
         max_t_orbits=3.15576e7,
         tdi_chan="XYZ",
+        use_gpu=False,
     ):
 
         self.sampling_frequency = sampling_frequency
@@ -64,6 +68,17 @@ class pyResponseTDI(object):
 
         self.tdi = tdi
         self.tdi_chan = tdi_chan
+
+        self.use_gpu = use_gpu
+        if use_gpu:
+            self.xp = xp
+            self.response_gen = get_response_wrap_gpu
+            self.tdi_gen = get_tdi_delays_wrap_gpu
+
+        else:
+            self.xp = np
+            self.response_gen = get_response_wrap_cpu
+            self.tdi_gen = get_tdi_delays_wrap_cpu
 
         self._fill_A_E()
         self._init_link_indices()
@@ -92,8 +107,8 @@ class pyResponseTDI(object):
         link_space_craft_0[5] = 2
         link_space_craft_1[5] = 1
 
-        self.link_space_craft_0_in = xp.asarray(link_space_craft_0).astype(xp.int32)
-        self.link_space_craft_1_in = xp.asarray(link_space_craft_1).astype(xp.int32)
+        self.link_space_craft_0_in = self.xp.asarray(link_space_craft_0).astype(self.xp.int32)
+        self.link_space_craft_1_in = self.xp.asarray(link_space_craft_1).astype(self.xp.int32)
 
     def _fill_A_E(self):
 
@@ -117,9 +132,9 @@ class pyResponseTDI(object):
             A /= denominator
             A_in[j] = A
 
-        self.A_in = xp.asarray(A_in)
+        self.A_in = self.xp.asarray(A_in)
 
-        E_in = xp.zeros((self.half_order,))
+        E_in = self.xp.zeros((self.half_order,))
 
         for j in range(1, self.half_order):
             first_term = factorials[h - 1] / factorials[h - 1 - j]
@@ -128,7 +143,7 @@ class pyResponseTDI(object):
             value = value * (-1.0) ** j
             E_in[j - 1] = value
 
-        self.E_in = xp.asarray(E_in)
+        self.E_in = self.xp.asarray(E_in)
 
     def _init_orbit_information(self, orbits_file, max_t_orbits=3.15576e7):
 
@@ -182,11 +197,11 @@ class pyResponseTDI(object):
             int(np.max(x_in) * C_inv + np.max(np.abs(L_in))) + 4 * self.order
         )
 
-        self.x_in = xp.asarray(np.concatenate(x_in))
-        self.n_in = xp.asarray(np.concatenate(n_in))
+        self.x_in = self.xp.asarray(np.concatenate(x_in))
+        self.n_in = self.xp.asarray(np.concatenate(n_in))
 
         self.L_in_for_TDI = L_in
-        self.L_in = xp.asarray(np.concatenate(L_in))
+        self.L_in = self.xp.asarray(np.concatenate(L_in))
 
         self.num_orbit_inputs = len(t_new)
         self.t_data = t_new
@@ -316,8 +331,8 @@ class pyResponseTDI(object):
 
         self.num_units = self.num_tdi_delay_comps
         self.num_channels = 3
-        self.link_inds = xp.asarray(link_inds.flatten()).astype(xp.int32)
-        self.tdi_delays = xp.asarray(delays.flatten())
+        self.link_inds = self.xp.asarray(link_inds.flatten()).astype(self.xp.int32)
+        self.tdi_delays = self.xp.asarray(delays.flatten())
 
     def _cyclic_permutation(self, link, permutation):
 
@@ -365,14 +380,14 @@ class pyResponseTDI(object):
         k[1] = -cosbeta * sinlam
         k[2] = -sinbeta
 
-        y_gw = xp.zeros((self.nlinks * num_delays_proj,), dtype=xp.float)
-        k_in = xp.asarray(k)
-        u_in = xp.asarray(u)
-        v_in = xp.asarray(v)
+        y_gw = self.xp.zeros((self.nlinks * num_delays_proj,), dtype=self.xp.float)
+        k_in = self.xp.asarray(k)
+        u_in = self.xp.asarray(u)
+        v_in = self.xp.asarray(v)
 
-        input_in = xp.asarray(input_in)
+        input_in = self.xp.asarray(input_in)
 
-        get_response_wrap(
+        self.response_gen(
             y_gw,
             k_in,
             u_in,
@@ -409,7 +424,7 @@ class pyResponseTDI(object):
         self.num_delays_tdi = self.num_total_points - 2 * self.total_buffer
         assert self.y_gw_length >= self.num_delays_tdi
 
-        self.delayed_links_flat = xp.zeros((3, self.num_delays_tdi), dtype=xp.float64)
+        self.delayed_links_flat = self.xp.zeros((3, self.num_delays_tdi), dtype=self.xp.float64)
 
         for j in range(3):
             for link_ind, sign in self.channels_no_delays[j]:
@@ -424,7 +439,7 @@ class pyResponseTDI(object):
 
         self.delayed_links_flat = self.delayed_links_flat.flatten()
 
-        get_tdi_delays_wrap(
+        self.tdi_gen(
             self.delayed_links_flat,
             self.y_gw_flat,
             self.y_gw_length,

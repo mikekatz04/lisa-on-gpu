@@ -172,12 +172,40 @@ if run_cuda_install:
         **gpu_extension
     )
 
+    # gpu_extensions.append(Extension(extension_name, **temp_dict))
+fps_cu_to_cpp = ["GeometricProjections"]
+fps_pyx = ["LISAOnGPU"]
+
+for fp in fps_cu_to_cpp:
+    shutil.copy(fp + ".cu", fp + ".cpp")
+
+for fp in fps_pyx:
+    shutil.copy(fp + ".pyx", fp + "_cpu.pyx")
+
+cpu_extension = dict(
+    libraries=["gomp"],
+    language="c++",
+    # This syntax is specific to this build system
+    # we're only going to use certain compiler args with nvcc
+    # and not with gcc the implementation of this trick is in
+    # customize_compiler()
+    extra_compile_args={"gcc": ["-std=c++11", "-fopenmp"],},  # '-g'],
+    include_dirs=[numpy_include, "include"],
+)
+
+response_cpu_ext = Extension(
+    "pyresponse_cpu",
+    sources=["GeometricProjections.cpp", "LISAOnGPU_cpu.pyx"],
+    **cpu_extension
+)
+
+cpu_extensions = [response_cpu_ext]
 
 if run_cuda_install:
-    extensions = [response_ext]
+    extensions = [response_ext] + cpu_extensions
 
 else:
-    raise NotImplementedError("no cpu available yet")
+    extensions = cpu_extensions
 
 
 setup(

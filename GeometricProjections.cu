@@ -4,9 +4,9 @@
 
 
 #ifdef __CUDACC__
-#define CUDA_CALLABLE_MEMBER __host__ __device__
-#define CUDA_KERNEL __global__
-#define CUDA_SHARED __shared__
+#define CUDA_CALLABLE_MEMBER __device__
+#define CUDA_KERNEL CUDA_KERNEL
+#define CUDA_SHARED CUDA_SHARED
 #define CUDA_SYNC_THREADS __syncthreads();
 #else
 #define CUDA_CALLABLE_MEMBER
@@ -233,7 +233,9 @@ CUDA_KERNEL
 void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int num_orbit_info, double* delays, int num_delays, double dt, int* link_inds_in, int num_units, int num_channels,
                int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, int projection_buffer, int total_buffer)
 {
+    #ifdef __CUDACC__
     CUDA_SHARED double input[BUFFER_SIZE];
+    #endif
     CUDA_SHARED double first_delay;
     CUDA_SHARED double last_delay;
     CUDA_SHARED int start_input_ind;
@@ -242,14 +244,7 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
     CUDA_SHARED double A_arr[MAX_A_VALS];
     CUDA_SHARED double E_arr[MAX_ORDER];
 
-    double t, L, delay;
-
-    double large_factor, pre_factor;
-    double clipped_delay, out, fraction;
-    double link_delayed_out;
-    int integer_delay, max_integer_delay, min_integer_delay;
-    int start, end, increment;
-
+    int start, increment;
     #ifdef __CUDACC__
     start = threadIdx.x;
     increment = blockDim.x;
@@ -293,6 +288,7 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
     #else
     start1 = 0;
     increment1 = 1;
+    #pragma omp parallel for
     #endif
 
     for (int unit_i=start1; unit_i<num_units * num_channels; unit_i+=increment1)
@@ -317,7 +313,13 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
              i += increment2)
         {
 
-             int max_thread_num = (num_delays - blockDim.x*blockIdx.x > NUM_THREADS) ? NUM_THREADS : num_delays - blockDim.x*blockIdx.x;
+            double t, L, delay;
+
+            double large_factor, pre_factor;
+            double clipped_delay, out, fraction;
+            double link_delayed_out;
+            int integer_delay, max_integer_delay, min_integer_delay;
+            int start, end, increment;
 
              // at i = 0, delay ind should be at TDI_buffer = total_buffer - projection_buffer
              int delay_ind = unit_i * num_orbit_info + i + (total_buffer - projection_buffer);
@@ -332,6 +334,9 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
              max_integer_delay += 2; // encompass all
              min_integer_delay = integer_delay;
 
+             #ifdef __CUDACC__
+             int max_thread_num = (num_delays - blockDim.x*blockIdx.x > NUM_THREADS) ? NUM_THREADS : num_delays - blockDim.x*blockIdx.x;
+
              if (threadIdx.x == 0){
                   start_input_ind = min_integer_delay - buffer_integer;
             }
@@ -342,7 +347,7 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
                   end_input_ind = max_integer_delay + buffer_integer;
             }
 
-            __syncthreads();
+            CUDA_SYNC_THREADS
 
 
             for (int jj = threadIdx.x + start_input_ind; jj < end_input_ind; jj+=max_thread_num){
@@ -351,14 +356,22 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
                 input[jj - start_input_ind] = input_links[link_i * num_inputs + jj];
              }
 
-             __syncthreads();
+             CUDA_SYNC_THREADS
+             #else
+              start_input_ind = 0;
+              double* input = &input_links[link_i * num_inputs];
+             #endif
 
              interp_single(&link_delayed_out, input, half_point_count, integer_delay, fraction, A_arr, deps, E_arr, start_input_ind);
 
              int channel = (int) unit_i / num_units;
+             #ifdef __CUDACC__
              atomicAdd(&delayed_links[channel * num_delays + i], link_delayed_out);
-
-             __syncthreads();
+             #else
+             #pragma omp atomic
+             delayed_links[channel * num_delays + i] += link_delayed_out;
+             #endif
+             CUDA_SYNC_THREADS
         }
     }
 }
@@ -367,6 +380,7 @@ void get_tdi_delays(double* delayed_links, double* input_links, int num_inputs, 
                int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, int projection_buffer, int total_buffer){
 
 
+        #ifdef __CUDACC__
         int num_blocks = std::ceil((num_delays + NUM_THREADS -1)/NUM_THREADS);
 
         dim3 gridDim(num_blocks, num_units * num_channels);
@@ -376,12 +390,17 @@ void get_tdi_delays(double* delayed_links, double* input_links, int num_inputs, 
                       (delayed_links, input_links, num_inputs, num_orbit_info, delays, num_delays, dt, link_inds_in, num_units, num_channels,
                          order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, projection_buffer, total_buffer);
 
-    cudaDeviceSynchronize();
-    gpuErrchk(cudaGetLastError());
+        cudaDeviceSynchronize();
+        gpuErrchk(cudaGetLastError());
+        #else
+        TDI_delay (delayed_links, input_links, num_inputs, num_orbit_info, delays, num_delays, dt, link_inds_in, num_units, num_channels,
+                         order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, projection_buffer, total_buffer);
+
+        #endif
 }
 
 
-__global__
+CUDA_KERNEL
 void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
               int num_delays, int *link_space_craft_0_in, int *link_space_craft_1_in,
               cmplx *input_in, int num_inputs, int order, double sampling_frequency,
@@ -389,85 +408,119 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
               double* x_in, double* n_in, double* L_in, int num_orbit_inputs)
 {
 
+        #ifdef __CUDACC__
+        CUDA_SHARED cmplx input[BUFFER_SIZE];
+        #endif
+        CUDA_SHARED double A_arr[MAX_A_VALS];
+        CUDA_SHARED double E_arr[MAX_ORDER];
+        CUDA_SHARED double first_delay;
+        CUDA_SHARED double last_delay;
+        CUDA_SHARED int start_input_ind;
+        CUDA_SHARED int end_input_ind;
 
-        __shared__ double factorials[100];
-        __shared__ cmplx input[BUFFER_SIZE];
-        __shared__ double A_arr[MAX_A_VALS];
-        __shared__ double E_arr[MAX_ORDER];
-        __shared__ double first_delay;
-        __shared__ double last_delay;
-        __shared__ int start_input_ind;
-        __shared__ int end_input_ind;
+        CUDA_SHARED double k[3];
+        CUDA_SHARED double u[3];
+        CUDA_SHARED double v[3];
+        CUDA_SHARED int link_space_craft_0[NLINKS];
+        CUDA_SHARED int link_space_craft_1[NLINKS];
 
-        __shared__ double k[3];
-        __shared__ double u[3];
-        __shared__ double v[3];
-        __shared__ int link_space_craft_0[NLINKS];
-        __shared__ int link_space_craft_1[NLINKS];
-
-        __shared__ double x0_all[NUM_THREADS * 3];
-        __shared__ double x1_all[NUM_THREADS * 3];
-        __shared__ double n_all[NUM_THREADS * 3];
+        #ifdef __CUDACC__
+        CUDA_SHARED double x0_all[NUM_THREADS * 3];
+        CUDA_SHARED double x1_all[NUM_THREADS * 3];
+        CUDA_SHARED double n_all[NUM_THREADS * 3];
 
         double* x0 = &x0_all[3 * threadIdx.x];
         double* x1 = &x1_all[3 * threadIdx.x];
         double* n = &n_all[3 * threadIdx.x];
+        #endif
 
-        double xi_p, xi_c;
-        double k_dot_n, k_dot_x0, k_dot_x1;
-        double t, L, delay0, delay1;
-        double hp_del0, hp_del1, hc_del0, hc_del1;
+        int start, increment;
 
-        double large_factor, pre_factor;
-        double clipped_delay0, clipped_delay1, out, fraction0, fraction1;
-        int integer_delay0, integer_delay1, max_integer_delay, min_integer_delay;
+    CUDA_SYNC_THREADS
 
-
-        int start, end;
-
-    __syncthreads();
-
-    for (int i=threadIdx.x; i<3; i+=blockDim.x){
+    #ifdef __CUDACC__
+    start = threadIdx.x;
+    increment = blockDim.x;
+    #else
+    start = 0;
+    increment = 1;
+    #endif
+    for (int i = start; i < 3; i += increment){
         k[i] = k_in[i];
         u[i] = u_in[i];
         v[i] = v_in[i];
          //if (threadIdx.x == 1) printf("%e %e %e\n", k[i], u[i], v[i]);
     }
-    __syncthreads();
+    CUDA_SYNC_THREADS
 
-    for (int i=threadIdx.x; i<num_A; i+=blockDim.x){
+    for (int i=start; i<num_A; i+=increment){
         A_arr[i] = A_in[i];
          //if (threadIdx.x == 1) printf("%e %e %e\n", k[i], u[i], v[i]);
     }
-    __syncthreads();
+    CUDA_SYNC_THREADS
 
-    for (int i=threadIdx.x; i< (order + 1)/2 - 1; i+=blockDim.x){
+    for (int i=start; i< (order + 1)/2 - 1; i+=increment){
         E_arr[i] = E_in[i];
          //if (threadIdx.x == 1) printf("%e %e %e\n", k[i], u[i], v[i]);
     }
-    __syncthreads();
+    CUDA_SYNC_THREADS
 
-    for (int i=threadIdx.x; i<NLINKS; i+=blockDim.x){
+    for (int i=start; i<NLINKS; i+=increment){
         link_space_craft_0[i] = link_space_craft_0_in[i];
         link_space_craft_1[i] = link_space_craft_1_in[i];
 
         //if (threadIdx.x == 1) printf("%d %d %d %d\n", link_space_craft_0_in[i],link_space_craft_1_in[i], link_space_craft_1[i], link_space_craft_0[i]);
     }
-    __syncthreads();
+    CUDA_SYNC_THREADS
 
     int point_count = order + 1;
     int half_point_count = int(point_count / 2);
 
-    for (int link_i=blockIdx.y; link_i<NLINKS; link_i+=gridDim.y){
+    #ifdef __CUDACC__
+    start = blockIdx.y;
+    increment = gridDim.y;
+    #else
+    start = 0;
+    increment = 1;
+    #endif
+    for (int link_i=start; link_i<NLINKS; link_i+=increment){
 
         int sc0 = link_space_craft_0[link_i];
         int sc1 = link_space_craft_1[link_i];
 
-    for (int i=threadIdx.x + blockDim.x*blockIdx.x;
-         i < num_delays;
-         i += blockDim.x * gridDim.x){
+    int start2, increment2;
+    #ifdef __CUDACC__
+    start2 = threadIdx.x + blockDim.x*blockIdx.x;
+    increment2 = blockDim.x * gridDim.x;
+    #else
+    start2 = 0;
+    increment2 = 1;
+    #endif
 
-         int max_thread_num = (num_delays - blockDim.x*blockIdx.x > NUM_THREADS) ? NUM_THREADS : num_delays - blockDim.x*blockIdx.x;
+    for (int i=start2;
+         i < num_delays;
+         i += increment2){
+
+         #ifdef __CUDACC__
+         #else
+         double x0_all[3];
+         CUDA_SHARED double x1_all[3];
+         CUDA_SHARED double n_all[3];
+
+         double* x0 = &x0_all[0];
+         double* x1 = &x1_all[0];
+         double* n = &n_all[0];
+
+         #endif
+
+         double xi_p, xi_c;
+         double k_dot_n, k_dot_x0, k_dot_x1;
+         double t, L, delay0, delay1;
+         double hp_del0, hp_del1, hc_del0, hc_del1;
+
+         double large_factor, pre_factor;
+         double clipped_delay0, clipped_delay1, out, fraction0, fraction1;
+         int integer_delay0, integer_delay1, max_integer_delay, min_integer_delay;
 
          t = i*dt;
 
@@ -512,6 +565,9 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
          max_integer_delay += 2; // encompass all
          min_integer_delay = (integer_delay0 < integer_delay1) ? integer_delay0 : integer_delay1;
 
+         #ifdef __CUDACC__
+         int max_thread_num = (num_delays - blockDim.x*blockIdx.x > NUM_THREADS) ? NUM_THREADS : num_delays - blockDim.x*blockIdx.x;
+
          if (threadIdx.x == 0){
               start_input_ind = min_integer_delay - buffer_integer;
         }
@@ -522,7 +578,7 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
               end_input_ind = max_integer_delay + buffer_integer;
         }
 
-        __syncthreads();
+        CUDA_SYNC_THREADS
 
         //if (blockIdx.x == gridDim.x - 1) printf("%d %e %d %d %d %d %d %d %d %d %d %d %d\n", i, L, blockIdx.x, gridDim.x, threadIdx.x, blockDim.x*blockIdx.x, num_delays, num_delays - blockDim.x*blockIdx.x, max_thread_num, start_input_ind, end_input_ind, integer_delay0, integer_delay1);
         if (end_input_ind - start_input_ind > BUFFER_SIZE) printf("%d %d %d %d %d %d %d %d\n", threadIdx.x, max_integer_delay, start_input_ind, end_input_ind, i, max_thread_num, num_delays, blockIdx.x*blockDim.x);
@@ -532,7 +588,11 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
             input[jj - start_input_ind] = input_in[jj];
          }
 
-         __syncthreads();
+         CUDA_SYNC_THREADS
+         #else
+         start_input_ind = 0;
+         cmplx* input = input_in;
+         #endif
 
          interp(&hp_del0, &hc_del0, input, half_point_count, integer_delay0, fraction0, A_arr, deps, E_arr, start_input_ind, i, link_i);
          interp(&hp_del1, &hc_del1, input, half_point_count, integer_delay1, fraction1, A_arr, deps, E_arr, start_input_ind, i, link_i);
@@ -549,7 +609,7 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
 
          y_gw[link_i*num_delays + i] = pre_factor*large_factor;
          //printf("%d %e %e %e %e %e %e %e %e \n", threadIdx.x, pre_factor, hp_del0, hp_del1, hc_del0, hc_del1, xi_p, xi_c, large_factor);
-         __syncthreads();
+         CUDA_SYNC_THREADS
     }
 
 }
@@ -566,12 +626,13 @@ void get_response(double *y_gw, double *k_in, double *u_in, double *v_in, double
               double* x_in, double* n_in, double* L_in, int num_orbit_inputs)
 {
 
+    #ifdef __CUDACC__
 
     int num_blocks = std::ceil((num_delays + NUM_THREADS -1)/NUM_THREADS);
 
     dim3 gridDim(num_blocks, 1);
 
-    #ifdef __CUDACC__
+
     //printf("RUNNING: %d\n", i);
     response<<<gridDim, NUM_THREADS>>>
                   (y_gw, k_in, u_in, v_in, dt,
@@ -584,11 +645,11 @@ void get_response(double *y_gw, double *k_in, double *u_in, double *v_in, double
     #else
 
     // CPU waveform generation
-    make_waveform(waveform,
-                 interp_array,
-                 M_phys, mu, qS, phiS, qK, phiK, dist,
-                 nmodes, mich,
-                 delta_t, h_t[i], i, start_inds[i], start_inds[i+1], init_len);
+    response(y_gw, k_in, u_in, v_in, dt,
+                  num_delays, link_space_craft_0_in, link_space_craft_1_in,
+                    input_in, num_inputs, order, sampling_frequency, buffer_integer,
+                    A_in, deps, num_A, E_in, projection_buffer,
+                    x_in, n_in, L_in, num_orbit_inputs);
     #endif
 }
 
