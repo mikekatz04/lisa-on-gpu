@@ -5,8 +5,8 @@
 
 #ifdef __CUDACC__
 #define CUDA_CALLABLE_MEMBER __device__
-#define CUDA_KERNEL CUDA_KERNEL
-#define CUDA_SHARED CUDA_SHARED
+#define CUDA_KERNEL __global__
+#define CUDA_SHARED __shared__
 #define CUDA_SYNC_THREADS __syncthreads();
 #else
 #define CUDA_CALLABLE_MEMBER

@@ -59,6 +59,7 @@ class pyResponseTDI(object):
         use_gpu=False,
     ):
 
+
         self.sampling_frequency = sampling_frequency
         self.dt = 1 / sampling_frequency
 
