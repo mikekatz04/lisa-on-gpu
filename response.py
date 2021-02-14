@@ -22,6 +22,8 @@ from scipy.interpolate import CubicSpline
 from few.utils.constants import *
 import matplotlib.pyplot as plt
 
+from ldc.lisa.projection import ProjectedStrain
+
 
 def get_factorial(n):
     fact = 1
@@ -58,7 +60,6 @@ class pyResponseTDI(object):
         tdi_chan="XYZ",
         use_gpu=False,
     ):
-
 
         self.sampling_frequency = sampling_frequency
         self.dt = 1 / sampling_frequency
@@ -108,8 +109,12 @@ class pyResponseTDI(object):
         link_space_craft_0[5] = 2
         link_space_craft_1[5] = 1
 
-        self.link_space_craft_0_in = self.xp.asarray(link_space_craft_0).astype(self.xp.int32)
-        self.link_space_craft_1_in = self.xp.asarray(link_space_craft_1).astype(self.xp.int32)
+        self.link_space_craft_0_in = self.xp.asarray(link_space_craft_0).astype(
+            self.xp.int32
+        )
+        self.link_space_craft_1_in = self.xp.asarray(link_space_craft_1).astype(
+            self.xp.int32
+        )
 
     def _fill_A_E(self):
 
@@ -162,7 +167,6 @@ class pyResponseTDI(object):
             for let in ["x", "y", "z"]:
                 x_in.append(out["sc_" + str(i + 1)][let])
 
-        n_in = []
         L_in = []
 
         for link_i in range(self.nlinks):
@@ -175,10 +179,6 @@ class pyResponseTDI(object):
 
             norm = np.sqrt(x_val ** 2 + y_val ** 2 + z_val ** 2)
 
-            n_in.append(x_val / norm)
-            n_in.append(y_val / norm)
-            n_in.append(z_val / norm)
-
             L_in.append(out["l_" + str(sc0) + str(sc1)]["tt"])
 
         t_max = t_in[-1] if t_in[-1] < max_t_orbits else max_t_orbits
@@ -186,9 +186,6 @@ class pyResponseTDI(object):
 
         for i in range(9):
             x_in[i] = CubicSpline(t_in, x_in[i])(t_new)
-
-        for i in range(self.nlinks * 3):
-            n_in[i] = CubicSpline(t_in, n_in[i])(t_new)
 
         for i in range(self.nlinks):
             L_in[i] = CubicSpline(t_in, L_in[i])(t_new)
@@ -199,7 +196,6 @@ class pyResponseTDI(object):
         )
 
         self.x_in = self.xp.asarray(np.concatenate(x_in))
-        self.n_in = self.xp.asarray(np.concatenate(n_in))
 
         self.L_in_for_TDI = L_in
         self.L_in = self.xp.asarray(np.concatenate(L_in))
@@ -208,26 +204,23 @@ class pyResponseTDI(object):
         self.t_data = t_new
         self.final_t = t_new[-1]
 
-    def get_xnL(self, i, link_i):
+    def get_xL(self, i, link_i):
         sc0 = self.link_space_craft_0_in[link_i]
         sc1 = self.link_space_craft_1_in[link_i]
         x0 = np.zeros(3)
         x1 = np.zeros(3)
-        n = np.zeros(3)
         for coord in range(3):
             ind0 = (sc0 * 3 + coord) * self.num_orbit_inputs + i
             ind1 = (sc1 * 3 + coord) * self.num_orbit_inputs + i
             ind_n = (link_i * 3 + coord) * self.num_orbit_inputs + i
-
             x0[coord] = self.x_in[ind0]
             x1[coord] = self.x_in[ind1]
-            n[coord] = self.n_in[ind_n]
 
         L_ind = link_i * self.num_orbit_inputs + i
 
         L = self.L_in[L_ind]
 
-        return x0, x1, n, L
+        return x0, x1, L
 
     def _init_TDI_delays(self):
         link_dict = {12: 0, 21: 1, 13: 2, 31: 3, 23: 4, 32: 5}
@@ -408,7 +401,6 @@ class pyResponseTDI(object):
             self.E_in,
             self.projection_buffer,
             self.x_in,
-            self.n_in,
             self.L_in,
             self.num_orbit_inputs,
         )
@@ -425,7 +417,9 @@ class pyResponseTDI(object):
         self.num_delays_tdi = self.num_total_points - 2 * self.total_buffer
         assert self.y_gw_length >= self.num_delays_tdi
 
-        self.delayed_links_flat = self.xp.zeros((3, self.num_delays_tdi), dtype=self.xp.float64)
+        self.delayed_links_flat = self.xp.zeros(
+            (3, self.num_delays_tdi), dtype=self.xp.float64
+        )
 
         for j in range(3):
             for link_ind, sign in self.channels_no_delays[j]:
