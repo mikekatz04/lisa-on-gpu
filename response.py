@@ -53,10 +53,9 @@ class pyResponseTDI(object):
     def __init__(
         self,
         sampling_frequency,
-        orbits_file="orbits.h5",
         order=25,
         tdi="1st generation",
-        max_t_orbits=3.15576e7,
+        orbit_kwargs={},
         tdi_chan="XYZ",
         use_gpu=False,
     ):
@@ -83,38 +82,10 @@ class pyResponseTDI(object):
             self.tdi_gen = get_tdi_delays_wrap_cpu
 
         self._fill_A_E()
-        self._init_link_indices()
-        self._init_orbit_information(orbits_file, max_t_orbits=max_t_orbits)
+        self._init_orbit_information(**orbit_kwargs)
         self._init_TDI_delays()
 
         self.total_buffer = self.tdi_buffer + self.projection_buffer
-
-    def _init_link_indices(self):
-        self.nlinks = 6
-
-        link_space_craft_0 = np.zeros((self.nlinks,), dtype=int)
-        link_space_craft_1 = np.zeros((self.nlinks,), dtype=int)
-        link_space_craft_0[0] = 0
-        link_space_craft_1[0] = 1
-        link_space_craft_0[1] = 1
-        link_space_craft_1[1] = 0
-
-        link_space_craft_0[2] = 0
-        link_space_craft_1[2] = 2
-        link_space_craft_0[3] = 2
-        link_space_craft_1[3] = 0
-
-        link_space_craft_0[4] = 1
-        link_space_craft_1[4] = 2
-        link_space_craft_0[5] = 2
-        link_space_craft_1[5] = 1
-
-        self.link_space_craft_0_in = self.xp.asarray(link_space_craft_0).astype(
-            self.xp.int32
-        )
-        self.link_space_craft_1_in = self.xp.asarray(link_space_craft_1).astype(
-            self.xp.int32
-        )
 
     def _fill_A_E(self):
 
@@ -151,44 +122,104 @@ class pyResponseTDI(object):
 
         self.E_in = self.xp.asarray(E_in)
 
-    def _init_orbit_information(self, orbits_file, max_t_orbits=3.15576e7):
+    def _init_orbit_information(
+        self,
+        orbit_module=None,
+        max_t_orbits=3.15576e7,
+        orbits_file="orbits.h5",
+        order=0,
+    ):
 
-        out = {}
-        with h5py.File(orbits_file, "r") as f:
-            for key in f:
-                out[key] = f[key][:]
+        if orbit_module is None:
+            self.nlinks = 6
 
-        t_in = out["t"]
-        t_in = t_in - t_in[0]
-        length_in = len(t_in)
+            link_space_craft_0 = np.zeros((self.nlinks,), dtype=int)
+            link_space_craft_1 = np.zeros((self.nlinks,), dtype=int)
+            link_space_craft_0[0] = 0
+            link_space_craft_1[0] = 1
+            link_space_craft_0[1] = 1
+            link_space_craft_1[1] = 0
 
-        x_in = []
-        for i in range(3):
-            for let in ["x", "y", "z"]:
-                x_in.append(out["sc_" + str(i + 1)][let])
+            link_space_craft_0[2] = 0
+            link_space_craft_1[2] = 2
+            link_space_craft_0[3] = 2
+            link_space_craft_1[3] = 0
 
-        L_in = []
+            link_space_craft_0[4] = 1
+            link_space_craft_1[4] = 2
+            link_space_craft_0[5] = 2
+            link_space_craft_1[5] = 1
 
-        for link_i in range(self.nlinks):
-            sc0 = self.link_space_craft_0_in[link_i] + 1
-            sc1 = self.link_space_craft_1_in[link_i] + 1
+            self.link_space_craft_0_in = self.xp.asarray(link_space_craft_0).astype(
+                self.xp.int32
+            )
+            self.link_space_craft_1_in = self.xp.asarray(link_space_craft_1).astype(
+                self.xp.int32
+            )
 
-            x_val = out["sc_" + str(sc0)]["x"] - out["sc_" + str(sc1)]["x"]
-            y_val = out["sc_" + str(sc0)]["y"] - out["sc_" + str(sc1)]["y"]
-            z_val = out["sc_" + str(sc0)]["z"] - out["sc_" + str(sc1)]["z"]
+            out = {}
+            with h5py.File(orbits_file, "r") as f:
+                for key in f:
+                    out[key] = f[key][:]
 
-            norm = np.sqrt(x_val ** 2 + y_val ** 2 + z_val ** 2)
+            t_in = out["t"]
+            t_in = t_in - t_in[0]
+            length_in = len(t_in)
 
-            L_in.append(out["l_" + str(sc0) + str(sc1)]["tt"])
+            x_in = []
+            for i in range(3):
+                for let in ["x", "y", "z"]:
+                    x_in.append(out["sc_" + str(i + 1)][let])
 
-        t_max = t_in[-1] if t_in[-1] < max_t_orbits else max_t_orbits
-        t_new = np.arange(0.0, t_max + self.dt, self.dt)
+            L_in = []
 
-        for i in range(9):
-            x_in[i] = CubicSpline(t_in, x_in[i])(t_new)
+            for link_i in range(self.nlinks):
+                sc0 = self.link_space_craft_0_in[link_i] + 1
+                sc1 = self.link_space_craft_1_in[link_i] + 1
 
-        for i in range(self.nlinks):
-            L_in[i] = CubicSpline(t_in, L_in[i])(t_new)
+                x_val = out["sc_" + str(sc0)]["x"] - out["sc_" + str(sc1)]["x"]
+                y_val = out["sc_" + str(sc0)]["y"] - out["sc_" + str(sc1)]["y"]
+                z_val = out["sc_" + str(sc0)]["z"] - out["sc_" + str(sc1)]["z"]
+
+                norm = np.sqrt(x_val ** 2 + y_val ** 2 + z_val ** 2)
+
+                L_in.append(out["l_" + str(sc0) + str(sc1)]["tt"])
+
+            t_max = t_in[-1] if t_in[-1] < max_t_orbits else max_t_orbits
+            t_new = np.arange(0.0, t_max, self.dt)
+
+            for i in range(9):
+                x_in[i] = CubicSpline(t_in, x_in[i])(t_new)
+
+            for i in range(self.nlinks):
+                L_in[i] = CubicSpline(t_in, L_in[i])(t_new)
+
+        else:
+            t_new = np.arange(0, max_t_orbits, self.dt)
+            self.nlinks = orbit_module.number_of_arms
+            self.link_space_craft_0_in = self.xp.zeros(self.nlinks, dtype=self.xp.int32)
+            self.link_space_craft_1_in = self.xp.zeros(self.nlinks, dtype=self.xp.int32)
+
+            L_in = []
+            for i in range(orbit_module.number_of_arms):
+                emitter, receiver = orbit_module.get_pairs()[i]
+
+                self.link_space_craft_0_in[i] = emitter - 1
+                self.link_space_craft_1_in[i] = receiver - 1
+
+                L_in.append(
+                    orbit_module.compute_travel_time(
+                        emitter, receiver, t_new, order=order
+                    )
+                )
+
+            x_in = []
+            # alphas = orbit_module.compute_alpha(t_new)
+            for i in range(1, orbit_module.number_of_spacecraft + 1):
+                temp = orbit_module.compute_position(i, t_new)
+                for j in range(3):
+                    x_in.append(temp[j])
+
 
         # get max buffer for projections
         self.projection_buffer = (
