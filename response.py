@@ -254,17 +254,23 @@ class pyResponseTDI(object):
         return x0, x1, L
 
     def _init_TDI_delays(self):
-        link_dict = {12: 0, 21: 1, 13: 2, 31: 3, 23: 4, 32: 5}
+
+        link_dict = {}
+        for link_i in range(self.nlinks):
+            sc0 = self.link_space_craft_0_in[link_i]
+            sc1 = self.link_space_craft_1_in[link_i]
+            link_dict[int(str(sc0 + 1) + str(sc1 + 1))] = link_i
+
         if self.tdi == "1st generation":
             tdi_combinations = [
-                {"link": 13, "links_for_delay": [], "sign": 1},
-                {"link": 31, "links_for_delay": [21], "sign": 1},
-                {"link": 12, "links_for_delay": [21, 23], "sign": 1},
-                {"link": 21, "links_for_delay": [21, 23, 31], "sign": 1},
-                {"link": 12, "links_for_delay": [], "sign": -1},
-                {"link": 21, "links_for_delay": [31], "sign": -1},
-                {"link": 13, "links_for_delay": [31, 32], "sign": -1},
-                {"link": 31, "links_for_delay": [31, 32, 21], "sign": -1},
+                {"link": 12, "links_for_delay": [21, 13, 31], "sign": 1},
+                {"link": 12, "links_for_delay": [21], "sign": -1},
+                {"link": 21, "links_for_delay": [13, 31], "sign": 1},
+                {"link": 21, "links_for_delay": [], "sign": -1},
+                {"link": 13, "links_for_delay": [31], "sign": +1},
+                {"link": 13, "links_for_delay": [31, 12, 21], "sign": -1},
+                {"link": 31, "links_for_delay": [], "sign": 1},
+                {"link": 31, "links_for_delay": [12, 21], "sign": -1},
             ]
 
         elif self.tdi == "2nd generation":
@@ -325,6 +331,7 @@ class pyResponseTDI(object):
         delays[:] = self.t_data
         link_inds = np.zeros((3, self.num_tdi_delay_comps), dtype=np.int32)
 
+        signs = []
         # cyclic permuatations for X, Y, Z
         for j in range(3):
             i = 0
@@ -342,6 +349,8 @@ class pyResponseTDI(object):
                     link_index = link_dict[link]
                     delays[j][i] -= self.L_in_for_TDI[link_index]
 
+                if j == 0:
+                    signs.append(tdi["sign"])
                 i += 1
 
         self.max_delay = np.max(np.abs(self.t_data - delays[:]))
@@ -358,6 +367,7 @@ class pyResponseTDI(object):
         self.num_channels = 3
         self.link_inds = self.xp.asarray(link_inds.flatten()).astype(self.xp.int32)
         self.tdi_delays = self.xp.asarray(delays.flatten())
+        self.tdi_signs = self.xp.asarray(signs, dtype=np.int32)
 
     def _cyclic_permutation(self, link, permutation):
 
@@ -474,6 +484,7 @@ class pyResponseTDI(object):
             self.num_delays_tdi,
             self.dt,
             self.link_inds,
+            self.tdi_signs,
             self.num_units,
             self.num_channels,
             self.order,

@@ -15,7 +15,7 @@ cdef extern from "GeometricProjections.hh":
                   int projection_buffer,
                   double* x_in, double* L_in, int num_orbit_inputs);
 
-    void get_tdi_delays(double* delayed_links, double* input_links, int num_inputs, int num_orbit_info, double* delays, int num_delays, double dt, int* link_inds_in, int num_units, int num_channels,
+    void get_tdi_delays(double* delayed_links, double* input_links, int num_inputs, int num_orbit_info, double* delays, int num_delays, double dt, int* link_inds_in, int* tdi_signs_in, int num_units, int num_channels,
                    int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, int projection_buffer, int total_buffer);
 
 @pointer_adjust
@@ -48,15 +48,16 @@ def get_response_wrap(y_gw, k_in, u_in, v_in, dt,
 
 
 @pointer_adjust
-def get_tdi_delays_wrap(delayed_links, y_gw, num_inputs, num_orbit_info, delays, num_delays, dt, link_inds, num_units, num_channels,
+def get_tdi_delays_wrap(delayed_links, y_gw, num_inputs, num_orbit_info, delays, num_delays, dt, link_inds, tdi_signs, num_units, num_channels,
                order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, projection_buffer, total_buffer):
 
     cdef size_t delayed_links_in = delayed_links
     cdef size_t y_gw_in = y_gw
     cdef size_t link_inds_in = link_inds
+    cdef size_t tdi_signs_in = tdi_signs
     cdef size_t delays_in = delays
     cdef size_t A_in_in = A_in
     cdef size_t E_in_in = E_in
 
-    get_tdi_delays(<double*> delayed_links_in, <double*> y_gw_in, num_inputs, num_orbit_info, <double*> delays_in, num_delays, dt, <int*> link_inds_in, num_units, num_channels,
+    get_tdi_delays(<double*> delayed_links_in, <double*> y_gw_in, num_inputs, num_orbit_info, <double*> delays_in, num_delays, dt, <int*> link_inds_in, <int*> tdi_signs_in, num_units, num_channels,
                    order, sampling_frequency, buffer_integer, <double*> A_in_in, deps, num_A, <double*> E_in_in, projection_buffer, total_buffer)

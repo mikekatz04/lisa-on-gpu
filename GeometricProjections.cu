@@ -230,7 +230,7 @@ void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, do
 #define  MAX_ORDER 40
 
 CUDA_KERNEL
-void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int num_orbit_info, double* delays, int num_delays, double dt, int* link_inds_in, int num_units, int num_channels,
+void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int num_orbit_info, double* delays, int num_delays, double dt, int* link_inds_in, int* tdi_signs_in, int num_units, int num_channels,
                int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, int projection_buffer, int total_buffer)
 {
     #ifdef __CUDACC__
@@ -243,6 +243,7 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
     CUDA_SHARED int link_inds[MAX_UNITS];
     CUDA_SHARED double A_arr[MAX_A_VALS];
     CUDA_SHARED double E_arr[MAX_ORDER];
+    CUDA_SHARED int tdi_signs[MAX_UNITS];
 
     int start, increment;
     #ifdef __CUDACC__
@@ -258,6 +259,16 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
         link_inds[i] = link_inds_in[i];
     }
     CUDA_SYNC_THREADS;
+
+    #ifdef __CUDACC__
+    #else
+    #pragma omp parallel for
+    #endif
+    for (int i=start; i<num_units; i+=increment)
+    {
+        tdi_signs[i] = tdi_signs_in[i];
+         //if (threadIdx.x == 1) printf("%e %e %e\n", k[i], u[i], v[i]);
+    }
 
     #ifdef __CUDACC__
     #else
@@ -295,6 +306,10 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
     {
         int link_i = link_inds[unit_i];
 
+        int sub_unit_i = unit_i % num_units;
+
+
+        int sign = tdi_signs[sub_unit_i];
 
         int point_count = order + 1;
         int half_point_count = int(point_count / 2);
@@ -356,6 +371,8 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
                 input[jj - start_input_ind] = input_links[link_i * num_inputs + jj];
              }
 
+
+
              CUDA_SYNC_THREADS;
              #else
               start_input_ind = 0;
@@ -365,6 +382,9 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
              interp_single(&link_delayed_out, input, half_point_count, integer_delay, fraction, A_arr, deps, E_arr, start_input_ind);
 
              int channel = (int) unit_i / num_units;
+
+             link_delayed_out *= sign;
+
              #ifdef __CUDACC__
              atomicAdd(&delayed_links[channel * num_delays + i], link_delayed_out);
              #else
@@ -376,7 +396,7 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
     }
 }
 
-void get_tdi_delays(double* delayed_links, double* input_links, int num_inputs, int num_orbit_info, double* delays, int num_delays, double dt, int* link_inds_in, int num_units, int num_channels,
+void get_tdi_delays(double* delayed_links, double* input_links, int num_inputs, int num_orbit_info, double* delays, int num_delays, double dt, int* link_inds_in, int* tdi_signs_in, int num_units, int num_channels,
                int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, int projection_buffer, int total_buffer){
 
 
@@ -387,13 +407,13 @@ void get_tdi_delays(double* delayed_links, double* input_links, int num_inputs, 
 
         //printf("RUNNING: %d\n", i);
         TDI_delay<<<gridDim, NUM_THREADS>>>
-                      (delayed_links, input_links, num_inputs, num_orbit_info, delays, num_delays, dt, link_inds_in, num_units, num_channels,
+                      (delayed_links, input_links, num_inputs, num_orbit_info, delays, num_delays, dt, link_inds_in, tdi_signs_in, num_units, num_channels,
                          order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, projection_buffer, total_buffer);
 
         cudaDeviceSynchronize();
         gpuErrchk(cudaGetLastError());
         #else
-        TDI_delay (delayed_links, input_links, num_inputs, num_orbit_info, delays, num_delays, dt, link_inds_in, num_units, num_channels,
+        TDI_delay (delayed_links, input_links, num_inputs, num_orbit_info, delays, num_delays, dt, link_inds_in, tdi_signs_in, num_units, num_channels,
                          order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, projection_buffer, total_buffer);
 
         #endif
