@@ -640,7 +640,7 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
 
          y_gw[link_i*num_delays + i] = pre_factor*large_factor;
          //printf("%d %e %e %e %e %e %e %e %e \n", threadIdx.x, pre_factor, hp_del0, hp_del1, hc_del0, hc_del1, xi_p, xi_c, large_factor);
-         CUDA_SYNC_THREADS
+         CUDA_SYNC_THREADS;
     }
 
 }
