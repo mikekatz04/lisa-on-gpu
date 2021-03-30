@@ -425,7 +425,7 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
               int num_delays, int *link_space_craft_0_in, int *link_space_craft_1_in,
               cmplx *input_in, int num_inputs, int order, double sampling_frequency,
               int buffer_integer, double* A_in, double deps, int num_A, double* E_in, int projection_buffer,
-              double* x_in, double* L_in, int num_orbit_inputs)
+              double* x_in_emitter, double* x_in_receiver, double* L_in, int num_orbit_inputs)
 {
 
         #ifdef __CUDACC__
@@ -549,11 +549,10 @@ void response(double *y_gw, double *k_in, double *u_in, double *v_in, double dt,
          double n_temp;
          for (int coord = 0; coord < 3; coord +=1)
          {
-             int ind0 = (sc0 * 3 + coord) * num_orbit_inputs + i;
-             int ind1 = (sc1 * 3 + coord) * num_orbit_inputs + i;
+             int ind = (link_i * 3 + coord) * num_orbit_inputs + i;
 
-             x0[coord] = x_in[ind0];
-             x1[coord] = x_in[ind1];
+             x0[coord] = x_in_emitter[ind];
+             x1[coord] = x_in_receiver[ind];
              n_temp = x1[coord] - x0[coord];
              n[coord] = n_temp;
              norm += n_temp * n_temp;
@@ -654,7 +653,7 @@ void get_response(double *y_gw, double *k_in, double *u_in, double *v_in, double
               cmplx *input_in, int num_inputs, int order,
               double sampling_frequency, int buffer_integer,
               double* A_in, double deps, int num_A, double* E_in, int projection_buffer,
-              double* x_in, double* L_in, int num_orbit_inputs)
+              double* x_in_emitter, double* x_in_receiver, double* L_in, int num_orbit_inputs)
 {
 
     #ifdef __CUDACC__
@@ -670,7 +669,7 @@ void get_response(double *y_gw, double *k_in, double *u_in, double *v_in, double
                   num_delays, link_space_craft_0_in, link_space_craft_1_in,
                     input_in, num_inputs, order, sampling_frequency, buffer_integer,
                     A_in, deps, num_A, E_in, projection_buffer,
-                    x_in, L_in, num_orbit_inputs);
+                    x_in_emitter, x_in_receiver, L_in, num_orbit_inputs);
     cudaDeviceSynchronize();
     gpuErrchk(cudaGetLastError());
     #else
@@ -680,7 +679,7 @@ void get_response(double *y_gw, double *k_in, double *u_in, double *v_in, double
                   num_delays, link_space_craft_0_in, link_space_craft_1_in,
                     input_in, num_inputs, order, sampling_frequency, buffer_integer,
                     A_in, deps, num_A, E_in, projection_buffer,
-                    x_in, L_in, num_orbit_inputs);
+                    x_in_emitter, x_in_receiver, L_in, num_orbit_inputs);
     #endif
 }
 

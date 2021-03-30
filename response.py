@@ -58,8 +58,10 @@ class pyResponseTDI(object):
         orbit_kwargs={},
         tdi_chan="XYZ",
         use_gpu=False,
+        t0=100.0,
     ):
 
+        self.t0 = t0
         self.sampling_frequency = sampling_frequency
         self.dt = 1 / sampling_frequency
 
@@ -135,20 +137,20 @@ class pyResponseTDI(object):
 
             link_space_craft_0 = np.zeros((self.nlinks,), dtype=int)
             link_space_craft_1 = np.zeros((self.nlinks,), dtype=int)
-            link_space_craft_0[0] = 0
-            link_space_craft_1[0] = 1
-            link_space_craft_0[1] = 1
-            link_space_craft_1[1] = 0
+            link_space_craft_0[0] = 1
+            link_space_craft_1[0] = 0
+            link_space_craft_0[1] = 0
+            link_space_craft_1[1] = 1
 
-            link_space_craft_0[2] = 0
-            link_space_craft_1[2] = 2
-            link_space_craft_0[3] = 2
-            link_space_craft_1[3] = 0
+            link_space_craft_0[2] = 2
+            link_space_craft_1[2] = 0
+            link_space_craft_0[3] = 0
+            link_space_craft_1[3] = 2
 
-            link_space_craft_0[4] = 1
-            link_space_craft_1[4] = 2
-            link_space_craft_0[5] = 2
-            link_space_craft_1[5] = 1
+            link_space_craft_0[4] = 2
+            link_space_craft_1[4] = 1
+            link_space_craft_0[5] = 1
+            link_space_craft_1[5] = 2
 
             self.link_space_craft_0_in = self.xp.asarray(link_space_craft_0).astype(
                 self.xp.int32
@@ -186,16 +188,27 @@ class pyResponseTDI(object):
                 L_in.append(out["l_" + str(sc0) + str(sc1)]["tt"])
 
             t_max = t_in[-1] if t_in[-1] < max_t_orbits else max_t_orbits
-            t_new = np.arange(0.0, t_max, self.dt)
-
-            for i in range(9):
-                x_in[i] = CubicSpline(t_in, x_in[i])(t_new)
+            t_new = np.arange(self.t0, t_max, self.dt)
 
             for i in range(self.nlinks):
                 L_in[i] = CubicSpline(t_in, L_in[i])(t_new)
 
+            x_in_emitter = [None for _ in range(2 * len(x_in))]
+            x_in_receiver = [None for _ in range(2 * len(x_in))]
+            for link_i in range(self.nlinks):
+                sc0 = self.link_space_craft_0_in[link_i]  # emitter
+                sc1 = self.link_space_craft_1_in[link_i]  # receiver
+
+                for j in range(3):
+                    x_in_emitter[link_i * 3 + j] = CubicSpline(t_in, x_in[sc0 * 3 + j])(
+                        t_new - L_in[link_i]
+                    )
+                    x_in_receiver[link_i * 3 + j] = CubicSpline(
+                        t_in, x_in[sc1 * 3 + j]
+                    )(t_new)
+
         else:
-            t_new = np.arange(0, max_t_orbits, self.dt)
+            t_new = np.arange(self.t0, max_t_orbits, self.dt)
             self.nlinks = orbit_module.number_of_arms
             self.link_space_craft_0_in = self.xp.zeros(self.nlinks, dtype=self.xp.int32)
             self.link_space_craft_1_in = self.xp.zeros(self.nlinks, dtype=self.xp.int32)
@@ -220,13 +233,13 @@ class pyResponseTDI(object):
                 for j in range(3):
                     x_in.append(temp[j])
 
-
         # get max buffer for projections
         self.projection_buffer = (
             int(np.max(x_in) * C_inv + np.max(np.abs(L_in))) + 4 * self.order
         )
 
-        self.x_in = self.xp.asarray(np.concatenate(x_in))
+        self.x_in_receiver = self.xp.asarray(np.concatenate(x_in_receiver))
+        self.x_in_emitter = self.xp.asarray(np.concatenate(x_in_emitter))
 
         self.L_in_for_TDI = L_in
         self.L_in = self.xp.asarray(np.concatenate(L_in))
@@ -236,6 +249,7 @@ class pyResponseTDI(object):
         self.final_t = t_new[-1]
 
     def get_xL(self, i, link_i):
+        raise NotImplementedError
         sc0 = self.link_space_craft_0_in[link_i]
         sc1 = self.link_space_craft_1_in[link_i]
         x0 = np.zeros(3)
@@ -441,7 +455,8 @@ class pyResponseTDI(object):
             len(self.A_in),
             self.E_in,
             self.projection_buffer,
-            self.x_in,
+            self.x_in_emitter,
+            self.x_in_receiver,
             self.L_in,
             self.num_orbit_inputs,
         )
