@@ -196,8 +196,8 @@ class pyResponseTDI(object):
             x_in_emitter = [None for _ in range(2 * len(x_in))]
             x_in_receiver = [None for _ in range(2 * len(x_in))]
             for link_i in range(self.nlinks):
-                sc0 = self.link_space_craft_0_in[link_i]  # emitter
-                sc1 = self.link_space_craft_1_in[link_i]  # receiver
+                sc0 = self.link_space_craft_0_in[link_i].item()  # emitter
+                sc1 = self.link_space_craft_1_in[link_i].item()  # receiver
 
                 for j in range(3):
                     x_in_emitter[link_i * 3 + j] = CubicSpline(t_in, x_in[sc0 * 3 + j])(
