@@ -30,9 +30,11 @@ class GBLike(pyResponseTDI):
 
         # add the buffer
         self.t_buffer = self.total_buffer * self.dt
-        t = self.xp.arange(0, self.n + 2 * self.total_buffer) * self.dt
-
-        self.t_in = t - self.t_buffer
+        self.t = np.arange(self.t0_wave, self.tend_wave, self.dt)
+        self.t_in = (
+            self.xp.asarray(self.t) - self.t0_tdi
+        )  # sets quantities at beginning of tdi
+        # TODO: should we keep this?
 
     def _get_h(self, A, f, fdot, iota, phi0, psi):
         cos2psi = self.xp.cos(2.0 * psi)
@@ -77,7 +79,7 @@ if __name__ == "__main__":
 
     order = 25
 
-    orbit_file = "keplerian-orbits.h5"
+    orbit_file = "equalarmlength-orbits.h5"
 
     config = dict(
         {
@@ -127,6 +129,31 @@ if __name__ == "__main__":
 
     beta = GB.source_parameters["EclipticLatitude"]
     lam = GB.source_parameters["EclipticLongitude"]
+
+    import lisagwresponse
+
+    temp = lisagwresponse.GalacticBinary(
+        A=A,
+        f=f,
+        df=fdot,
+        orbits=orbit_file,
+        gw_beta=beta,
+        gw_lambda=lam,
+        phi0=phi0,
+        iota=iota,
+        psi=psi,
+        t0=100.0,
+        dt=dt,
+    )
+
+    temp.write("gw.h5")
+
+    import h5py
+
+    with h5py.File("gw.h5", "r") as fp:
+        checkit = {key: fp[key][:] for key in fp}
+
+    breakpoint()
 
     num = 1
     chans = gb(A, f, fdot, iota, phi0, psi, lam, beta)

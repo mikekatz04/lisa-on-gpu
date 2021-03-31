@@ -59,11 +59,18 @@ class pyResponseTDI(object):
         tdi_chan="XYZ",
         use_gpu=False,
         t0=100.0,
+        num_pts=int(1e5),
     ):
 
-        self.t0 = t0
         self.sampling_frequency = sampling_frequency
         self.dt = 1 / sampling_frequency
+        self.tdi_buffer = 200
+        self.t0 = t0
+        self.t0_tdi = t0 + self.tdi_buffer * self.dt
+        self.num_pts = num_pts
+        self.tend_tdi = (num_pts - self.tdi_buffer) * self.dt + self.t0
+        self.tend = num_pts * self.dt + self.t0
+        self.num_delays_tdi = num_pts - 2 * self.tdi_buffer
 
         self.order = order
         self.buffer_integer = self.order * 2 + 1
@@ -161,8 +168,8 @@ class pyResponseTDI(object):
 
             out = {}
             with h5py.File(orbits_file, "r") as f:
-                for key in f:
-                    out[key] = f[key][:]
+                for key in f["tcb"]:
+                    out[key] = f["tcb"][key][:]
 
             t_in = out["t"]
             t_in = t_in - t_in[0]
@@ -188,7 +195,12 @@ class pyResponseTDI(object):
                 L_in.append(out["l_" + str(sc0) + str(sc1)]["tt"])
 
             t_max = t_in[-1] if t_in[-1] < max_t_orbits else max_t_orbits
-            t_new = np.arange(self.t0, t_max, self.dt)
+            if t_max < self.tend:
+                raise ValueError(
+                    "End time for projection is greater than end time for orbital information."
+                )
+
+            t_new = np.arange(self.t0, self.tend, self.dt)
 
             for i in range(self.nlinks):
                 L_in[i] = CubicSpline(t_in, L_in[i])(t_new)
@@ -237,6 +249,8 @@ class pyResponseTDI(object):
         self.projection_buffer = (
             int(np.max(x_in) * C_inv + np.max(np.abs(L_in))) + 4 * self.order
         )
+        self.t0_wave = self.t0 - self.projection_buffer * self.dt
+        self.tend_wave = self.tend + self.projection_buffer * self.dt
 
         self.x_in_receiver = self.xp.asarray(np.concatenate(x_in_receiver))
         self.x_in_emitter = self.xp.asarray(np.concatenate(x_in_emitter))
@@ -245,7 +259,8 @@ class pyResponseTDI(object):
         self.L_in = self.xp.asarray(np.concatenate(L_in))
 
         self.num_orbit_inputs = len(t_new)
-        self.t_data = t_new
+        self.t_data_cpu = t_new
+        self.t_data = self.xp.asarray(t_new)
         self.final_t = t_new[-1]
 
     def get_xL(self, i, link_i):
@@ -340,9 +355,10 @@ class pyResponseTDI(object):
         self.num_tdi_combinations = len(tdi_combinations)
         self.num_tdi_delay_comps = num_delay_comps
 
-        delays = np.zeros((3, self.num_tdi_delay_comps, self.num_orbit_inputs))
+        delays = np.zeros((3, self.num_tdi_delay_comps, self.num_delays_tdi))
 
-        delays[:] = self.t_data
+        delays[:] = self.t_data_cpu[self.tdi_buffer : -self.tdi_buffer]
+
         link_inds = np.zeros((3, self.num_tdi_delay_comps), dtype=np.int32)
 
         signs = []
@@ -361,19 +377,22 @@ class pyResponseTDI(object):
                 for link in tdi["links_for_delay"]:
                     link = self._cyclic_permutation(link, j)
                     link_index = link_dict[link]
-                    delays[j][i] -= self.L_in_for_TDI[link_index]
+                    delays[j][i] -= self.L_in_for_TDI[link_index][
+                        self.tdi_buffer : -self.tdi_buffer
+                    ]
 
                 if j == 0:
                     signs.append(tdi["sign"])
                 i += 1
 
-        self.max_delay = np.max(np.abs(self.t_data - delays[:]))
+        self.max_delay = np.max(
+            np.abs(self.t_data[self.tdi_buffer : -self.tdi_buffer] - delays[:])
+        )
 
         # get necessary buffer for TDI
         check_tdi_buffer = (
             int(self.max_delay * self.sampling_frequency) + 4 * self.order
         )
-        self.tdi_buffer = 200
 
         assert check_tdi_buffer < self.tdi_buffer
 
@@ -408,9 +427,9 @@ class pyResponseTDI(object):
         v = np.zeros(3, dtype=np.float)
 
         self.num_total_points = len(input_in)
-        num_delays_proj = self.num_total_points - 2 * self.projection_buffer
+        num_delays_proj = len(self.t_data)
 
-        assert num_delays_proj <= self.num_orbit_inputs
+        assert num_delays_proj <= self.num_pts
         assert num_delays_proj * self.dt < self.final_t
 
         cosbeta = np.cos(beta)
@@ -438,6 +457,7 @@ class pyResponseTDI(object):
 
         self.response_gen(
             y_gw,
+            self.t_data,
             k_in,
             u_in,
             v_in,
@@ -454,7 +474,7 @@ class pyResponseTDI(object):
             self.deps,
             len(self.A_in),
             self.E_in,
-            self.projection_buffer,
+            self.t0_wave,
             self.x_in_emitter,
             self.x_in_receiver,
             self.L_in,
@@ -469,8 +489,6 @@ class pyResponseTDI(object):
         return self.delayed_links_flat.reshape(3, -1)
 
     def get_tdi_delays(self):
-
-        self.num_delays_tdi = self.num_total_points - 2 * self.total_buffer
         assert self.y_gw_length >= self.num_delays_tdi
 
         self.delayed_links_flat = self.xp.zeros(
@@ -509,8 +527,7 @@ class pyResponseTDI(object):
             self.deps,
             len(self.A_in),
             self.E_in,
-            self.projection_buffer,
-            self.total_buffer,
+            self.t0,
         )
 
         if self.tdi_chan == "XYZ":
