@@ -31,9 +31,9 @@ class GBLike(pyResponseTDI):
         # add the buffer
         self.t_buffer = self.total_buffer * self.dt
         self.t = np.arange(self.t0_wave, self.tend_wave, self.dt)
-        self.t_in = (
-            self.xp.asarray(self.t) - self.t0_tdi
-        )  # sets quantities at beginning of tdi
+        self.t_in = self.xp.asarray(
+            self.t
+        )  #  - self.t0_tdi  # sets quantities at beginning of tdi
         # TODO: should we keep this?
 
     def _get_h(self, A, f, fdot, iota, phi0, psi):
@@ -79,7 +79,7 @@ if __name__ == "__main__":
 
     order = 25
 
-    orbit_file = "equalarmlength-orbits.h5"
+    orbit_file = "esa_fit_with_keplerian.h5"
 
     config = dict(
         {
@@ -110,11 +110,13 @@ if __name__ == "__main__":
 
     proj = ProjectedStrain(orbits)
     """
+    num_pts = int(3e6)
     tdi_kwargs = dict(
         orbit_kwargs=dict(orbits_file=orbit_file),
         order=order,
         tdi="1st generation",
         tdi_chan="XYZ",
+        num_pts=num_pts,
     )
     import time
 
@@ -130,7 +132,24 @@ if __name__ == "__main__":
     beta = GB.source_parameters["EclipticLatitude"]
     lam = GB.source_parameters["EclipticLongitude"]
 
+    num = 1
+    chans = gb(A, f, fdot, iota, phi0, psi, lam, beta)
+    st = time.perf_counter()
+    for i in range(num):
+        chans = gb(A, f, fdot, iota, phi0, psi, lam, beta)
+
+    et = time.perf_counter()
+
+    X1, Y1, Z1 = chans
+    print("num delays:", num_pts_in, (et - st) / num)
+
+    """
     import lisagwresponse
+
+    import os
+
+    if "gw.h5" in os.listdir():
+        os.remove("gw.h5")
 
     temp = lisagwresponse.GalacticBinary(
         A=A,
@@ -144,6 +163,7 @@ if __name__ == "__main__":
         psi=psi,
         t0=100.0,
         dt=dt,
+        size=num_pts,
     )
 
     temp.write("gw.h5")
@@ -152,19 +172,8 @@ if __name__ == "__main__":
 
     with h5py.File("gw.h5", "r") as fp:
         checkit = {key: fp[key][:] for key in fp}
-
-    breakpoint()
-
-    num = 1
-    chans = gb(A, f, fdot, iota, phi0, psi, lam, beta)
-    st = time.perf_counter()
-    for i in range(num):
-        chans = gb(A, f, fdot, iota, phi0, psi, lam, beta)
-
-    et = time.perf_counter()
-
-    X1, Y1, Z1 = chans
-    print("num delays:", num_pts_in, (et - st) / num)
+    """
+    """
     breakpoint()
     proj = ProjectedStrain(orbits)
 
@@ -184,9 +193,22 @@ if __name__ == "__main__":
     except AttributeError:
         pass
 
+
+    """
+    from response import AET
+    check = np.load('try1.npy')
+    temp = AET(*check)
     mismatch = [
         1.0 - np.dot(K, K1) / np.sqrt(np.dot(K, K) * np.dot(K1, K1))
-        for K, K1 in zip([X, Y, Z], [X1, Y1, Z1])
+        for K, K1 in zip(
+            check,
+            gb.XYZ,
+        )
     ]
     print(mismatch)
+
+
+    import matplotlib.pyplot as plt
+    plt.plot(X1)
+
     breakpoint()

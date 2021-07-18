@@ -583,6 +583,8 @@ void response(double *y_gw, double* t_data, double *k_in, double *u_in, double *
          delay1 = t - k_dot_x1*C_inv;
 
          // start time for hp hx is really -(projection_buffer * dt)
+
+         //if ((i == 0) && (link_i == 0)) printf("%.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e\n", L, delay0, delay1, x0[0], x0[1], x0[2],x1[0], x1[1], x1[2]);
          clipped_delay0 = delay0 - start_wave_time;
          integer_delay0 = (int) ceil(clipped_delay0 * sampling_frequency) - 1;
          fraction0 = 1.0 + integer_delay0 - clipped_delay0 * sampling_frequency;
