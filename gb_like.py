@@ -13,24 +13,23 @@ except (ImportError, ModuleNotFoundError) as e:
 from response import pyResponseTDI
 from few.utils.constants import *
 
-from ldc.waveform.waveform import HpHc
-from ldc.lisa.orbits import Orbits
+#from ldc.waveform.waveform import HpHc
+#from ldc.lisa.orbits import Orbits
 
+class GBLike:
+    def __init__(self, response_model, sampling_frequency, Tobs, tdi_kwargs, use_gpu=False):
 
-class GBLike(pyResponseTDI):
-    def __init__(self, sampling_frequency, Tobs, tdi_kwargs, use_gpu=False):
-        pyResponseTDI.__init__(self, sampling_frequency, use_gpu=use_gpu, **tdi_kwargs)
-
+        self.response_model = response_model
         if use_gpu:
             self.xp = xp
         else:
             self.xp = np
-        self.n = int(Tobs * YRSID_SI / self.dt)
-        self.Tobs = self.n * self.dt
+        self.n = int(Tobs * YRSID_SI / response_model.dt)
+        self.Tobs = self.n * response_model.dt
 
         # add the buffer
-        self.t_buffer = self.total_buffer * self.dt
-        self.t = np.arange(self.t0_wave, self.tend_wave, self.dt)
+        self.t_buffer = response_model.total_buffer * response_model.dt
+        self.t = np.arange(response_model.t0_wave, response_model.tend_wave, response_model.dt)
         self.t_in = self.xp.asarray(
             self.t
         )  #  - self.t0_tdi  # sets quantities at beginning of tdi
@@ -56,18 +55,62 @@ class GBLike(pyResponseTDI):
 
         h = self._get_h(A, f, fdot, iota, phi0, psi)
 
-        self.get_projections(h, lam, beta)
-        tdi_out = self.get_tdi_delays()
+        self.response_model.get_projections(h, lam, beta)
+        tdi_out = self.response_model.get_tdi_delays()
+
+        return list(tdi_out)
+
+class EMRILike:
+    def __init__(self, few_model, response_model, Tobs, use_gpu=False):
+
+        self.emri_wave = few_model
+        self.response_model = response_model
+        if use_gpu:
+            self.xp = xp
+        else:
+            self.xp = np
+        self.n = int(Tobs * YRSID_SI / response_model.dt)
+        self.Tobs = self.n * response_model.dt
+
+        # add the buffer
+        self.t_buffer = response_model.total_buffer * response_model.dt
+        self.t = np.arange(response_model.t0_wave, response_model.tend_wave, response_model.dt)
+        self.t_in = self.xp.asarray(
+            self.t
+        )
+        self.n_all = len(self.t_in)
+
+        # TODO: fix this:
+        self.Tobs = (self.n_all * response_model.dt) / YRSID_SI
+
+        #  - self.t0_tdi  # sets quantities at beginning of tdi
+        # TODO: should we keep this?
+
+    def _get_h(self, *args, **kwargs):
+        out = self.emri_wave(*args, T=self.Tobs, dt=self.response_model.dt, **kwargs)
+        hp = out.real
+        hc = -out.imag
+
+        return hp + 1j * hc
+
+    def __call__(self, lam, beta, *args, **kwargs):
+
+        h = self._get_h(*args, **kwargs)
+
+        response_model.get_projections(h, lam, beta)
+        tdi_out = response_model.get_tdi_delays()
 
         return list(tdi_out)
 
 
 if __name__ == "__main__":
+
+    from few.waveform import GenerateEMRIWaveform
     from astropy import units as un
     import doctest
-    from ldc.waveform.waveform import HpHc
-    from ldc.lisa.orbits import Orbits
-    from ldc.lisa.projection import ProjectedStrain
+    #from ldc.waveform.waveform import HpHc
+    #from ldc.lisa.orbits import Orbits
+    #from ldc.lisa.projection import ProjectedStrain
 
     use_gpu = gpu
 
@@ -79,7 +122,7 @@ if __name__ == "__main__":
 
     order = 25
 
-    orbit_file = "esa_fit_with_keplerian.h5"
+    orbit_file = "esa_fit_with_equalarmlength.h5"
 
     config = dict(
         {
@@ -103,8 +146,8 @@ if __name__ == "__main__":
         }
     )
 
-    GB = HpHc.type("my-galactic-binary", "GB", "TD_fdot")
-    GB.set_param(pGB)
+    #GB = HpHc.type("my-galactic-binary", "GB", "TD_fdot")
+    #GB.set_param(pGB)
     """
     orbits = Orbits.type(config)
 
@@ -120,17 +163,19 @@ if __name__ == "__main__":
     )
     import time
 
-    gb = GBLike(sampling_frequency, T, tdi_kwargs, use_gpu=use_gpu)
+    response_model = pyResponseTDI(sampling_frequency, use_gpu=use_gpu, **tdi_kwargs)
 
-    A = GB.source_parameters["Amplitude"]
-    f = GB.source_parameters["Frequency"]
-    fdot = GB.source_parameters["FrequencyDerivative"]
-    iota = GB.source_parameters["Inclination"]
-    phi0 = GB.source_parameters["InitialPhase"]
-    psi = GB.source_parameters["Polarization"]
+    gb = GBLike(response_model, sampling_frequency, T, tdi_kwargs, use_gpu=use_gpu)
 
-    beta = GB.source_parameters["EclipticLatitude"]
-    lam = GB.source_parameters["EclipticLongitude"]
+    A = pGB["Amplitude"]
+    f = pGB["Frequency"].value
+    fdot = pGB["FrequencyDerivative"].value
+    iota = pGB["Inclination"].value
+    phi0 = pGB["InitialPhase"].value
+    psi = pGB["Polarization"].value
+
+    beta = pGB["EclipticLatitude"].value
+    lam = pGB["EclipticLongitude"].value
 
     num = 1
     chans = gb(A, f, fdot, iota, phi0, psi, lam, beta)
@@ -142,6 +187,48 @@ if __name__ == "__main__":
 
     X1, Y1, Z1 = chans
     print("num delays:", num_pts_in, (et - st) / num)
+
+    few_mod = GenerateEMRIWaveform("FastSchwarzschildEccentricFlux", sum_kwargs=dict(pad_output=True))
+
+    em = EMRILike(few_mod, response_model, 2.0)
+
+
+
+    M = 1e6
+    mu = 1e1
+    a = 0.0
+    p0 = 12.
+    e0 = 0.4
+    x0 = 1.0
+    dist = 1.0
+    qS = 0.5
+    phiS = 0.6
+    qK = 0.7
+    phiK = 0.8
+    Phi_phi0 = 0.9
+    Phi_theta0 = 1.
+    Phi_r0 = 1.1
+
+
+
+    out = em(phiS,
+        np.pi/2. - qS,
+        M,
+        mu,
+        a,
+        p0,
+        e0,
+        x0,
+        dist,
+        qS,
+        phiS,
+        qK,
+        phiK,
+        Phi_phi0,
+        Phi_theta0,
+        Phi_r0)
+
+    import matplotlib.pyplot as plt
 
     """
     import lisagwresponse
@@ -194,7 +281,7 @@ if __name__ == "__main__":
         pass
 
 
-    """
+
     from response import AET
     check = np.load('try1.npy')
     temp = AET(*check)
@@ -208,7 +295,7 @@ if __name__ == "__main__":
     print(mismatch)
 
 
-    import matplotlib.pyplot as plt
-    plt.plot(X1)
-
+    #import matplotlib.pyplot as plt
+    #plt.plot(X1)
+    """
     breakpoint()

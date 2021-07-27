@@ -22,8 +22,6 @@ from scipy.interpolate import CubicSpline
 from few.utils.constants import *
 import matplotlib.pyplot as plt
 
-from ldc.lisa.projection import ProjectedStrain
-
 
 def get_factorial(n):
     fact = 1
@@ -385,8 +383,13 @@ class pyResponseTDI(object):
                     signs.append(tdi["sign"])
                 i += 1
 
+        try:
+            t_arr = self.t_data.get()
+        except AttributeError:
+            t_arr = self.t_data
+            
         self.max_delay = np.max(
-            np.abs(self.t_data[self.tdi_buffer : -self.tdi_buffer] - delays[:])
+            np.abs(t_arr[self.tdi_buffer : -self.tdi_buffer] - delays[:])
         )
 
         # get necessary buffer for TDI
