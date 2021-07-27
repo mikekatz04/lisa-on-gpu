@@ -17,7 +17,7 @@ from few.utils.constants import *
 #from ldc.lisa.orbits import Orbits
 
 class GBLike:
-    def __init__(self, response_model, sampling_frequency, Tobs, tdi_kwargs, use_gpu=False):
+    def __init__(self, response_model, sampling_frequency, Tobs, use_gpu=False):
 
         self.response_model = response_model
         if use_gpu:
