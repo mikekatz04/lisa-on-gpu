@@ -54,6 +54,7 @@ class pyResponseTDI(object):
         order=25,
         tdi="1st generation",
         orbit_kwargs={},
+        tdi_orbit_kwargs={},
         tdi_chan="XYZ",
         use_gpu=False,
         t0=100.0,
@@ -89,7 +90,14 @@ class pyResponseTDI(object):
             self.tdi_gen = get_tdi_delays_wrap_cpu
 
         self._fill_A_E()
-        self._init_orbit_information(**orbit_kwargs)
+
+        self.orbits_store = {}
+        self.orbits_store["projection"] = self._init_orbit_information(**orbit_kwargs)
+        if tdi_orbit_kwargs == {}:
+            self.orbits_store["tdi"] = self.orbits_store["projection"]
+        else:
+            self.orbits_store["tdi"] = self._init_orbit_information(**tdi_orbit_kwargs)
+
         self._init_TDI_delays()
 
         self.total_buffer = self.tdi_buffer + self.projection_buffer
@@ -244,22 +252,31 @@ class pyResponseTDI(object):
                     x_in.append(temp[j])
 
         # get max buffer for projections
-        self.projection_buffer = (
-            int(np.max(x_in) * C_inv + np.max(np.abs(L_in))) + 4 * self.order
+        projection_buffer = int(np.max(x_in) * C_inv + np.max(np.abs(L_in))) + 4 * order
+        t0_wave = self.t0 - projection_buffer * self.dt
+        tend_wave = self.tend + projection_buffer * self.dt
+        x_in_receiver = self.xp.asarray(np.concatenate(x_in_receiver))
+        x_in_emitter = self.xp.asarray(np.concatenate(x_in_emitter))
+        L_in_for_TDI = L_in
+        L_in = self.xp.asarray(np.concatenate(L_in))
+        num_orbit_inputs = len(t_new)
+        t_data_cpu = t_new
+        t_data = self.xp.asarray(t_new)
+        final_t = t_new[-1]
+        orbits_store = dict(
+            projection_buffer=projection_buffer,
+            t0_wave=t0_wave,
+            tend_wave=tend_wave,
+            x_in_receiver=x_in_receiver,
+            x_in_emitter=x_in_emitter,
+            L_in_for_TDI=L_in_for_TDI,
+            L_in=L_in,
+            num_orbit_inputs=num_orbit_inputs,
+            t_data_cpu=t_data_cpu,
+            t_data=t_data,
+            final_t=final_t,
         )
-        self.t0_wave = self.t0 - self.projection_buffer * self.dt
-        self.tend_wave = self.tend + self.projection_buffer * self.dt
-
-        self.x_in_receiver = self.xp.asarray(np.concatenate(x_in_receiver))
-        self.x_in_emitter = self.xp.asarray(np.concatenate(x_in_emitter))
-
-        self.L_in_for_TDI = L_in
-        self.L_in = self.xp.asarray(np.concatenate(L_in))
-
-        self.num_orbit_inputs = len(t_new)
-        self.t_data_cpu = t_new
-        self.t_data = self.xp.asarray(t_new)
-        self.final_t = t_new[-1]
+        return orbits_store
 
     def get_xL(self, i, link_i):
         raise NotImplementedError
@@ -281,6 +298,9 @@ class pyResponseTDI(object):
         return x0, x1, L
 
     def _init_TDI_delays(self):
+
+        for key, item in self.orbits_store["tdi"].items():
+            setattr(self, key, item)
 
         link_dict = {}
         for link_i in range(self.nlinks):
@@ -387,7 +407,7 @@ class pyResponseTDI(object):
             t_arr = self.t_data.get()
         except AttributeError:
             t_arr = self.t_data
-            
+
         self.max_delay = np.max(
             np.abs(t_arr[self.tdi_buffer : -self.tdi_buffer] - delays[:])
         )
@@ -424,6 +444,9 @@ class pyResponseTDI(object):
         return self.y_gw_flat.reshape(self.nlinks, -1)
 
     def get_projections(self, input_in, lam, beta):
+
+        for key, item in self.orbits_store["projection"].items():
+            setattr(self, key, item)
 
         k = np.zeros(3, dtype=np.float)
         u = np.zeros(3, dtype=np.float)
@@ -492,6 +515,10 @@ class pyResponseTDI(object):
         return self.delayed_links_flat.reshape(3, -1)
 
     def get_tdi_delays(self):
+
+        for key, item in self.orbits_store["tdi"].items():
+            setattr(self, key, item)
+
         assert self.y_gw_length >= self.num_delays_tdi
 
         self.delayed_links_flat = self.xp.zeros(

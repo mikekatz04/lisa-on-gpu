@@ -13,8 +13,9 @@ except (ImportError, ModuleNotFoundError) as e:
 from response import pyResponseTDI
 from few.utils.constants import *
 
-#from ldc.waveform.waveform import HpHc
-#from ldc.lisa.orbits import Orbits
+# from ldc.waveform.waveform import HpHc
+# from ldc.lisa.orbits import Orbits
+
 
 class GBLike:
     def __init__(self, response_model, sampling_frequency, Tobs, use_gpu=False):
@@ -29,7 +30,9 @@ class GBLike:
 
         # add the buffer
         self.t_buffer = response_model.total_buffer * response_model.dt
-        self.t = np.arange(response_model.t0_wave, response_model.tend_wave, response_model.dt)
+        self.t = np.arange(
+            response_model.t0_wave, response_model.tend_wave, response_model.dt
+        )
         self.t_in = self.xp.asarray(
             self.t
         )  #  - self.t0_tdi  # sets quantities at beginning of tdi
@@ -40,8 +43,19 @@ class GBLike:
         sin2psi = self.xp.sin(2.0 * psi)
         cosiota = self.xp.cos(iota)
 
+        # fddot = 11.0 / 3.0 * fdot ** 2 / f
+
         # phi0 is phi(t = 0, which is shifted due to t_buffer)
-        phase = 2 * np.pi * (f * self.t_in + 1.0 / 2.0 * fdot * self.t_in ** 2) - phi0
+        phase = (
+            2
+            * np.pi
+            * (
+                f * self.t_in
+                + 1.0 / 2.0 * fdot * self.t_in ** 2
+                # + 1 / 6.0 * fddot * self.t_in ** 3
+            )
+            - phi0
+        )
 
         hSp = -self.xp.cos(phase) * A * (1.0 + cosiota * cosiota)
         hSc = -self.xp.sin(phase) * 2.0 * A * cosiota
@@ -56,9 +70,11 @@ class GBLike:
         h = self._get_h(A, f, fdot, iota, phi0, psi)
 
         self.response_model.get_projections(h, lam, beta)
+        breakpoint()
         tdi_out = self.response_model.get_tdi_delays()
 
         return list(tdi_out)
+
 
 class EMRILike:
     def __init__(self, few_model, response_model, Tobs, use_gpu=False):
@@ -74,10 +90,10 @@ class EMRILike:
 
         # add the buffer
         self.t_buffer = response_model.total_buffer * response_model.dt
-        self.t = np.arange(response_model.t0_wave, response_model.tend_wave, response_model.dt)
-        self.t_in = self.xp.asarray(
-            self.t
+        self.t = np.arange(
+            response_model.t0_wave, response_model.tend_wave, response_model.dt
         )
+        self.t_in = self.xp.asarray(self.t)
         self.n_all = len(self.t_in)
 
         # TODO: fix this:
@@ -108,9 +124,11 @@ if __name__ == "__main__":
     from few.waveform import GenerateEMRIWaveform
     from astropy import units as un
     import doctest
-    #from ldc.waveform.waveform import HpHc
-    #from ldc.lisa.orbits import Orbits
-    #from ldc.lisa.projection import ProjectedStrain
+    import matplotlib.pyplot as plt
+
+    # from ldc.waveform.waveform import HpHc
+    # from ldc.lisa.orbits import Orbits
+    # from ldc.lisa.projection import ProjectedStrain
 
     use_gpu = gpu
 
@@ -122,7 +140,7 @@ if __name__ == "__main__":
 
     order = 25
 
-    orbit_file = "esa_fit_with_equalarmlength.h5"
+    orbit_file = "esa-orbits.h5"
 
     config = dict(
         {
@@ -133,6 +151,7 @@ if __name__ == "__main__":
         }
     )
 
+    """
     pGB = dict(
         {
             "Amplitude": 1.07345e-22,
@@ -146,8 +165,22 @@ if __name__ == "__main__":
         }
     )
 
-    #GB = HpHc.type("my-galactic-binary", "GB", "TD_fdot")
-    #GB.set_param(pGB)
+    """
+    pGB = dict(
+        {
+            "Amplitude": 1.084702251e-22,
+            "EclipticLatitude": np.arcsin(0.83081713) * un.rad,
+            "EclipticLongitude": 5.22979888 * un.rad,
+            "Frequency": 2.35962078 * 1e-3 * un.Hz,
+            "FrequencyDerivative": 1.47197271e-19 * un.Unit("Hz2"),
+            "Inclination": 1.11820901 * un.rad,
+            "InitialPhase": 4.91128699 * un.rad,
+            "Polarization": 2.3290324 * un.rad,
+        }
+    )
+
+    # GB = HpHc.type("my-galactic-binary", "GB", "TD_fdot")
+    # GB.set_param(pGB)
     """
     orbits = Orbits.type(config)
 
@@ -165,7 +198,7 @@ if __name__ == "__main__":
 
     response_model = pyResponseTDI(sampling_frequency, use_gpu=use_gpu, **tdi_kwargs)
 
-    gb = GBLike(response_model, sampling_frequency, T, tdi_kwargs, use_gpu=use_gpu)
+    gb = GBLike(response_model, sampling_frequency, T, use_gpu=use_gpu)
 
     A = pGB["Amplitude"]
     f = pGB["Frequency"].value
@@ -179,40 +212,89 @@ if __name__ == "__main__":
 
     num = 1
     chans = gb(A, f, fdot, iota, phi0, psi, lam, beta)
-    st = time.perf_counter()
-    for i in range(num):
-        chans = gb(A, f, fdot, iota, phi0, psi, lam, beta)
+    # st = time.perf_counter()
+    # for i in range(num):
+    #    chans = gb(A, f, fdot, iota, phi0, psi, lam, beta)
 
-    et = time.perf_counter()
+    # et = time.perf_counter()
 
     X1, Y1, Z1 = chans
-    print("num delays:", num_pts_in, (et - st) / num)
 
-    few_mod = GenerateEMRIWaveform("FastSchwarzschildEccentricFlux", sum_kwargs=dict(pad_output=True))
+    orbit_file = "esa-orbits.h5"
+    tdi_orbit_file = "esa_fit_with_equalarmlength.h5"
+
+    tdi_kwargs = dict(
+        orbit_kwargs=dict(orbits_file=orbit_file),
+        tdi_orbit_kwargs=dict(orbits_file=tdi_orbit_file),
+        order=order,
+        tdi="1st generation",
+        tdi_chan="XYZ",
+        num_pts=num_pts,
+    )
+    import time
+
+    del response_model
+    del gb
+
+    response_model = pyResponseTDI(sampling_frequency, use_gpu=use_gpu, **tdi_kwargs)
+
+    gb = GBLike(response_model, sampling_frequency, T, use_gpu=use_gpu)
+
+    A = pGB["Amplitude"]
+    f = pGB["Frequency"].value
+    fdot = pGB["FrequencyDerivative"].value
+    iota = pGB["Inclination"].value
+    phi0 = pGB["InitialPhase"].value
+    psi = pGB["Polarization"].value
+
+    beta = pGB["EclipticLatitude"].value
+    lam = pGB["EclipticLongitude"].value
+
+    num = 1
+    chans = gb(A, f, fdot, iota, phi0, psi, lam, beta)
+    # st = time.perf_counter()
+    # for i in range(num):
+    #    chans = gb(A, f, fdot, iota, phi0, psi, lam, beta)
+
+    # et = time.perf_counter()
+
+    X2, Y2, Z2 = chans
+    # print("num delays:", num_pts_in, (et - st) / num)
+
+    print(
+        np.abs(
+            np.dot(np.fft.rfft(X2).conj(), np.fft.rfft(X1))
+            / np.sqrt(
+                np.dot(np.fft.rfft(X1).conj(), np.fft.rfft(X1))
+                * np.dot(np.fft.rfft(X2).conj(), np.fft.rfft(X2))
+            )
+        )
+    )
+    breakpoint()
+    few_mod = GenerateEMRIWaveform(
+        "FastSchwarzschildEccentricFlux", sum_kwargs=dict(pad_output=True)
+    )
 
     em = EMRILike(few_mod, response_model, 2.0)
 
-
-
-    M = 1e6
-    mu = 1e1
-    a = 0.0
-    p0 = 12.
-    e0 = 0.4
-    x0 = 1.0
+    M = 1e7
+    mu = 1e2
+    a = 0.5
+    p0 = 12.0
+    e0 = 0.2
+    x0 = 0.7
     dist = 1.0
     qS = 0.5
     phiS = 0.6
     qK = 0.7
     phiK = 0.8
     Phi_phi0 = 0.9
-    Phi_theta0 = 1.
+    Phi_theta0 = 1.0
     Phi_r0 = 1.1
 
-
-
-    out = em(phiS,
-        np.pi/2. - qS,
+    out = em(
+        phiS,
+        np.pi / 2.0 - qS,
         M,
         mu,
         a,
@@ -226,7 +308,8 @@ if __name__ == "__main__":
         phiK,
         Phi_phi0,
         Phi_theta0,
-        Phi_r0)
+        Phi_r0,
+    )
 
     import matplotlib.pyplot as plt
 
