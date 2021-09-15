@@ -43,7 +43,7 @@ class GBLike:
         sin2psi = self.xp.sin(2.0 * psi)
         cosiota = self.xp.cos(iota)
 
-        # fddot = 11.0 / 3.0 * fdot ** 2 / f
+        fddot = 11.0 / 3.0 * fdot ** 2 / f
 
         # phi0 is phi(t = 0, which is shifted due to t_buffer)
         phase = (
@@ -52,7 +52,7 @@ class GBLike:
             * (
                 f * self.t_in
                 + 1.0 / 2.0 * fdot * self.t_in ** 2
-                # + 1 / 6.0 * fddot * self.t_in ** 3
+                + 1.0 / 6.0 * fddot * self.t_in ** 3
             )
             - phi0
         )
@@ -70,7 +70,6 @@ class GBLike:
         h = self._get_h(A, f, fdot, iota, phi0, psi)
 
         self.response_model.get_projections(h, lam, beta)
-        breakpoint()
         tdi_out = self.response_model.get_tdi_delays()
 
         return list(tdi_out)
