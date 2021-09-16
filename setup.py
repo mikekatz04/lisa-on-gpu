@@ -153,28 +153,24 @@ if run_cuda_install:
                 "'-fPIC'",
                 "-Xcompiler",
                 "-fopenmp",
-                #"-G",
-                #"-g",
-                #"-O0",
+                # "-G",
+                # "-g",
+                # "-O0",
                 # "-lineinfo",
             ],  # for debugging
         },
-        include_dirs=[
-            numpy_include,
-            CUDA["include"],
-            "./",
-        ],
+        include_dirs=[numpy_include, CUDA["include"], "include/",],
     )
 
     response_ext = Extension(
         "pyresponse",
-        sources=["GeometricProjections.cu", "LISAOnGPU.pyx"],
+        sources=["src/LISAResponse.cu", "src/responselisa.pyx"],
         **gpu_extension
     )
 
     # gpu_extensions.append(Extension(extension_name, **temp_dict))
-fps_cu_to_cpp = ["GeometricProjections"]
-fps_pyx = ["LISAOnGPU"]
+fps_cu_to_cpp = ["src/LISAResponse"]
+fps_pyx = ["src/responselisa"]
 
 for fp in fps_cu_to_cpp:
     shutil.copy(fp + ".cu", fp + ".cpp")
@@ -195,7 +191,7 @@ cpu_extension = dict(
 
 response_cpu_ext = Extension(
     "pyresponse_cpu",
-    sources=["GeometricProjections.cpp", "LISAOnGPU_cpu.pyx"],
+    sources=["src/LISAResponse.cpp", "src/responselisa.pyx"],
     **cpu_extension
 )
 
@@ -214,6 +210,7 @@ setup(
     author_email="mikekatz04@gmail.com",
     ext_modules=extensions,
     # Inject our custom trigger
+    packages=["fastlisaresponse"],
     cmdclass={"build_ext": custom_build_ext},
     # Since the package has c code, the egg cannot be zipped
     zip_safe=False,

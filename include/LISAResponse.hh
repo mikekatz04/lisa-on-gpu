@@ -1,5 +1,5 @@
-#ifndef __GEO_PROJ__
-#define __GEO_PROJ__
+#ifndef __LISA_RESPONSE__
+#define __LISA_RESPONSE__
 
 #include "cuda_complex.hpp"
 
@@ -19,4 +19,4 @@ void get_response(double *y_gw, double* t_data, double *k_in, double *u_in, doub
 void get_tdi_delays(double* delayed_links, double* input_links, int num_inputs, int num_orbit_info, double* delays, int num_delays, double dt, int* link_inds_in, int* tdi_signs_in, int num_units, int num_channels,
                int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, double start_proj_time);
 
-#endif // __GEO_PROJ__
+#endif // __LISA_RESPONSE__

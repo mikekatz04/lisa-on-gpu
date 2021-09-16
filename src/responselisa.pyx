@@ -1,12 +1,11 @@
 import numpy as np
 cimport numpy as np
 
-from pointer_adjust import pointer_adjust
+from fastlisaresponse.pointer_adjust import pointer_adjust
 
 assert sizeof(int) == sizeof(np.int32_t)
 
-
-cdef extern from "GeometricProjections.hh":
+cdef extern from "LISAResponse.hh":
     ctypedef void* cmplx 'cmplx'
     void get_response(double* y_gw, double* t_data, double* k_in, double* u_in, double* v_in, double dt,
                   int num_delays, int *link_space_craft_0_in, int *link_space_craft_1_in,

@@ -122,7 +122,6 @@ if __name__ == "__main__":
 
     from few.waveform import GenerateEMRIWaveform
     from astropy import units as un
-    import doctest
     import matplotlib.pyplot as plt
 
     # from ldc.waveform.waveform import HpHc

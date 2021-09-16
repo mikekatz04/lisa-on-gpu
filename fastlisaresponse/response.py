@@ -47,20 +47,71 @@ def AET(X, Y, Z):
     )
 
 
+def pointer_adjust(func):
+    def func_wrapper(*args, **kwargs):
+        targs = []
+        for arg in args:
+            if gpu:
+                if isinstance(arg, xp.ndarray):
+                    targs.append(arg.data.mem.ptr)
+                    continue
+
+            if isinstance(arg, np.ndarray):
+                targs.append(arg.__array_interface__["data"][0])
+                continue
+
+            try:
+                targs.append(arg.ptr)
+                continue
+            except AttributeError:
+                targs.append(arg)
+
+        return func(*targs, **kwargs)
+
+    return func_wrapper
+
+
 class pyResponseTDI(object):
+    """Class container for fast LISA response function generation.
+
+    # TODO: fill in
+
+    Args:
+        sampling_frequency (double): The sampling rate in Hz.
+        num_pts (int): Number of points to produce for the final output template.
+        orbit_kwargs (dict): Dictionary containing orbital information. The kwargs and defaults
+            are: :code:`orbit_module=None, order=0, max_t_orbits=3.15576e7, orbit_file=None`.
+            :code:`orbit_module` is an orbit module from the LDC package. :code:`max_t_orbits` is
+            the maximum time desired for the orbital information. `orbit_file` is
+            an h5 file of the form used `here <https://gitlab.in2p3.fr/lisa-simulation/orbits>`_.
+            :code:`order` is the order of interpolation used in the orbit modules.
+        order (int, optional): Order of Lagrangian interpolation technique. Lower orders
+            will be faster. The user must make sure the order is sufficient for the
+            waveform being used. (default: 25)
+        tdi (str or list, optional): TDI setup. Currently, the stock options are
+            :code:`'1st generation'` and :code:`'2nd generation'`. Or the user can provide
+            a list of tdi_combinations of the form
+            :code:`{"link": 12, "links_for_delay": [21, 13, 31], "sign": 1}`.
+            :code:`'link'` (`int`) the link index (12, 21, 13, 31, 23, 32) for the projection (:math:`y_{gw}`).
+            :code:`'links_for_delay'` (`list`) are the link indexes as a list with which delays
+            are applied. `'sign'` is the sign in front of the contribution to the TDI observable.
+            It takes the value of `1` or `-1`. (default: `'1st generation'`)
+
+
+    """
+
     def __init__(
         self,
         sampling_frequency,
+        num_pts,
+        orbit_kwargs,
         order=25,
         tdi="1st generation",
-        orbit_kwargs={},
         tdi_orbit_kwargs={},
         tdi_chan="XYZ",
         use_gpu=False,
         t0=100.0,
-        num_pts=int(1e5),
     ):
-
         self.sampling_frequency = sampling_frequency
         self.dt = 1 / sampling_frequency
         self.tdi_buffer = 200
@@ -138,14 +189,13 @@ class pyResponseTDI(object):
         self.E_in = self.xp.asarray(E_in)
 
     def _init_orbit_information(
-        self,
-        orbit_module=None,
-        max_t_orbits=3.15576e7,
-        orbits_file="orbits.h5",
-        order=0,
+        self, orbit_module=None, max_t_orbits=3.15576e7, orbit_file=None, order=0,
     ):
 
         if orbit_module is None:
+            if orbit_file is None:
+                raise ValueError("Must provide either orbit file or orbit module.")
+
             self.nlinks = 6
 
             link_space_craft_0 = np.zeros((self.nlinks,), dtype=int)
@@ -173,7 +223,7 @@ class pyResponseTDI(object):
             )
 
             out = {}
-            with h5py.File(orbits_file, "r") as f:
+            with h5py.File(orbit_file, "r") as f:
                 for key in f["tcb"]:
                     out[key] = f["tcb"][key][:]
 

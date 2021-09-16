@@ -1,6 +1,6 @@
 #include "stdio.h"
 #include "cuda_complex.hpp"
-#include "GeometricProjections.hh"
+#include "LISAResponse.hh"
 
 
 #ifdef __CUDACC__
