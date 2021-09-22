@@ -96,7 +96,77 @@ class pyResponseTDI(object):
             :code:`'links_for_delay'` (`list`) are the link indexes as a list with which delays
             are applied. `'sign'` is the sign in front of the contribution to the TDI observable.
             It takes the value of `1` or `-1`. (default: `'1st generation'`)
+        tdi_orbit_kwargs (dict, optional): Same as :code:`orbit_kwargs`, but specifically for the TDI
+            portion of the response computation. This allows the user to use two different orbits
+            for the projections and TDI. For example, this can be used to examine the efficacy of
+            frequency domain TDI codes that can handle generic orbits for the projections, but
+            assume equal armlength orbits to reduce and simplify the expression for TDI
+            computations. (default: :code:`None`, this means the orbits for the projections
+            and TDI will be the same and will be built from :code:`orbit_kwargs`)
+        tdi_chan (str, optional): Which TDI channel combination to return. Choices are :code:`'XYZ'`,
+            :code:`AET`, or :code:`AE`. (default: :code:`'XYZ'`)
+        t0 (double, optional): Starting buffer in seconds. Helps deal with the early
+            times that are in the waveform, but not the response computations
+            because of the early delays.(default: :code:`100.0`)
+        use_gpu (bool, optional): If True, run code on the GPU. (default: :code:`False`)
 
+    Attributes:
+        A_in (xp.ndarray): Array containing y values for linear spline of A
+            during Lagrangian interpolation.
+        buffer_integer (int): Self-determined buffer necesary for the given
+            value for :code:`order`.
+        channels_no_delays (2D np.ndarray): Carrier of link index and sign information
+            for arms that do not get delayed during TDI computation.
+        deps (double): The spacing between Epsilon values in the interpolant
+            for the A quantity in Lagrangian interpolation. Hard coded to
+            1/(:code:`num_A` - 1).
+        dt (double): Inverse of the sampling_frequency.
+        E_in (xp.ndarray): Array containing y values for linear spline of E
+            during Lagrangian interpolation.
+        half_order (int): Half of :code:`order` adjusted to be :code:`int`.
+        link_inds (xp.ndarray): Link indexes for delays in TDI.
+        link_space_craft_0_in (xp.ndarray): Link indexes for emitter on each
+            arm of the LISA constellation.
+        link_space_craft_1_in (xp.ndarray): Link indexes for receiver on each
+            arm of the LISA constellation.
+        nlinks (int): The number of links in the constellation. Typically 6.
+        num_delays_tdi (int): Nnumber of points adjusted for the TDI buffer
+            at initial and end stages.
+        num_A (int): Number of points to use for A spline values used in the Lagrangian
+            interpolation. This is hard coded to 1001.
+        num_channels (int): 3.
+        num_pts (int): Number of points to produce for the final output template.
+        num_tdi_combinations (int): Number of independent arm computations.
+        num_tdi_delay_comps (int): Number of independent arm computations that require delays.
+        orbits_store (dict): Contains orbital information for the projection and TDI
+            steps.
+        order (int): Order of Lagrangian interpolation technique.
+        response_gen (func): Projection generator function.
+        sampling_frequency (double): The sampling rate in Hz.
+        t0 (double): Starting buffer in seconds. Helps deal with the early
+            times that are in the waveform, but not the response computations
+            because of the early delays.
+        t0_tdi (double): Starting time of TDI. This includes the contribution from
+            :code:`t0` and :code:`tdi_buffer`.
+        tdi (str or list): TDI setup.
+        tdi_buffer (int): The buffer necessary for all information needed at early times
+            for the TDI computation. This is set to 200.
+        tdi_chan (str): Which TDI channel combination to return.
+        tdi_delays (xp.ndarray): TDI delays.
+        tdi_gen (func): TDI generating function.
+        tdi_signs (xp.ndarray): Signs applied to the addition of a delayed link. (+1 or -1)
+        tend (double): End time including the :cide:`tdi_buffer`.
+        tend_tdi (double): End time for the TDI computation removing the end buffer.
+        total_buffer (int): TDI buffer + Projection buffer. This helps outside waveform
+            codes know how many points to generate prior to the actual time
+            points that will be returned by the response function.
+        use_gpu (bool): If True, run on GPU.
+        xp (obj): Either Numpy or Cupy.
+
+
+        self.link_inds = self.xp.asarray(link_inds.flatten()).astype(self.xp.int32)
+        self.tdi_delays = self.xp.asarray(delays.flatten())
+        self.tdi_signs = self.xp.asarray(signs, dtype=np.int32)
 
     """
 
@@ -109,26 +179,34 @@ class pyResponseTDI(object):
         tdi="1st generation",
         tdi_orbit_kwargs={},
         tdi_chan="XYZ",
-        use_gpu=False,
         t0=100.0,
+        use_gpu=False,
     ):
+
+        # setup all quantities
         self.sampling_frequency = sampling_frequency
         self.dt = 1 / sampling_frequency
         self.tdi_buffer = 200
         self.t0 = t0
         self.t0_tdi = t0 + self.tdi_buffer * self.dt
         self.num_pts = num_pts
+
+        # end times
         self.tend_tdi = (num_pts - self.tdi_buffer) * self.dt + self.t0
         self.tend = num_pts * self.dt + self.t0
+
         self.num_delays_tdi = num_pts - 2 * self.tdi_buffer
 
+        # Lagrangian interpolation setup
         self.order = order
         self.buffer_integer = self.order * 2 + 1
         self.half_order = int((order + 1) / 2)
 
+        # setup TDI information
         self.tdi = tdi
         self.tdi_chan = tdi_chan
 
+        # setup functions for GPU or CPU
         self.use_gpu = use_gpu
         if use_gpu:
             self.xp = xp
@@ -140,23 +218,30 @@ class pyResponseTDI(object):
             self.response_gen = get_response_wrap_cpu
             self.tdi_gen = get_tdi_delays_wrap_cpu
 
+        # prepare the interpolation of A and E in the Lagrangian interpolation
         self._fill_A_E()
 
+        # setup orbits
         self.orbits_store = {}
         self.orbits_store["projection"] = self._init_orbit_information(**orbit_kwargs)
+
+        # if tdi_orbit_kwargs are given, fill TDI specific orbit info
         if tdi_orbit_kwargs == {}:
             self.orbits_store["tdi"] = self.orbits_store["projection"]
         else:
             self.orbits_store["tdi"] = self._init_orbit_information(**tdi_orbit_kwargs)
 
+        # setup TDI info
         self._init_TDI_delays()
 
         self.total_buffer = self.tdi_buffer + self.projection_buffer
 
     def _fill_A_E(self):
+        """Set up A and E terms inside the Lagrangian interpolant"""
 
         factorials = np.asarray([float(get_factorial(n)) for n in range(40)])
 
+        # base quantities for linear interpolant over A
         self.num_A = 1001
         self.deps = 1.0 / (self.num_A - 1)
 
@@ -166,6 +251,7 @@ class pyResponseTDI(object):
 
         denominator = factorials[h - 1] * factorials[h]
 
+        # prepare A
         A_in = np.zeros_like(eps)
         for j, eps_i in enumerate(eps):
             A = 1.0
@@ -177,6 +263,7 @@ class pyResponseTDI(object):
 
         self.A_in = self.xp.asarray(A_in)
 
+        # prepare E
         E_in = self.xp.zeros((self.half_order,))
 
         for j in range(1, self.half_order):
@@ -191,6 +278,7 @@ class pyResponseTDI(object):
     def _init_orbit_information(
         self, orbit_module=None, max_t_orbits=3.15576e7, orbit_file=None, order=0,
     ):
+        """Initialize orbital information"""
 
         if orbit_module is None:
             if orbit_file is None:
@@ -198,6 +286,7 @@ class pyResponseTDI(object):
 
             self.nlinks = 6
 
+            # setup spacecraft links indexes
             link_space_craft_0 = np.zeros((self.nlinks,), dtype=int)
             link_space_craft_1 = np.zeros((self.nlinks,), dtype=int)
             link_space_craft_0[0] = 1
@@ -222,15 +311,18 @@ class pyResponseTDI(object):
                 self.xp.int32
             )
 
+            # get info from the file
             out = {}
             with h5py.File(orbit_file, "r") as f:
                 for key in f["tcb"]:
                     out[key] = f["tcb"][key][:]
 
+            # get t and normalize so first point is at t=0
             t_in = out["t"]
             t_in = t_in - t_in[0]
             length_in = len(t_in)
 
+            # get x and L information
             x_in = []
             for i in range(3):
                 for let in ["x", "y", "z"]:
@@ -250,14 +342,17 @@ class pyResponseTDI(object):
 
                 L_in.append(out["l_" + str(sc0) + str(sc1)]["tt"])
 
+            # constrain maximum time used for orbits
             t_max = t_in[-1] if t_in[-1] < max_t_orbits else max_t_orbits
             if t_max < self.tend:
                 raise ValueError(
                     "End time for projection is greater than end time for orbital information."
                 )
 
+            # new time array
             t_new = np.arange(self.t0, self.tend, self.dt)
 
+            # evaluate splines on everything
             for i in range(self.nlinks):
                 L_in[i] = CubicSpline(t_in, L_in[i])(t_new)
 
@@ -276,6 +371,7 @@ class pyResponseTDI(object):
                     )(t_new)
 
         else:
+            # perform computations from LDC orbit class
             t_new = np.arange(self.t0, max_t_orbits, self.dt)
             self.nlinks = orbit_module.number_of_arms
             self.link_space_craft_0_in = self.xp.zeros(self.nlinks, dtype=self.xp.int32)
@@ -313,6 +409,8 @@ class pyResponseTDI(object):
         t_data_cpu = t_new
         t_data = self.xp.asarray(t_new)
         final_t = t_new[-1]
+
+        # read out all info in a dictionary
         orbits_store = dict(
             projection_buffer=projection_buffer,
             t0_wave=t0_wave,
@@ -328,27 +426,10 @@ class pyResponseTDI(object):
         )
         return orbits_store
 
-    def get_xL(self, i, link_i):
-        raise NotImplementedError
-        sc0 = self.link_space_craft_0_in[link_i]
-        sc1 = self.link_space_craft_1_in[link_i]
-        x0 = np.zeros(3)
-        x1 = np.zeros(3)
-        for coord in range(3):
-            ind0 = (sc0 * 3 + coord) * self.num_orbit_inputs + i
-            ind1 = (sc1 * 3 + coord) * self.num_orbit_inputs + i
-            ind_n = (link_i * 3 + coord) * self.num_orbit_inputs + i
-            x0[coord] = self.x_in[ind0]
-            x1[coord] = self.x_in[ind1]
-
-        L_ind = link_i * self.num_orbit_inputs + i
-
-        L = self.L_in[L_ind]
-
-        return x0, x1, L
-
     def _init_TDI_delays(self):
+        """Initialize TDI specific information"""
 
+        # sets attributes in class related to orbits_store
         for key, item in self.orbits_store["tdi"].items():
             setattr(self, key, item)
 
@@ -358,6 +439,7 @@ class pyResponseTDI(object):
             sc1 = self.link_space_craft_1_in[link_i]
             link_dict[int(str(sc0 + 1) + str(sc1 + 1))] = link_i
 
+        # setup the actual TDI combination
         if self.tdi == "1st generation":
             tdi_combinations = [
                 {"link": 12, "links_for_delay": [21, 13, 31], "sign": 1},
@@ -406,6 +488,7 @@ class pyResponseTDI(object):
                 "tdi kwarg should be '1st generation', '2nd generation', or a list with a specific tdi combination."
             )
 
+        # setup computation of channels that are not delayed in order to save time
         channels_no_delays = [[], [], []]
 
         num_delay_comps = 0
@@ -431,6 +514,7 @@ class pyResponseTDI(object):
 
         signs = []
         # cyclic permuatations for X, Y, Z
+        # computing all of the delays a priori
         for j in range(3):
             i = 0
             for tdi in tdi_combinations:
@@ -458,6 +542,7 @@ class pyResponseTDI(object):
         except AttributeError:
             t_arr = self.t_data
 
+        # find the maximum delayed applied to the combinations
         self.max_delay = np.max(
             np.abs(t_arr[self.tdi_buffer : -self.tdi_buffer] - delays[:])
         )
@@ -469,14 +554,14 @@ class pyResponseTDI(object):
 
         assert check_tdi_buffer < self.tdi_buffer
 
-        self.num_units = self.num_tdi_delay_comps
+        # prepare final info needed for TDI
         self.num_channels = 3
         self.link_inds = self.xp.asarray(link_inds.flatten()).astype(self.xp.int32)
         self.tdi_delays = self.xp.asarray(delays.flatten())
         self.tdi_signs = self.xp.asarray(signs, dtype=np.int32)
 
     def _cyclic_permutation(self, link, permutation):
-
+        """permute indexes by cyclic permutation"""
         link_str = str(link)
 
         out = ""
@@ -491,10 +576,19 @@ class pyResponseTDI(object):
 
     @property
     def y_gw(self):
+        """Projections along the arms"""
         return self.y_gw_flat.reshape(self.nlinks, -1)
 
     def get_projections(self, input_in, lam, beta):
+        """Compute projections of GW signal on to LISA constellation
 
+        Args:
+            input_in (xp.ndarray): Input complex time-domain signal. It should be of the form:
+                :math:`h_+ + ih_x`.
+            lam (double): Ecliptic Longitude in radians.
+            beta (double): Ecliptic Latitude in radians.
+
+        """
         for key, item in self.orbits_store["projection"].items():
             setattr(self, key, item)
 
@@ -598,7 +692,7 @@ class pyResponseTDI(object):
             self.dt,
             self.link_inds,
             self.tdi_signs,
-            self.num_units,
+            self.num_tdi_delay_comps,
             self.num_channels,
             self.order,
             self.sampling_frequency,
