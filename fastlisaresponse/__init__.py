@@ -1,1 +1,1 @@
-from response import pyResponseTDI
+from .response import pyResponseTDI
