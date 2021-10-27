@@ -1,4 +1,4 @@
-# fastlisaresponse: Generic LISA response function on the GPU
+# fastlisaresponse: Generic LISA response function for GPUs
 
 This code base provides a GPU-accelerated version of the generic time-domain LISA response function. The GPU-acceleration allows this code to be used directly in Parameter Estimation.
 
