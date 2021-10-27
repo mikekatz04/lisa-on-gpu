@@ -6,13 +6,13 @@ time-domain LISA response function. The GPU-acceleration allows this
 code to be used directly in Parameter Estimation.
 
 Please see the
-`documentation <https://github.com/mikekatz04/lisa-on-gpu>`__ for
+`documentation <https://mikekatz04.github.io/lisa-on-gpu/>`__ for
 further information on these modules. The code can be found on Github
 `here <https://github.com/mikekatz04/lisa-on-gpu>`__. It can be found on
-`Zenodo <https://zenodo.org/record/3981654#.XzS_KRNKjlw>`__.
+# TODO fix `Zenodo <https://zenodo.org/record/3981654#.XzS_KRNKjlw>`__.
 
 If you use all or any parts of this code, please cite (TODO: fill in ).
-See the `documentation <https://bhptoolkit.org/FastEMRIWaveforms/>`__ to
+See the `documentation <https://mikekatz04.github.io/lisa-on-gpu/>`__ to
 properly cite specific modules.
 
 Getting Started
