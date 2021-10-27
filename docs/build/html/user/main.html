@@ -581,8 +581,12 @@ points that will be returned by the response function.</p>
 <dd><p>Compute projections of GW signal on to LISA constellation</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>input_in</strong> (<em>xp.ndarray</em>) – Input complex time-domain signal. It should be of the form:
-<span class="math notranslate nohighlight">\(h_+ + ih_x\)</span>.</p>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>input_in</strong> (<em>xp.ndarray</em>) – Input complex time-domain signal. It should be of the form:
+<span class="math notranslate nohighlight">\(h_+ + ih_x\)</span>.</p></li>
+<li><p><strong>lam</strong> (<em>double</em>) – Ecliptic Longitude in radians.</p></li>
+<li><p><strong>beta</strong> (<em>double</em>) – Ecliptic Latitude in radians.</p></li>
+</ul>
 </dd>
 </dl>
 </dd></dl>

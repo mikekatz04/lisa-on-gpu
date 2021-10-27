@@ -276,7 +276,7 @@ class pyResponseTDI(object):
         self.E_in = self.xp.asarray(E_in)
 
     def _init_orbit_information(
-        self, orbit_module=None, max_t_orbits=3.15576e7, orbit_file=None, order=0,
+        self, orbit_module=None, max_t_orbits=None, orbit_file=None, order=0,
     ):
         """Initialize orbital information"""
 
@@ -343,7 +343,11 @@ class pyResponseTDI(object):
                 L_in.append(out["l_" + str(sc0) + str(sc1)]["tt"])
 
             # constrain maximum time used for orbits
-            t_max = t_in[-1] if t_in[-1] < max_t_orbits else max_t_orbits
+            if max_t_orbits is not None and max_t_orbits < t_in[-1]:
+                t_max = max_t_orbits
+            else:
+                t_max = t_in[-1]
+
             if t_max < self.tend:
                 raise ValueError(
                     "End time for projection is greater than end time for orbital information."
@@ -423,6 +427,9 @@ class pyResponseTDI(object):
             t_data_cpu=t_data_cpu,
             t_data=t_data,
             final_t=final_t,
+            orbit_file=orbit_file,
+            orbit_module=orbit_module,
+            max_t_orbits=max_t_orbits,
         )
         return orbits_store
 
@@ -710,6 +717,7 @@ class pyResponseTDI(object):
         elif self.tdi_chan == "AET" or self.tdi_chan == "AE":
             X, Y, Z = self.XYZ
             A, E, T = AET(X, Y, Z)
+
             if self.tdi_chan == "AET":
                 return A, E, T
 
@@ -718,3 +726,142 @@ class pyResponseTDI(object):
 
         else:
             raise ValueError("tdi_chan must be 'XYZ', 'AET' or 'AE'.")
+
+
+class ResponseWrapper:
+    """Wrapper to produce LISA TDI from TD waveforms
+
+    This class takes a waveform generator that produces :math:`h_+ \pm ih_x`.
+    (:code:`flip_hx` is used if the waveform produces :math:`h_+ - ih_x`).
+    It takes the complex waveform in the SSB frame and produces the TDI channels
+    according to settings chosen for :class:`pyResponseTDI`.
+
+    The waveform generator must have :code:`kwargs` with :code:`T` for the observation
+    time in years and :code:`dt` for the time step in seconds.
+
+    Args:
+        waveform_gen (obj): Function or class (with a :code:`__call__` function) that takes parameters and produces
+            :math:`h_+ \pm h_x`.
+        Tobs (double): Observation time in years.
+        dt (double): Time between time samples in seconds. The inverse of the sampling frequency.
+        index_lambda (int): The user will input parameters. The code will read these in
+            with the :code:`*args` formalism producing a list. :code:`index_lambda`
+            tells the class the index of the ecliptic longitude within this list of
+            parameters.
+        index_beta (int): The user will input parameters. The code will read these in
+            with the :code:`*args` formalism producing a list. :code:`index_beta`
+            tells the class the index of the ecliptic latitude (or ecliptic polar angle)
+            within this list of parameters.
+        flip_hx (bool, optional): If True, :code:`waveform_gen` produces :math:`h_+ - ih_x`.
+            :class:`pyResponseTDI` takes :math:`h_+ + ih_x`, so this setting will
+            multiply the cross polarization term out of the waveform generator by -1.
+            (Default: :code:`False`)
+        remove_sky_coords (bool, optional): If True, remove the sky coordinates from
+            the :code:`*args` list. This should be set to True if the waveform
+            generator does not take in the sky information. (Default: :code:`False`)
+        is_ecliptic_latitude (bool, optional): If True, the latitudinal sky
+            coordinate is the ecliptic latitude. If False, thes latitudinal sky
+            coordinate is the polar angle. In this case, the code will
+            convert it with :math:`\beta=\pi / 2 - \Theta`. (Default: :code:`True`)
+        use_gpu (bool, optional): If True, use GPU. (Default: :code:`False`)
+        **kwargs (dict, optional): Keyword arguments passed to :class:`pyResponseTDI`.
+
+    """
+
+    def __init__(
+        self,
+        waveform_gen,
+        Tobs,
+        dt,
+        index_lambda,
+        index_beta,
+        flip_hx=False,
+        remove_sky_coords=False,
+        is_ecliptic_latitude=True,
+        use_gpu=False,
+        **kwargs
+    ):
+
+        # store all necessary information
+        self.waveform_gen = waveform_gen
+        self.index_lambda = index_lambda
+        self.index_beta = index_beta
+        self.dt = dt
+        self.sampling_frequency = 1.0 / dt
+        self.n = int(Tobs * YRSID_SI / dt)
+        self.Tobs = self.n * dt
+        self.is_ecliptic_latitude = is_ecliptic_latitude
+        self.remove_sky_coords = remove_sky_coords
+        self.flip_hx = flip_hx
+
+        # initialize response function class
+        self.response_model = pyResponseTDI(
+            self.sampling_frequency, self.n, use_gpu=use_gpu, **kwargs
+        )
+
+        self.use_gpu = use_gpu
+        if use_gpu:
+            self.xp = xp
+        else:
+            self.xp = np
+
+        # setup information coming from the response initialization
+        self.n_all = len(
+            np.arange(
+                self.response_model.t0_wave,
+                self.response_model.tend_wave,
+                self.response_model.dt,
+            )
+        )
+
+        # get new tobs based on added initial piece to waveform
+        # where TDI requires extra waveform information
+        self.Tobs = (self.n_all * self.response_model.dt) / YRSID_SI
+
+        #  - self.t0_tdi  # sets quantities at beginning of tdi
+        # TODO: should we keep this?
+
+    def __call__(self, *args, **kwargs):
+        """Run the waveform and response generation
+
+        Args:
+            *args (list): Arguments to the waveform generator. This must include
+                the sky coordinates.
+            **kwargs (dict): kwargs necessary for the waveform generator.
+
+        Return:
+            list: TDI Channels.
+
+        """
+
+        args = list(args)
+
+        # get sky coords
+        beta = args[self.index_beta]
+        lam = args[self.index_lambda]
+
+        # remove them from the list if waveform generator does not take them
+        if self.remove_sky_coords:
+            args.pop(self.index_beta)
+            args.pop(self.index_lambda)
+
+        # transform polar angle
+        if not self.is_ecliptic_latitude:
+            beta = np.pi / 2.0 - beta
+
+        # add the new Tobs and dt info to the waveform generator kwargs
+        kwargs["T"] = self.Tobs
+        kwargs["dt"] = self.dt
+
+        # get the waveform
+        h = self.waveform_gen(*args, **kwargs)
+
+        if self.flip_hx:
+            h = h.real - 1j * h.imag
+
+        # project
+        self.response_model.get_projections(h, lam, beta)
+        # form TDI
+        tdi_out = self.response_model.get_tdi_delays()
+
+        return list(tdi_out)

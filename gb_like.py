@@ -10,35 +10,25 @@ except (ImportError, ModuleNotFoundError) as e:
 
     gpu = False
 
-from response import pyResponseTDI
+from fastlisaresponse.response import pyResponseTDI, ResponseWrapper
+
 from few.utils.constants import *
 
 # from ldc.waveform.waveform import HpHc
 # from ldc.lisa.orbits import Orbits
 
 
-class GBLike:
-    def __init__(self, response_model, sampling_frequency, Tobs, use_gpu=False):
+class GBWave:
+    def __init__(self, use_gpu=False):
 
-        self.response_model = response_model
         if use_gpu:
             self.xp = xp
         else:
             self.xp = np
-        self.n = int(Tobs * YRSID_SI / response_model.dt)
-        self.Tobs = self.n * response_model.dt
 
-        # add the buffer
-        self.t_buffer = response_model.total_buffer * response_model.dt
-        self.t = np.arange(
-            response_model.t0_wave, response_model.tend_wave, response_model.dt
-        )
-        self.t_in = self.xp.asarray(
-            self.t
-        )  #  - self.t0_tdi  # sets quantities at beginning of tdi
-        # TODO: should we keep this?
+    def __call__(self, A, f, fdot, iota, phi0, psi, T=1.0, dt=10.0):
 
-    def _get_h(self, A, f, fdot, iota, phi0, psi):
+        t = self.xp.arange(0.0, T * YRSID_SI, dt)
         cos2psi = self.xp.cos(2.0 * psi)
         sin2psi = self.xp.sin(2.0 * psi)
         cosiota = self.xp.cos(iota)
@@ -47,13 +37,7 @@ class GBLike:
 
         # phi0 is phi(t = 0, which is shifted due to t_buffer)
         phase = (
-            2
-            * np.pi
-            * (
-                f * self.t_in
-                + 1.0 / 2.0 * fdot * self.t_in ** 2
-                + 1.0 / 6.0 * fddot * self.t_in ** 3
-            )
+            2 * np.pi * (f * t + 1.0 / 2.0 * fdot * t ** 2 + 1.0 / 6.0 * fddot * t ** 3)
             - phi0
         )
 
@@ -64,15 +48,6 @@ class GBLike:
         hc = hSp * sin2psi + hSc * cos2psi
 
         return hp + 1j * hc
-
-    def __call__(self, A, f, fdot, iota, phi0, psi, lam, beta):
-
-        h = self._get_h(A, f, fdot, iota, phi0, psi)
-
-        self.response_model.get_projections(h, lam, beta)
-        tdi_out = self.response_model.get_tdi_delays()
-
-        return list(tdi_out)
 
 
 class EMRILike:
@@ -138,7 +113,7 @@ if __name__ == "__main__":
 
     order = 25
 
-    orbit_file = "esa-orbits.h5"
+    orbit_file = "fixed-esa-orbits.h5"
 
     config = dict(
         {
@@ -167,8 +142,8 @@ if __name__ == "__main__":
     pGB = dict(
         {
             "Amplitude": 1.084702251e-22,
-            "EclipticLatitude": np.arcsin(0.83081713) * un.rad,
-            "EclipticLongitude": 5.22979888 * un.rad,
+            "EclipticLatitude": np.arcsin(0.01) * un.rad,
+            "EclipticLongitude": 0.0 * un.rad,
             "Frequency": 2.35962078 * 1e-3 * un.Hz,
             "FrequencyDerivative": 1.47197271e-19 * un.Unit("Hz2"),
             "Inclination": 1.11820901 * un.rad,
@@ -184,19 +159,34 @@ if __name__ == "__main__":
 
     proj = ProjectedStrain(orbits)
     """
-    num_pts = int(3e6)
+    Tobs = 1.0
+    dt = 10.0
+
     tdi_kwargs = dict(
-        orbit_kwargs=dict(orbits_file=orbit_file),
+        orbit_kwargs=dict(orbit_file=orbit_file),
         order=order,
         tdi="1st generation",
         tdi_chan="XYZ",
-        num_pts=num_pts,
     )
     import time
 
-    response_model = pyResponseTDI(sampling_frequency, use_gpu=use_gpu, **tdi_kwargs)
+    gb = GBWave(use_gpu=use_gpu)
 
-    gb = GBLike(response_model, sampling_frequency, T, use_gpu=use_gpu)
+    index_lambda = 6
+    index_beta = 7
+
+    gb_lisa = ResponseWrapper(
+        gb,
+        Tobs,
+        dt,
+        index_lambda,
+        index_beta,
+        flip_hx=False,
+        use_gpu=use_gpu,
+        remove_sky_coords=True,
+        is_ecliptic_latitude=True,
+        **tdi_kwargs
+    )
 
     A = pGB["Amplitude"]
     f = pGB["Frequency"].value
@@ -209,7 +199,7 @@ if __name__ == "__main__":
     lam = pGB["EclipticLongitude"].value
 
     num = 1
-    chans = gb(A, f, fdot, iota, phi0, psi, lam, beta)
+    chans = gb_lisa(A, f, fdot, iota, phi0, psi, lam, beta)
     # st = time.perf_counter()
     # for i in range(num):
     #    chans = gb(A, f, fdot, iota, phi0, psi, lam, beta)
@@ -218,25 +208,30 @@ if __name__ == "__main__":
 
     X1, Y1, Z1 = chans
 
-    orbit_file = "esa-orbits.h5"
-    tdi_orbit_file = "esa_fit_with_equalarmlength.h5"
+    orbit_file = "fixed-esa-orbits.h5"
+    tdi_orbit_file = "fixed-z-equalarmlength-fit.h5"
 
     tdi_kwargs = dict(
-        orbit_kwargs=dict(orbits_file=orbit_file),
-        tdi_orbit_kwargs=dict(orbits_file=tdi_orbit_file),
+        orbit_kwargs=dict(orbit_file=orbit_file),
+        # tdi_orbit_kwargs=dict(orbit_file=tdi_orbit_file),
         order=order,
         tdi="1st generation",
         tdi_chan="XYZ",
-        num_pts=num_pts,
     )
     import time
 
-    del response_model
-    del gb
-
-    response_model = pyResponseTDI(sampling_frequency, use_gpu=use_gpu, **tdi_kwargs)
-
-    gb = GBLike(response_model, sampling_frequency, T, use_gpu=use_gpu)
+    gb_lisa2 = ResponseWrapper(
+        gb,
+        Tobs,
+        dt,
+        index_lambda,
+        index_beta,
+        flip_hx=False,
+        use_gpu=use_gpu,
+        remove_sky_coords=True,
+        is_ecliptic_latitude=True,
+        **tdi_kwargs
+    )
 
     A = pGB["Amplitude"]
     f = pGB["Frequency"].value
@@ -248,8 +243,7 @@ if __name__ == "__main__":
     beta = pGB["EclipticLatitude"].value
     lam = pGB["EclipticLongitude"].value
 
-    num = 1
-    chans = gb(A, f, fdot, iota, phi0, psi, lam, beta)
+    chans = gb_lisa2(A, f, fdot, iota, phi0, psi, lam, beta)
     # st = time.perf_counter()
     # for i in range(num):
     #    chans = gb(A, f, fdot, iota, phi0, psi, lam, beta)
@@ -260,7 +254,8 @@ if __name__ == "__main__":
     # print("num delays:", num_pts_in, (et - st) / num)
 
     print(
-        np.abs(
+        1
+        - np.abs(
             np.dot(np.fft.rfft(X2).conj(), np.fft.rfft(X1))
             / np.sqrt(
                 np.dot(np.fft.rfft(X1).conj(), np.fft.rfft(X1))
