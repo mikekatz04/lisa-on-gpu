@@ -19,8 +19,7 @@ import h5py
 
 from scipy.interpolate import CubicSpline
 
-from few.utils.constants import *
-import matplotlib.pyplot as plt
+YRSID_SI = 31558149.763545603
 
 
 def get_factorial(n):
