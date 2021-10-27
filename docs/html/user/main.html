@@ -593,6 +593,71 @@ points that will be returned by the response function.</p>
 
 </dd></dl>
 
+<dl class="py class">
+<dt class="sig sig-object py" id="fastlisaresponse.response.ResponseWrapper">
+<em class="property"><span class="pre">class</span> </em><span class="sig-prename descclassname"><span class="pre">fastlisaresponse.response.</span></span><span class="sig-name descname"><span class="pre">ResponseWrapper</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">waveform_gen</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">Tobs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dt</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">index_lambda</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">index_beta</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">flip_hx</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">remove_sky_coords</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">is_ecliptic_latitude</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_gpu</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.response.ResponseWrapper" title="Permalink to this definition"></a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
+<p>Wrapper to produce LISA TDI from TD waveforms</p>
+<p>This class takes a waveform generator that produces <span class="math notranslate nohighlight">\(h_+ \pm ih_x\)</span>.
+(<code class="code docutils literal notranslate"><span class="pre">flip_hx</span></code> is used if the waveform produces <span class="math notranslate nohighlight">\(h_+ - ih_x\)</span>).
+It takes the complex waveform in the SSB frame and produces the TDI channels
+according to settings chosen for <a class="reference internal" href="#fastlisaresponse.response.pyResponseTDI" title="fastlisaresponse.response.pyResponseTDI"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyResponseTDI</span></code></a>.</p>
+<p>The waveform generator must have <code class="code docutils literal notranslate"><span class="pre">kwargs</span></code> with <code class="code docutils literal notranslate"><span class="pre">T</span></code> for the observation
+time in years and <code class="code docutils literal notranslate"><span class="pre">dt</span></code> for the time step in seconds.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>waveform_gen</strong> (<em>obj</em>) – Function or class (with a <code class="code docutils literal notranslate"><span class="pre">__call__</span></code> function) that takes parameters and produces
+<span class="math notranslate nohighlight">\(h_+ \pm h_x\)</span>.</p></li>
+<li><p><strong>Tobs</strong> (<em>double</em>) – Observation time in years.</p></li>
+<li><p><strong>dt</strong> (<em>double</em>) – Time between time samples in seconds. The inverse of the sampling frequency.</p></li>
+<li><p><strong>index_lambda</strong> (<em>int</em>) – The user will input parameters. The code will read these in
+with the <code class="code docutils literal notranslate"><span class="pre">*args</span></code> formalism producing a list. <code class="code docutils literal notranslate"><span class="pre">index_lambda</span></code>
+tells the class the index of the ecliptic longitude within this list of
+parameters.</p></li>
+<li><p><strong>index_beta</strong> (<em>int</em>) – The user will input parameters. The code will read these in
+with the <code class="code docutils literal notranslate"><span class="pre">*args</span></code> formalism producing a list. <code class="code docutils literal notranslate"><span class="pre">index_beta</span></code>
+tells the class the index of the ecliptic latitude (or ecliptic polar angle)
+within this list of parameters.</p></li>
+<li><p><strong>flip_hx</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, <code class="code docutils literal notranslate"><span class="pre">waveform_gen</span></code> produces <span class="math notranslate nohighlight">\(h_+ - ih_x\)</span>.
+<a class="reference internal" href="#fastlisaresponse.response.pyResponseTDI" title="fastlisaresponse.response.pyResponseTDI"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyResponseTDI</span></code></a> takes <span class="math notranslate nohighlight">\(h_+ + ih_x\)</span>, so this setting will
+multiply the cross polarization term out of the waveform generator by -1.
+(Default: <code class="code docutils literal notranslate"><span class="pre">False</span></code>)</p></li>
+<li><p><strong>remove_sky_coords</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, remove the sky coordinates from
+the <code class="code docutils literal notranslate"><span class="pre">*args</span></code> list. This should be set to True if the waveform
+generator does not take in the sky information. (Default: <code class="code docutils literal notranslate"><span class="pre">False</span></code>)</p></li>
+<li><p><strong>is_ecliptic_latitude</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, the latitudinal sky
+coordinate is the ecliptic latitude. If False, thes latitudinal sky
+coordinate is the polar angle. In this case, the code will
+convert it with <span class="math notranslate nohighlight">\(eta=\pi / 2 - \Theta\)</span>. (Default: <code class="code docutils literal notranslate"><span class="pre">True</span></code>)</p></li>
+<li><p><strong>use_gpu</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, use GPU. (Default: <code class="code docutils literal notranslate"><span class="pre">False</span></code>)</p></li>
+<li><p><strong>**kwargs</strong> (<em>dict</em><em>, </em><em>optional</em>) – Keyword arguments passed to <a class="reference internal" href="#fastlisaresponse.response.pyResponseTDI" title="fastlisaresponse.response.pyResponseTDI"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyResponseTDI</span></code></a>.</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="fastlisaresponse.response.ResponseWrapper.__call__">
+<span class="sig-name descname"><span class="pre">__call__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.response.ResponseWrapper.__call__" title="Permalink to this definition"></a></dt>
+<dd><p>Run the waveform and response generation</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>*args</strong> (<em>list</em>) – Arguments to the waveform generator. This must include
+the sky coordinates.</p></li>
+<li><p><strong>**kwargs</strong> (<em>dict</em>) – kwargs necessary for the waveform generator.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>TDI Channels.</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>list</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
 </section>
 
 
