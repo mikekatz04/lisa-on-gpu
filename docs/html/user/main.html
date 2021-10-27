@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Generic Waveform Generator &mdash; lisaresponse 0.1.0 documentation</title>
+  <title>Fast Response Function &mdash; lisaresponse 0.1.0 documentation</title>
       <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
   <!--[if lt IE 9]>
@@ -42,7 +42,8 @@
         </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
               <p class="caption"><span class="caption-text">Documentation:</span></p>
 <ul class="current">
-<li class="toctree-l1 current"><a class="current reference internal" href="#">Generic Waveform Generator</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Fast Response Function</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#response-function-wrapper">Response Function Wrapper</a></li>
 </ul>
 <p class="caption"><span class="caption-text">Tutorial:</span></p>
 <ul>
@@ -63,7 +64,7 @@
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
       <li><a href="../index.html" class="icon icon-home"></a> &raquo;</li>
-      <li>Generic Waveform Generator</li>
+      <li>Fast Response Function</li>
       <li class="wy-breadcrumbs-aside">
             <a href="../_sources/user/main.rst.txt" rel="nofollow"> View page source</a>
       </li>
@@ -100,8 +101,8 @@
     text-align: unset;
 }
 </style>
-<section id="generic-waveform-generator">
-<h1>Generic Waveform Generator<a class="headerlink" href="#generic-waveform-generator" title="Permalink to this headline"></a></h1>
+<section id="fast-response-function">
+<h1>Fast Response Function<a class="headerlink" href="#fast-response-function" title="Permalink to this headline"></a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI">
 <em class="property"><span class="pre">class</span> </em><span class="sig-prename descclassname"><span class="pre">fastlisaresponse.response.</span></span><span class="sig-name descname"><span class="pre">pyResponseTDI</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sampling_frequency</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_pts</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">orbit_kwargs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">order</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">25</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tdi</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'1st</span> <span class="pre">generation'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tdi_orbit_kwargs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">{}</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tdi_chan</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'XYZ'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">t0</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">100.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_gpu</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI" title="Permalink to this definition"></a></dt>
@@ -593,6 +594,9 @@ points that will be returned by the response function.</p>
 
 </dd></dl>
 
+</section>
+<section id="response-function-wrapper">
+<h1>Response Function Wrapper<a class="headerlink" href="#response-function-wrapper" title="Permalink to this headline"></a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="fastlisaresponse.response.ResponseWrapper">
 <em class="property"><span class="pre">class</span> </em><span class="sig-prename descclassname"><span class="pre">fastlisaresponse.response.</span></span><span class="sig-name descname"><span class="pre">ResponseWrapper</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">waveform_gen</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">Tobs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dt</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">index_lambda</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">index_beta</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">flip_hx</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">remove_sky_coords</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">is_ecliptic_latitude</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_gpu</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.response.ResponseWrapper" title="Permalink to this definition"></a></dt>
