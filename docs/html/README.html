@@ -1,33 +1,67 @@
+
+
 <!DOCTYPE html>
 <html class="writer-html5" lang="en" >
 <head>
-  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+  <meta charset="utf-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>fastlisaresponse: Generic LISA response function for GPUs &mdash; lisaresponse 0.1.0 documentation</title>
+  
 
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>fastlisaresponse: Generic LISA response function on the GPU &mdash; lisaresponse 0.1.0 documentation</title>
-      <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
-      <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
+  
+  <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
+  <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+
+  
+  
+  
+  
+
+  
   <!--[if lt IE 9]>
     <script src="_static/js/html5shiv.min.js"></script>
   <![endif]-->
   
-        <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js"></script>
+    
+      <script type="text/javascript" id="documentation_options" data-url_root="./" src="_static/documentation_options.js"></script>
         <script src="_static/jquery.js"></script>
         <script src="_static/underscore.js"></script>
         <script src="_static/doctools.js"></script>
+        <script src="_static/language_data.js"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="_static/js/theme.js"></script>
+    
+    <script type="text/javascript" src="_static/js/theme.js"></script>
+
+    
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" /> 
 </head>
 
-<body class="wy-body-for-nav"> 
+<body class="wy-body-for-nav">
+
+   
   <div class="wy-grid-for-nav">
+    
     <nav data-toggle="wy-nav-shift" class="wy-nav-side">
       <div class="wy-side-scroll">
         <div class="wy-side-nav-search"  style="background: coral" >
-            <a href="index.html" class="icon icon-home"> lisaresponse
+          
+
+          
+            <a href="index.html" class="icon icon-home" alt="Documentation Home"> lisaresponse
+          
+
+          
           </a>
+
+          
+            
+            
+          
+
+          
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
     <input type="text" name="q" placeholder="Search docs" />
@@ -35,7 +69,18 @@
     <input type="hidden" name="area" value="default" />
   </form>
 </div>
-        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+
+          
+        </div>
+
+        
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          
+            
+            
+              
+            
+            
               <p class="caption"><span class="caption-text">Documentation:</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="user/main.html">Fast Response Function</a></li>
@@ -46,30 +91,69 @@
 <li class="toctree-l1"><a class="reference internal" href="fast_LISA_response_tutorial.html">Fast LISA Response Tutorial</a></li>
 </ul>
 
+            
+          
         </div>
+        
       </div>
     </nav>
 
-    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu"  style="background: coral" >
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" aria-label="top navigation">
+        
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
           <a href="index.html">lisaresponse</a>
+        
       </nav>
 
+
       <div class="wy-nav-content">
+        
         <div class="rst-content">
-          <div role="navigation" aria-label="Page navigation">
+        
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
   <ul class="wy-breadcrumbs">
+    
       <li><a href="index.html" class="icon icon-home"></a> &raquo;</li>
-      <li>fastlisaresponse: Generic LISA response function on the GPU</li>
+        
+      <li>fastlisaresponse: Generic LISA response function for GPUs</li>
+    
+    
       <li class="wy-breadcrumbs-aside">
+        
+            
             <a href="_sources/README.rst.txt" rel="nofollow"> View page source</a>
+          
+        
       </li>
+    
   </ul>
+
+  
   <hr/>
 </div>
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
-             
+            
   
 <style>
 /* CSS overrides for sphinx_rtd_theme */
@@ -94,8 +178,8 @@
     text-align: unset;
 }
 </style>
-<section id="fastlisaresponse-generic-lisa-response-function-on-the-gpu">
-<h1>fastlisaresponse: Generic LISA response function on the GPU<a class="headerlink" href="#fastlisaresponse-generic-lisa-response-function-on-the-gpu" title="Permalink to this headline"></a></h1>
+<div class="section" id="fastlisaresponse-generic-lisa-response-function-for-gpus">
+<h1>fastlisaresponse: Generic LISA response function for GPUs<a class="headerlink" href="#fastlisaresponse-generic-lisa-response-function-for-gpus" title="Permalink to this headline">¶</a></h1>
 <p>This code base provides a GPU-accelerated version of the generic
 time-domain LISA response function. The GPU-acceleration allows this
 code to be used directly in Parameter Estimation.</p>
@@ -107,8 +191,8 @@ further information on these modules. The code can be found on Github
 <p>If you use all or any parts of this code, please cite (TODO: fill in ).
 See the <a class="reference external" href="https://mikekatz04.github.io/lisa-on-gpu/">documentation</a> to
 properly cite specific modules.</p>
-<section id="getting-started">
-<h2>Getting Started<a class="headerlink" href="#getting-started" title="Permalink to this headline"></a></h2>
+<div class="section" id="getting-started">
+<h2>Getting Started<a class="headerlink" href="#getting-started" title="Permalink to this headline">¶</a></h2>
 <p>Below is a quick set of instructions to get you started with
 <code class="docutils literal notranslate"><span class="pre">fastlisaresponse</span></code>.</p>
 <ol class="arabic simple" start="0">
@@ -147,8 +231,8 @@ you will probably need to add libraries and include paths to the
 </div>
 <p>See <a class="reference external" href="https://github.com/mikekatz04/lisa-on-gpu/blob/master/examples/fast_LISA_response_tutorial.ipynb">examples
 notebook</a>.</p>
-<section id="prerequisites">
-<h3>Prerequisites<a class="headerlink" href="#prerequisites" title="Permalink to this headline"></a></h3>
+<div class="section" id="prerequisites">
+<h3>Prerequisites<a class="headerlink" href="#prerequisites" title="Permalink to this headline">¶</a></h3>
 <p>To install this software for CPU usage, you need Python &gt;3.4 and NumPy.
 To run the examples, you will also need jupyter and matplotlib. We
 generally recommend installing everything, including gcc and g++
@@ -164,9 +248,9 @@ and <a class="reference external" href="https://cupy.chainer.org/">CuPy</a>. The
 cuda version &gt;8.0. Be sure to properly install CuPy within the correct
 CUDA toolkit version. Make sure the nvcc binary is on <code class="docutils literal notranslate"><span class="pre">$PATH</span></code> or set
 it as the <code class="docutils literal notranslate"><span class="pre">CUDAHOME</span></code> environment variable.</p>
-</section>
-<section id="installing">
-<h3>Installing<a class="headerlink" href="#installing" title="Permalink to this headline"></a></h3>
+</div>
+<div class="section" id="installing">
+<h3>Installing<a class="headerlink" href="#installing" title="Permalink to this headline">¶</a></h3>
 <ol class="arabic simple" start="0">
 <li><p><a class="reference external" href="https://docs.anaconda.com/anaconda/install/">Install Anaconda</a> if
 you do not have it.</p></li>
@@ -202,81 +286,100 @@ you have cuda version 9.2, for example:</p></li>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">python</span> <span class="n">setup</span><span class="o">.</span><span class="n">py</span> <span class="n">install</span>
 </pre></div>
 </div>
-</section>
-</section>
-<section id="running-the-tests">
-<h2>Running the Tests<a class="headerlink" href="#running-the-tests" title="Permalink to this headline"></a></h2>
+</div>
+</div>
+<div class="section" id="running-the-tests">
+<h2>Running the Tests<a class="headerlink" href="#running-the-tests" title="Permalink to this headline">¶</a></h2>
 <p>Since the code package in minimal in size, the example notebook should
 be run to verify it is running correctly.</p>
-</section>
-<section id="contributing">
-<h2>Contributing<a class="headerlink" href="#contributing" title="Permalink to this headline"></a></h2>
+</div>
+<div class="section" id="contributing">
+<h2>Contributing<a class="headerlink" href="#contributing" title="Permalink to this headline">¶</a></h2>
 <p>Please read <a class="reference external" href="CONTRIBUTING.md">CONTRIBUTING.md</a> for details on our
 code of conduct, and the process for submitting pull requests to us.</p>
-</section>
-<section id="versioning">
-<h2>Versioning<a class="headerlink" href="#versioning" title="Permalink to this headline"></a></h2>
+</div>
+<div class="section" id="versioning">
+<h2>Versioning<a class="headerlink" href="#versioning" title="Permalink to this headline">¶</a></h2>
 <p>We use <a class="reference external" href="http://semver.org/">SemVer</a> for versioning. For the versions
 available, see the <a class="reference external" href="https://github.com/mikekatz04/lisa-on-gpu/tags">tags on this
 repository</a>.</p>
 <p>Current Version: 1.0.0</p>
-</section>
-<section id="authors">
-<h2>Authors<a class="headerlink" href="#authors" title="Permalink to this headline"></a></h2>
+</div>
+<div class="section" id="authors">
+<h2>Authors<a class="headerlink" href="#authors" title="Permalink to this headline">¶</a></h2>
 <ul class="simple">
 <li><p><strong>Michael Katz</strong></p></li>
 <li><p>Jean-Baptiste Bayle</p></li>
 <li><p>Alvin J. K. Chua</p></li>
 <li><p>Michele Vallisneri</p></li>
 </ul>
-<section id="contibutors">
-<h3>Contibutors<a class="headerlink" href="#contibutors" title="Permalink to this headline"></a></h3>
+<div class="section" id="contibutors">
+<h3>Contibutors<a class="headerlink" href="#contibutors" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li><p>Maybe you!</p></li>
 </ul>
-</section>
-</section>
-<section id="license">
-<h2>License<a class="headerlink" href="#license" title="Permalink to this headline"></a></h2>
+</div>
+</div>
+<div class="section" id="license">
+<h2>License<a class="headerlink" href="#license" title="Permalink to this headline">¶</a></h2>
 <p>This project is licensed under the GNU License - see the
 <a class="reference external" href="LICENSE.md">LICENSE.md</a> file for details.</p>
-</section>
-<section id="acknowledgments">
-<h2>Acknowledgments<a class="headerlink" href="#acknowledgments" title="Permalink to this headline"></a></h2>
+</div>
+<div class="section" id="acknowledgments">
+<h2>Acknowledgments<a class="headerlink" href="#acknowledgments" title="Permalink to this headline">¶</a></h2>
 <ul class="simple">
 <li><p>It was also supported in part through the computational resources and
 staff contributions provided for the Quest/Grail high performance
 computing facility at Northwestern University.</p></li>
 </ul>
-</section>
-</section>
+</div>
+</div>
 
 
            </div>
+           
           </div>
           <footer>
+  
 
   <hr/>
 
   <div role="contentinfo">
-    <p>&#169; Copyright 2021, Michael Katz, Jean-Baptiste Bayle, Alvin Chua, Michele Vallisneri.</p>
-  </div>
+    <p>
+        
+        &copy; Copyright 2021, Michael Katz, Jean-Baptiste Bayle, Alvin Chua, Michele Vallisneri
 
-  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
-    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
-    provided by <a href="https://readthedocs.org">Read the Docs</a>.
-   
+    </p>
+  </div>
+    
+    
+    
+    Built with <a href="http://sphinx-doc.org/">Sphinx</a> using a
+    
+    <a href="https://github.com/rtfd/sphinx_rtd_theme">theme</a>
+    
+    provided by <a href="https://readthedocs.org">Read the Docs</a>. 
 
 </footer>
+
         </div>
       </div>
+
     </section>
+
   </div>
-  <script>
+  
+
+  <script type="text/javascript">
       jQuery(function () {
           SphinxRtdTheme.Navigation.enable(true);
       });
-  </script> 
+  </script>
+
+  
+  
+    
+   
 
 </body>
 </html>
