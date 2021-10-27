@@ -87,8 +87,8 @@ class EMRILike:
 
         h = self._get_h(*args, **kwargs)
 
-        response_model.get_projections(h, lam, beta)
-        tdi_out = response_model.get_tdi_delays()
+        self.response_model.get_projections(h, lam, beta)
+        tdi_out = self.response_model.get_tdi_delays()
 
         return list(tdi_out)
 
@@ -111,7 +111,7 @@ if __name__ == "__main__":
     dt = 1 / sampling_frequency
     T = (num_pts_in * dt) / YRSID_SI
 
-    order = 25
+    order = 5
 
     orbit_file = "fixed-esa-orbits.h5"
 

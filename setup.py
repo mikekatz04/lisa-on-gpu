@@ -30,8 +30,12 @@ def locate_cuda():
     """
 
     # First check if the CUDAHOME env variable is in use
-    if "CUDAHOME" in os.environ:
-        home = os.environ["CUDAHOME"]
+    if "CUDAHOME" in os.environ or "CUDA_HOME" in os.environ:
+        home = (
+            os.environ["CUDAHOME"]
+            if "CUDAHOME" in os.environ
+            else os.environ["CUDA_HOME"]
+        )
         nvcc = pjoin(home, "bin", "nvcc")
     else:
         # Otherwise, search the PATH for NVCC
@@ -191,7 +195,7 @@ cpu_extension = dict(
 
 response_cpu_ext = Extension(
     "pyresponse_cpu",
-    sources=["src/LISAResponse.cpp", "src/responselisa.pyx"],
+    sources=["src/LISAResponse.cpp", "src/responselisa_cpu.pyx"],
     **cpu_extension
 )
 
