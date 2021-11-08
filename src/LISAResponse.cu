@@ -231,7 +231,7 @@ void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, do
 
 CUDA_KERNEL
 void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int num_orbit_info, double* delays, int num_delays, double dt, int* link_inds_in, int* tdi_signs_in, int num_units, int num_channels,
-               int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, double start_proj_time)
+               int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, int tdi_start_ind)
 {
     #ifdef __CUDACC__
     CUDA_SHARED double input[BUFFER_SIZE];
@@ -316,15 +316,15 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
 
         int start2, increment2;
         #ifdef __CUDACC__
-        start2 = threadIdx.x + blockDim.x*blockIdx.x;
+        start2 = tdi_start_ind + threadIdx.x + blockDim.x*blockIdx.x;
         increment2 = blockDim.x * gridDim.x;
         #else
-        start2 = 0;
+        start2 = tdi_start_ind;
         increment2 = 1;
         #pragma omp parallel for
         #endif
         for (int i=start2;
-             i < num_delays;
+             i < num_delays - tdi_start_ind;
              i += increment2)
         {
 
@@ -341,7 +341,7 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
              delay = delays[delay_ind];
 
              // delays are still with respect to projection start
-             clipped_delay = delay - start_proj_time;
+             clipped_delay = delay;
              integer_delay = (int) ceil(clipped_delay * sampling_frequency) - 1;
              fraction = 1.0 + integer_delay - clipped_delay * sampling_frequency;
 
@@ -397,7 +397,7 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
 }
 
 void get_tdi_delays(double* delayed_links, double* input_links, int num_inputs, int num_orbit_info, double* delays, int num_delays, double dt, int* link_inds_in, int* tdi_signs_in, int num_units, int num_channels,
-               int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, double start_proj_time){
+               int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, int tdi_start_ind){
 
 
         #ifdef __CUDACC__
@@ -408,13 +408,13 @@ void get_tdi_delays(double* delayed_links, double* input_links, int num_inputs, 
         //printf("RUNNING: %d\n", i);
         TDI_delay<<<gridDim, NUM_THREADS>>>
                       (delayed_links, input_links, num_inputs, num_orbit_info, delays, num_delays, dt, link_inds_in, tdi_signs_in, num_units, num_channels,
-                         order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, start_proj_time);
+                         order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind);
 
         cudaDeviceSynchronize();
         gpuErrchk(cudaGetLastError());
         #else
         TDI_delay (delayed_links, input_links, num_inputs, num_orbit_info, delays, num_delays, dt, link_inds_in, tdi_signs_in, num_units, num_channels,
-                         order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, start_proj_time);
+                         order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind);
 
         #endif
 }
@@ -424,7 +424,7 @@ CUDA_KERNEL
 void response(double *y_gw, double* t_data, double *k_in, double *u_in, double *v_in, double dt,
               int num_delays, int *link_space_craft_0_in, int *link_space_craft_1_in,
               cmplx *input_in, int num_inputs, int order, double sampling_frequency,
-              int buffer_integer, double* A_in, double deps, int num_A, double* E_in, double start_wave_time,
+              int buffer_integer, double* A_in, double deps, int num_A, double* E_in, int projections_start_ind,
               double* x_in_emitter, double* x_in_receiver, double* L_in, int num_orbit_inputs)
 {
 
@@ -510,15 +510,15 @@ void response(double *y_gw, double* t_data, double *k_in, double *u_in, double *
 
     int start2, increment2;
     #ifdef __CUDACC__
-    start2 = threadIdx.x + blockDim.x*blockIdx.x;
+    start2 = projections_start_ind + threadIdx.x + blockDim.x*blockIdx.x;
     increment2 = blockDim.x * gridDim.x;
     #else
-    start2 = 0;
+    start2 = projections_start_ind;
     increment2 = 1;
     #endif
 
     for (int i=start2;
-         i < num_delays;
+         i < num_delays - projections_start_ind;
          i += increment2){
 
          #ifdef __CUDACC__
@@ -585,11 +585,11 @@ void response(double *y_gw, double* t_data, double *k_in, double *u_in, double *
          // start time for hp hx is really -(projection_buffer * dt)
 
          //if ((i == 0) && (link_i == 0)) printf("%.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e\n", L, delay0, delay1, x0[0], x0[1], x0[2],x1[0], x1[1], x1[2]);
-         clipped_delay0 = delay0 - start_wave_time;
+         clipped_delay0 = delay0; //  - start_wave_time;
          integer_delay0 = (int) ceil(clipped_delay0 * sampling_frequency) - 1;
          fraction0 = 1.0 + integer_delay0 - clipped_delay0 * sampling_frequency;
 
-         clipped_delay1 = delay1 - start_wave_time;
+         clipped_delay1 = delay1; //  - start_wave_time;
          integer_delay1 = (int) ceil(clipped_delay1 * sampling_frequency) - 1;
          fraction1 = 1.0 + integer_delay1 - clipped_delay1 * sampling_frequency;
 
@@ -654,13 +654,14 @@ void get_response(double *y_gw, double* t_data, double *k_in, double *u_in, doub
               int num_delays, int *link_space_craft_0_in, int *link_space_craft_1_in,
               cmplx *input_in, int num_inputs, int order,
               double sampling_frequency, int buffer_integer,
-              double* A_in, double deps, int num_A, double* E_in, double start_wave_time,
+              double* A_in, double deps, int num_A, double* E_in, int projections_start_ind,
               double* x_in_emitter, double* x_in_receiver, double* L_in, int num_orbit_inputs)
 {
 
     #ifdef __CUDACC__
 
-    int num_blocks = std::ceil((num_delays + NUM_THREADS -1)/NUM_THREADS);
+    int num_delays_here = (num_delays - projections_start_ind);
+    int num_blocks = std::ceil((num_delays_here + NUM_THREADS -1)/NUM_THREADS);
 
     dim3 gridDim(num_blocks, 1);
 
@@ -670,7 +671,7 @@ void get_response(double *y_gw, double* t_data, double *k_in, double *u_in, doub
                   (y_gw, t_data, k_in, u_in, v_in, dt,
                   num_delays, link_space_craft_0_in, link_space_craft_1_in,
                     input_in, num_inputs, order, sampling_frequency, buffer_integer,
-                    A_in, deps, num_A, E_in, start_wave_time,
+                    A_in, deps, num_A, E_in, projections_start_ind,
                     x_in_emitter, x_in_receiver, L_in, num_orbit_inputs);
     cudaDeviceSynchronize();
     gpuErrchk(cudaGetLastError());
@@ -680,7 +681,7 @@ void get_response(double *y_gw, double* t_data, double *k_in, double *u_in, doub
     response(y_gw, t_data, k_in, u_in, v_in, dt,
                   num_delays, link_space_craft_0_in, link_space_craft_1_in,
                     input_in, num_inputs, order, sampling_frequency, buffer_integer,
-                    A_in, deps, num_A, E_in, start_wave_time,
+                    A_in, deps, num_A, E_in, projections_start_ind,
                     x_in_emitter, x_in_receiver, L_in, num_orbit_inputs);
     #endif
 }
