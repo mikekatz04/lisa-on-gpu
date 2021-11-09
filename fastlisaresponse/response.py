@@ -695,7 +695,6 @@ class pyResponseTDI(object):
         elif self.tdi_chan == "AET" or self.tdi_chan == "AE":
             X, Y, Z = self.XYZ
             A, E, T = AET(X, Y, Z)
-
             if self.tdi_chan == "AET":
                 return A, E, T
 

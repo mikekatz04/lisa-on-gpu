@@ -339,7 +339,9 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
              // at i = 0, delay ind should be at TDI_buffer = total_buffer - projection_buffer
              int delay_ind = unit_i * num_delays + i;
              delay = delays[delay_ind];
-
+             #ifdef __CUDACC__
+             if (i >= 314560) printf("CHECK: %d %d %d %e\n", threadIdx.x, unit_i, i, delay);
+             #endif
              // delays are still with respect to projection start
              clipped_delay = delay;
              integer_delay = (int) ceil(clipped_delay * sampling_frequency) - 1;
@@ -350,16 +352,18 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
              min_integer_delay = integer_delay;
 
              #ifdef __CUDACC__
-             int max_thread_num = (num_delays - blockDim.x*blockIdx.x > NUM_THREADS) ? NUM_THREADS : num_delays - blockDim.x*blockIdx.x;
-
+             int max_thread_num = ((num_delays - 2 * tdi_start_ind) - blockDim.x*blockIdx.x > NUM_THREADS) ? NUM_THREADS : (num_delays - 2 * tdi_start_ind) - blockDim.x*blockIdx.x;
+             CUDA_SYNC_THREADS;
              if (threadIdx.x == 0){
                   start_input_ind = min_integer_delay - buffer_integer;
+                  //printf("BAD1: %d %d %d %d %e %d \n", i, unit_i, blockIdx.x, start_input_ind, delay, max_integer_delay);
             }
-
+            CUDA_SYNC_THREADS;
             if (threadIdx.x == max_thread_num - 1){
                 //if (blockIdx.x == gridDim.x - 1)
                     //printf("%e %e %d %d\n", clipped_delay0, clipped_delay1, integer_delay0, integer_delay1);
                   end_input_ind = max_integer_delay + buffer_integer;
+                  //printf("BAD2: %d %d %d %d %e %d %d\n", i, unit_i, blockIdx.x, start_input_ind, delay, max_integer_delay, start_input_ind);
             }
 
             CUDA_SYNC_THREADS;
@@ -367,7 +371,7 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
 
             for (int jj = threadIdx.x + start_input_ind; jj < end_input_ind; jj+=max_thread_num){
                 // need to subtract out the projection buffer
-                //if ((start_input_ind < 0)) printf("%d %d %e %d %d %d\n", i, start_input_ind, delay, integer_delay, delay_ind, projection_buffer);
+
                 input[jj - start_input_ind] = input_links[link_i * num_inputs + jj];
              }
 
@@ -378,12 +382,18 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
               start_input_ind = 0;
               double* input = &input_links[link_i * num_inputs];
              #endif
-
+             int channel = (int) unit_i / num_units;
+             //printf("bef: %d %d %d\n", channel, i, unit_i);
              interp_single(&link_delayed_out, input, half_point_count, integer_delay, fraction, A_arr, deps, E_arr, start_input_ind);
 
-             int channel = (int) unit_i / num_units;
+
 
              link_delayed_out *= sign;
+
+             //if ((channel == 0) && (unit_i == 2) & (i > 237790)){
+
+             //printf("aft: %d %d %d %e\n", channel, i, unit_i, delayed_links[channel * num_delays + i]);
+             //}
 
              #ifdef __CUDACC__
              atomicAdd(&delayed_links[channel * num_delays + i], link_delayed_out);
@@ -401,7 +411,7 @@ void get_tdi_delays(double* delayed_links, double* input_links, int num_inputs, 
 
 
         #ifdef __CUDACC__
-        int num_blocks = std::ceil((num_delays + NUM_THREADS -1)/NUM_THREADS);
+        int num_blocks = std::ceil((num_delays - 2 * tdi_start_ind + NUM_THREADS -1)/NUM_THREADS);
 
         dim3 gridDim(num_blocks, num_units * num_channels);
 
@@ -598,7 +608,7 @@ void response(double *y_gw, double* t_data, double *k_in, double *u_in, double *
          min_integer_delay = (integer_delay0 < integer_delay1) ? integer_delay0 : integer_delay1;
 
          #ifdef __CUDACC__
-         int max_thread_num = (num_delays - blockDim.x*blockIdx.x > NUM_THREADS) ? NUM_THREADS : num_delays - blockDim.x*blockIdx.x;
+         int max_thread_num = ((num_delays - 2 * projections_start_ind) - blockDim.x*blockIdx.x > NUM_THREADS) ? NUM_THREADS : (num_delays - 2 * projections_start_ind) - blockDim.x*blockIdx.x;
 
          if (threadIdx.x == 0){
               start_input_ind = min_integer_delay - buffer_integer;
@@ -660,7 +670,7 @@ void get_response(double *y_gw, double* t_data, double *k_in, double *u_in, doub
 
     #ifdef __CUDACC__
 
-    int num_delays_here = (num_delays - projections_start_ind);
+    int num_delays_here = (num_delays - 2 * projections_start_ind);
     int num_blocks = std::ceil((num_delays_here + NUM_THREADS -1)/NUM_THREADS);
 
     dim3 gridDim(num_blocks, 1);
