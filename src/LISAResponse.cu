@@ -339,9 +339,7 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
              // at i = 0, delay ind should be at TDI_buffer = total_buffer - projection_buffer
              int delay_ind = unit_i * num_delays + i;
              delay = delays[delay_ind];
-             #ifdef __CUDACC__
-             if (i >= 314560) printf("CHECK: %d %d %d %e\n", threadIdx.x, unit_i, i, delay);
-             #endif
+             
              // delays are still with respect to projection start
              clipped_delay = delay;
              integer_delay = (int) ceil(clipped_delay * sampling_frequency) - 1;
