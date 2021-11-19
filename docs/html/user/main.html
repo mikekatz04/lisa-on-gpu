@@ -31,6 +31,8 @@
         <script src="../_static/doctools.js"></script>
         <script src="../_static/language_data.js"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script async="async" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.7/latest.js?config=TeX-AMS-MML_HTMLorMML"></script>
+        <script type="text/x-mathjax-config">MathJax.Hub.Config({"tex2jax": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true, "ignoreClass": "document", "processClass": "math|output_area"}})</script>
     
     <script type="text/javascript" src="../_static/js/theme.js"></script>
 
@@ -191,9 +193,503 @@
 </style>
 <div class="section" id="fast-response-function">
 <h1>Fast Response Function<a class="headerlink" href="#fast-response-function" title="Permalink to this headline">¶</a></h1>
+<dl class="py class">
+<dt id="fastlisaresponse.response.pyResponseTDI">
+<em class="property">class </em><code class="sig-prename descclassname">fastlisaresponse.response.</code><code class="sig-name descname">pyResponseTDI</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">sampling_frequency</span></em>, <em class="sig-param"><span class="n">num_pts</span></em>, <em class="sig-param"><span class="n">orbit_kwargs</span></em>, <em class="sig-param"><span class="n">order</span><span class="o">=</span><span class="default_value">25</span></em>, <em class="sig-param"><span class="n">tdi</span><span class="o">=</span><span class="default_value">'1st generation'</span></em>, <em class="sig-param"><span class="n">tdi_orbit_kwargs</span><span class="o">=</span><span class="default_value">{}</span></em>, <em class="sig-param"><span class="n">tdi_chan</span><span class="o">=</span><span class="default_value">'XYZ'</span></em>, <em class="sig-param"><span class="n">use_gpu</span><span class="o">=</span><span class="default_value">False</span></em><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI" title="Permalink to this definition">¶</a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
+<p>Class container for fast LISA response function generation.</p>
+<p>The class computes the generic time-domain response function for LISA.
+It takes LISA constellation orbital information as input and properly determines
+the response for these orbits numerically. This includes both the projection
+of the gravitational waves onto the LISA constellation arms and combinations     of projections into TDI observables. The methods and maths used can be found
+in # TODO: add url for paper.</p>
+<p>This class is also GPU-accelerated, which is very helpful for Bayesian inference
+methods.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>sampling_frequency</strong> (<em>double</em>) – The sampling rate in Hz.</p></li>
+<li><p><strong>num_pts</strong> (<em>int</em>) – Number of points to produce for the final output template.</p></li>
+<li><p><strong>orbit_kwargs</strong> (<em>dict</em>) – Dictionary containing orbital information. The kwargs and defaults
+are: <code class="code docutils literal notranslate"><span class="pre">orbit_module=None,</span> <span class="pre">order=0,</span> <span class="pre">max_t_orbits=3.15576e7,</span> <span class="pre">orbit_file=None</span></code>.
+<code class="code docutils literal notranslate"><span class="pre">orbit_module</span></code> is an orbit module from the LDC package. <code class="code docutils literal notranslate"><span class="pre">max_t_orbits</span></code> is
+the maximum time desired for the orbital information. <cite>orbit_file</cite> is
+an h5 file of the form used <a class="reference external" href="https://gitlab.in2p3.fr/lisa-simulation/orbits">here</a>.
+<code class="code docutils literal notranslate"><span class="pre">order</span></code> is the order of interpolation used in the orbit modules.</p></li>
+<li><p><strong>order</strong> (<em>int</em><em>, </em><em>optional</em>) – Order of Lagrangian interpolation technique. Lower orders
+will be faster. The user must make sure the order is sufficient for the
+waveform being used. (default: 25)</p></li>
+<li><p><strong>tdi</strong> (<em>str</em><em> or </em><em>list</em><em>, </em><em>optional</em>) – TDI setup. Currently, the stock options are
+<code class="code docutils literal notranslate"><span class="pre">'1st</span> <span class="pre">generation'</span></code> and <code class="code docutils literal notranslate"><span class="pre">'2nd</span> <span class="pre">generation'</span></code>. Or the user can provide
+a list of tdi_combinations of the form
+<code class="code docutils literal notranslate"><span class="pre">{&quot;link&quot;:</span> <span class="pre">12,</span> <span class="pre">&quot;links_for_delay&quot;:</span> <span class="pre">[21,</span> <span class="pre">13,</span> <span class="pre">31],</span> <span class="pre">&quot;sign&quot;:</span> <span class="pre">1}</span></code>.
+<code class="code docutils literal notranslate"><span class="pre">'link'</span></code> (<cite>int</cite>) the link index (12, 21, 13, 31, 23, 32) for the projection (<span class="math notranslate nohighlight">\(y_{gw}\)</span>).
+<code class="code docutils literal notranslate"><span class="pre">'links_for_delay'</span></code> (<cite>list</cite>) are the link indexes as a list with which delays
+are applied. <cite>‘sign’</cite> is the sign in front of the contribution to the TDI observable.
+It takes the value of <cite>1</cite> or <cite>-1</cite>. (default: <cite>‘1st generation’</cite>)</p></li>
+<li><p><strong>tdi_orbit_kwargs</strong> (<em>dict</em><em>, </em><em>optional</em>) – Same as <code class="code docutils literal notranslate"><span class="pre">orbit_kwargs</span></code>, but specifically for the TDI
+portion of the response computation. This allows the user to use two different orbits
+for the projections and TDI. For example, this can be used to examine the efficacy of
+frequency domain TDI codes that can handle generic orbits for the projections, but
+assume equal armlength orbits to reduce and simplify the expression for TDI
+computations. (default: <code class="code docutils literal notranslate"><span class="pre">None</span></code>, this means the orbits for the projections
+and TDI will be the same and will be built from <code class="code docutils literal notranslate"><span class="pre">orbit_kwargs</span></code>)</p></li>
+<li><p><strong>tdi_chan</strong> (<em>str</em><em>, </em><em>optional</em>) – Which TDI channel combination to return. Choices are <code class="code docutils literal notranslate"><span class="pre">'XYZ'</span></code>,
+<code class="code docutils literal notranslate"><span class="pre">AET</span></code>, or <code class="code docutils literal notranslate"><span class="pre">AE</span></code>. (default: <code class="code docutils literal notranslate"><span class="pre">'XYZ'</span></code>)</p></li>
+<li><p><strong>use_gpu</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, run code on the GPU. (default: <code class="code docutils literal notranslate"><span class="pre">False</span></code>)</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.A_in">
+<code class="sig-name descname">A_in</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.A_in" title="Permalink to this definition">¶</a></dt>
+<dd><p>Array containing y values for linear spline of A
+during Lagrangian interpolation.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>xp.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.buffer_integer">
+<code class="sig-name descname">buffer_integer</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.buffer_integer" title="Permalink to this definition">¶</a></dt>
+<dd><p>Self-determined buffer necesary for the given
+value for <code class="code docutils literal notranslate"><span class="pre">order</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.channels_no_delays">
+<code class="sig-name descname">channels_no_delays</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.channels_no_delays" title="Permalink to this definition">¶</a></dt>
+<dd><p>Carrier of link index and sign information
+for arms that do not get delayed during TDI computation.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>2D np.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.deps">
+<code class="sig-name descname">deps</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.deps" title="Permalink to this definition">¶</a></dt>
+<dd><p>The spacing between Epsilon values in the interpolant
+for the A quantity in Lagrangian interpolation. Hard coded to
+1/(<code class="code docutils literal notranslate"><span class="pre">num_A</span></code> - 1).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>double</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.dt">
+<code class="sig-name descname">dt</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.dt" title="Permalink to this definition">¶</a></dt>
+<dd><p>Inverse of the sampling_frequency.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>double</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.E_in">
+<code class="sig-name descname">E_in</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.E_in" title="Permalink to this definition">¶</a></dt>
+<dd><p>Array containing y values for linear spline of E
+during Lagrangian interpolation.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>xp.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.half_order">
+<code class="sig-name descname">half_order</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.half_order" title="Permalink to this definition">¶</a></dt>
+<dd><p>Half of <code class="code docutils literal notranslate"><span class="pre">order</span></code> adjusted to be <code class="code docutils literal notranslate"><span class="pre">int</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.link_inds">
+<code class="sig-name descname">link_inds</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.link_inds" title="Permalink to this definition">¶</a></dt>
+<dd><p>Link indexes for delays in TDI.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>xp.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.link_space_craft_0_in">
+<code class="sig-name descname">link_space_craft_0_in</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.link_space_craft_0_in" title="Permalink to this definition">¶</a></dt>
+<dd><p>Link indexes for emitter on each
+arm of the LISA constellation.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>xp.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.link_space_craft_1_in">
+<code class="sig-name descname">link_space_craft_1_in</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.link_space_craft_1_in" title="Permalink to this definition">¶</a></dt>
+<dd><p>Link indexes for receiver on each
+arm of the LISA constellation.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>xp.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.nlinks">
+<code class="sig-name descname">nlinks</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.nlinks" title="Permalink to this definition">¶</a></dt>
+<dd><p>The number of links in the constellation. Typically 6.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.num_A">
+<code class="sig-name descname">num_A</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.num_A" title="Permalink to this definition">¶</a></dt>
+<dd><p>Number of points to use for A spline values used in the Lagrangian
+interpolation. This is hard coded to 1001.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.num_channels">
+<code class="sig-name descname">num_channels</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.num_channels" title="Permalink to this definition">¶</a></dt>
+<dd><ol class="arabic simple" start="3">
+<li></li>
+</ol>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.num_pts">
+<code class="sig-name descname">num_pts</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.num_pts" title="Permalink to this definition">¶</a></dt>
+<dd><p>Number of points to produce for the final output template.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.num_tdi_combinations">
+<code class="sig-name descname">num_tdi_combinations</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.num_tdi_combinations" title="Permalink to this definition">¶</a></dt>
+<dd><p>Number of independent arm computations.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.num_tdi_delay_comps">
+<code class="sig-name descname">num_tdi_delay_comps</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.num_tdi_delay_comps" title="Permalink to this definition">¶</a></dt>
+<dd><p>Number of independent arm computations that require delays.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.orbits_store">
+<code class="sig-name descname">orbits_store</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.orbits_store" title="Permalink to this definition">¶</a></dt>
+<dd><p>Contains orbital information for the projection and TDI
+steps.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>dict</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.order">
+<code class="sig-name descname">order</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.order" title="Permalink to this definition">¶</a></dt>
+<dd><p>Order of Lagrangian interpolation technique.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.response_gen">
+<code class="sig-name descname">response_gen</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.response_gen" title="Permalink to this definition">¶</a></dt>
+<dd><p>Projection generator function.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>func</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.sampling_frequency">
+<code class="sig-name descname">sampling_frequency</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.sampling_frequency" title="Permalink to this definition">¶</a></dt>
+<dd><p>The sampling rate in Hz.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>double</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.tdi">
+<code class="sig-name descname">tdi</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.tdi" title="Permalink to this definition">¶</a></dt>
+<dd><p>TDI setup.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>str or list</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.tdi_buffer">
+<code class="sig-name descname">tdi_buffer</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.tdi_buffer" title="Permalink to this definition">¶</a></dt>
+<dd><p>The buffer necessary for all information needed at early times
+for the TDI computation. This is set to 200.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.tdi_chan">
+<code class="sig-name descname">tdi_chan</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.tdi_chan" title="Permalink to this definition">¶</a></dt>
+<dd><p>Which TDI channel combination to return.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>str</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.tdi_delays">
+<code class="sig-name descname">tdi_delays</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.tdi_delays" title="Permalink to this definition">¶</a></dt>
+<dd><p>TDI delays.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>xp.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.tdi_gen">
+<code class="sig-name descname">tdi_gen</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.tdi_gen" title="Permalink to this definition">¶</a></dt>
+<dd><p>TDI generating function.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>func</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.tdi_signs">
+<code class="sig-name descname">tdi_signs</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.tdi_signs" title="Permalink to this definition">¶</a></dt>
+<dd><p>Signs applied to the addition of a delayed link. (+1 or -1)</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>xp.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.use_gpu">
+<code class="sig-name descname">use_gpu</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.use_gpu" title="Permalink to this definition">¶</a></dt>
+<dd><p>If True, run on GPU.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>bool</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="fastlisaresponse.response.pyResponseTDI.xp">
+<code class="sig-name descname">xp</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.xp" title="Permalink to this definition">¶</a></dt>
+<dd><p>Either Numpy or Cupy.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type</dt>
+<dd class="field-odd"><p>obj</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt id="fastlisaresponse.response.pyResponseTDI.y_gw">
+<em class="property">property </em><code class="sig-name descname">y_gw</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.y_gw" title="Permalink to this definition">¶</a></dt>
+<dd><p>Projections along the arms</p>
+</dd></dl>
+
+<dl class="py method">
+<dt id="fastlisaresponse.response.pyResponseTDI.get_projections">
+<code class="sig-name descname">get_projections</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">input_in</span></em>, <em class="sig-param"><span class="n">lam</span></em>, <em class="sig-param"><span class="n">beta</span></em>, <em class="sig-param"><span class="n">t0</span><span class="o">=</span><span class="default_value">10000.0</span></em><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.get_projections" title="Permalink to this definition">¶</a></dt>
+<dd><p>Compute projections of GW signal on to LISA constellation</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>input_in</strong> (<em>xp.ndarray</em>) – Input complex time-domain signal. It should be of the form:
+<span class="math notranslate nohighlight">\(h_+ + ih_x\)</span>. If using the GPU for the response, this should be a CuPy array.</p></li>
+<li><p><strong>lam</strong> (<em>double</em>) – Ecliptic Longitude in radians.</p></li>
+<li><p><strong>beta</strong> (<em>double</em>) – Ecliptic Latitude in radians.</p></li>
+<li><p><strong>t0</strong> (<em>double</em><em>, </em><em>optional</em>) – Time at which to the waveform. Because of the delays
+and interpolation towards earlier times, the beginning of the waveform
+is garbage. <code class="docutils literal notranslate"><span class="pre">t0</span></code> tells the waveform generator where to start the waveform
+compraed to <code class="docutils literal notranslate"><span class="pre">t=0</span></code>.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Raises</dt>
+<dd class="field-even"><p><strong>ValueError</strong> – If <code class="docutils literal notranslate"><span class="pre">t0</span></code> is not large enough.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt id="fastlisaresponse.response.pyResponseTDI.XYZ">
+<em class="property">property </em><code class="sig-name descname">XYZ</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.XYZ" title="Permalink to this definition">¶</a></dt>
+<dd><p>Return links as an array</p>
+</dd></dl>
+
+<dl class="py method">
+<dt id="fastlisaresponse.response.pyResponseTDI.get_tdi_delays">
+<code class="sig-name descname">get_tdi_delays</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.get_tdi_delays" title="Permalink to this definition">¶</a></dt>
+<dd><p>Get TDI combinations from projections.</p>
+<p>This functions generates the TDI combinations from the projections
+computed with <code class="docutils literal notranslate"><span class="pre">get_projections</span></code>. It can return XYZ, AET, or AE depending
+on what was input for <code class="docutils literal notranslate"><span class="pre">tdi_chan</span></code> into <code class="docutils literal notranslate"><span class="pre">__init__</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns</dt>
+<dd class="field-odd"><p>(X,Y,Z) or (A,E,T) or (A,E)</p>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p>tuple</p>
+</dd>
+<dt class="field-odd">Raises</dt>
+<dd class="field-odd"><p><strong>ValueError</strong> – If <code class="docutils literal notranslate"><span class="pre">tdi_chan</span></code> is not one of the options.</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
 </div>
 <div class="section" id="response-function-wrapper">
 <h1>Response Function Wrapper<a class="headerlink" href="#response-function-wrapper" title="Permalink to this headline">¶</a></h1>
+<dl class="py class">
+<dt id="fastlisaresponse.response.ResponseWrapper">
+<em class="property">class </em><code class="sig-prename descclassname">fastlisaresponse.response.</code><code class="sig-name descname">ResponseWrapper</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">waveform_gen</span></em>, <em class="sig-param"><span class="n">Tobs</span></em>, <em class="sig-param"><span class="n">dt</span></em>, <em class="sig-param"><span class="n">index_lambda</span></em>, <em class="sig-param"><span class="n">index_beta</span></em>, <em class="sig-param"><span class="n">t0</span><span class="o">=</span><span class="default_value">10000.0</span></em>, <em class="sig-param"><span class="n">flip_hx</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">remove_sky_coords</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">is_ecliptic_latitude</span><span class="o">=</span><span class="default_value">True</span></em>, <em class="sig-param"><span class="n">use_gpu</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">remove_garbage</span><span class="o">=</span><span class="default_value">True</span></em>, <em class="sig-param"><span class="o">**</span><span class="n">kwargs</span></em><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.response.ResponseWrapper" title="Permalink to this definition">¶</a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
+<p>Wrapper to produce LISA TDI from TD waveforms</p>
+<p>This class takes a waveform generator that produces <span class="math notranslate nohighlight">\(h_+ \pm ih_x\)</span>.
+(<code class="code docutils literal notranslate"><span class="pre">flip_hx</span></code> is used if the waveform produces <span class="math notranslate nohighlight">\(h_+ - ih_x\)</span>).
+It takes the complex waveform in the SSB frame and produces the TDI channels
+according to settings chosen for <a class="reference internal" href="#fastlisaresponse.response.pyResponseTDI" title="fastlisaresponse.response.pyResponseTDI"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyResponseTDI</span></code></a>.</p>
+<p>The waveform generator must have <code class="code docutils literal notranslate"><span class="pre">kwargs</span></code> with <code class="code docutils literal notranslate"><span class="pre">T</span></code> for the observation
+time in years and <code class="code docutils literal notranslate"><span class="pre">dt</span></code> for the time step in seconds.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>waveform_gen</strong> (<em>obj</em>) – Function or class (with a <code class="code docutils literal notranslate"><span class="pre">__call__</span></code> function) that takes parameters and produces
+<span class="math notranslate nohighlight">\(h_+ \pm h_x\)</span>.</p></li>
+<li><p><strong>Tobs</strong> (<em>double</em>) – Observation time in years.</p></li>
+<li><p><strong>dt</strong> (<em>double</em>) – Time between time samples in seconds. The inverse of the sampling frequency.</p></li>
+<li><p><strong>index_lambda</strong> (<em>int</em>) – The user will input parameters. The code will read these in
+with the <code class="code docutils literal notranslate"><span class="pre">*args</span></code> formalism producing a list. <code class="code docutils literal notranslate"><span class="pre">index_lambda</span></code>
+tells the class the index of the ecliptic longitude within this list of
+parameters.</p></li>
+<li><p><strong>index_beta</strong> (<em>int</em>) – The user will input parameters. The code will read these in
+with the <code class="code docutils literal notranslate"><span class="pre">*args</span></code> formalism producing a list. <code class="code docutils literal notranslate"><span class="pre">index_beta</span></code>
+tells the class the index of the ecliptic latitude (or ecliptic polar angle)
+within this list of parameters.</p></li>
+<li><p><strong>t0</strong> (<em>double</em><em>, </em><em>optional</em>) – Start of returned waveform in seconds leaving ample time for garbage at
+the beginning of the waveform. It also removed the same amount from the end. (Default: 10000.0)</p></li>
+<li><p><strong>flip_hx</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, <code class="code docutils literal notranslate"><span class="pre">waveform_gen</span></code> produces <span class="math notranslate nohighlight">\(h_+ - ih_x\)</span>.
+<a class="reference internal" href="#fastlisaresponse.response.pyResponseTDI" title="fastlisaresponse.response.pyResponseTDI"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyResponseTDI</span></code></a> takes <span class="math notranslate nohighlight">\(h_+ + ih_x\)</span>, so this setting will
+multiply the cross polarization term out of the waveform generator by -1.
+(Default: <code class="code docutils literal notranslate"><span class="pre">False</span></code>)</p></li>
+<li><p><strong>remove_sky_coords</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, remove the sky coordinates from
+the <code class="code docutils literal notranslate"><span class="pre">*args</span></code> list. This should be set to True if the waveform
+generator does not take in the sky information. (Default: <code class="code docutils literal notranslate"><span class="pre">False</span></code>)</p></li>
+<li><p><strong>is_ecliptic_latitude</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, the latitudinal sky
+coordinate is the ecliptic latitude. If False, thes latitudinal sky
+coordinate is the polar angle. In this case, the code will
+convert it with <span class="math notranslate nohighlight">\(eta=\pi / 2 - \Theta\)</span>. (Default: <code class="code docutils literal notranslate"><span class="pre">True</span></code>)</p></li>
+<li><p><strong>use_gpu</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, use GPU. (Default: <code class="code docutils literal notranslate"><span class="pre">False</span></code>)</p></li>
+<li><p><strong>remove_garbage</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, it removes everything before <code class="docutils literal notranslate"><span class="pre">t0</span></code>
+and after the end time - <code class="docutils literal notranslate"><span class="pre">t0</span></code>. (Default: <code class="docutils literal notranslate"><span class="pre">True</span></code>)</p></li>
+<li><p><strong>**kwargs</strong> (<em>dict</em><em>, </em><em>optional</em>) – Keyword arguments passed to <a class="reference internal" href="#fastlisaresponse.response.pyResponseTDI" title="fastlisaresponse.response.pyResponseTDI"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyResponseTDI</span></code></a>.</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py method">
+<dt id="fastlisaresponse.response.ResponseWrapper.__call__">
+<code class="sig-name descname">__call__</code><span class="sig-paren">(</span><em class="sig-param"><span class="o">*</span><span class="n">args</span></em>, <em class="sig-param"><span class="o">**</span><span class="n">kwargs</span></em><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.response.ResponseWrapper.__call__" title="Permalink to this definition">¶</a></dt>
+<dd><p>Run the waveform and response generation</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>*args</strong> (<em>list</em>) – Arguments to the waveform generator. This must include
+the sky coordinates.</p></li>
+<li><p><strong>**kwargs</strong> (<em>dict</em>) – kwargs necessary for the waveform generator.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>TDI Channels.</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>list</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
 </div>
 
 
