@@ -17,7 +17,7 @@
 
 # -- Project information -----------------------------------------------------
 
-project = "lisaresponse"
+project = "fastlisaresponse"
 copyright = "2021, Michael Katz, Jean-Baptiste Bayle, Alvin Chua, Michele Vallisneri"
 author = "Michael Katz, Jean-Baptiste Bayle, Alvin Chua, Michele Vallisneri"
 

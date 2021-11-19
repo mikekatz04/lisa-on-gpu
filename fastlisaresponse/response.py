@@ -73,7 +73,15 @@ def pointer_adjust(func):
 class pyResponseTDI(object):
     """Class container for fast LISA response function generation.
 
-    # TODO: fill in
+    The class computes the generic time-domain response function for LISA.
+    It takes LISA constellation orbital information as input and properly determines
+    the response for these orbits numerically. This includes both the projection
+    of the gravitational waves onto the LISA constellation arms and combinations \
+    of projections into TDI observables. The methods and maths used can be found
+    in # TODO: add url for paper.
+
+    This class is also GPU-accelerated, which is very helpful for Bayesian inference
+    methods.
 
     Args:
         sampling_frequency (double): The sampling rate in Hz.
@@ -104,9 +112,6 @@ class pyResponseTDI(object):
             and TDI will be the same and will be built from :code:`orbit_kwargs`)
         tdi_chan (str, optional): Which TDI channel combination to return. Choices are :code:`'XYZ'`,
             :code:`AET`, or :code:`AE`. (default: :code:`'XYZ'`)
-        t0 (double, optional): Starting buffer in seconds. Helps deal with the early
-            times that are in the waveform, but not the response computations
-            because of the early delays.(default: :code:`100.0`)
         use_gpu (bool, optional): If True, run code on the GPU. (default: :code:`False`)
 
     Attributes:
@@ -129,8 +134,6 @@ class pyResponseTDI(object):
         link_space_craft_1_in (xp.ndarray): Link indexes for receiver on each
             arm of the LISA constellation.
         nlinks (int): The number of links in the constellation. Typically 6.
-        num_delays_tdi (int): Nnumber of points adjusted for the TDI buffer
-            at initial and end stages.
         num_A (int): Number of points to use for A spline values used in the Lagrangian
             interpolation. This is hard coded to 1001.
         num_channels (int): 3.
@@ -142,11 +145,6 @@ class pyResponseTDI(object):
         order (int): Order of Lagrangian interpolation technique.
         response_gen (func): Projection generator function.
         sampling_frequency (double): The sampling rate in Hz.
-        t0 (double): Starting buffer in seconds. Helps deal with the early
-            times that are in the waveform, but not the response computations
-            because of the early delays.
-        t0_tdi (double): Starting time of TDI. This includes the contribution from
-            :code:`t0` and :code:`tdi_buffer`.
         tdi (str or list): TDI setup.
         tdi_buffer (int): The buffer necessary for all information needed at early times
             for the TDI computation. This is set to 200.
@@ -154,18 +152,8 @@ class pyResponseTDI(object):
         tdi_delays (xp.ndarray): TDI delays.
         tdi_gen (func): TDI generating function.
         tdi_signs (xp.ndarray): Signs applied to the addition of a delayed link. (+1 or -1)
-        tend (double): End time including the :cide:`tdi_buffer`.
-        tend_tdi (double): End time for the TDI computation removing the end buffer.
-        total_buffer (int): TDI buffer + Projection buffer. This helps outside waveform
-            codes know how many points to generate prior to the actual time
-            points that will be returned by the response function.
         use_gpu (bool): If True, run on GPU.
         xp (obj): Either Numpy or Cupy.
-
-
-        self.link_inds = self.xp.asarray(link_inds.flatten()).astype(self.xp.int32)
-        self.tdi_delays = self.xp.asarray(delays.flatten())
-        self.tdi_signs = self.xp.asarray(signs, dtype=np.int32)
 
     """
 
@@ -224,6 +212,14 @@ class pyResponseTDI(object):
 
         # setup TDI info
         self._init_TDI_delays()
+
+    @property
+    def citation(self):
+        """Get citations for use of this code"""
+
+        return """
+        # TODO add
+        """
 
     def _fill_A_E(self):
         """Set up A and E terms inside the Lagrangian interpolant"""
@@ -570,9 +566,17 @@ class pyResponseTDI(object):
 
         Args:
             input_in (xp.ndarray): Input complex time-domain signal. It should be of the form:
-                :math:`h_+ + ih_x`.
+                :math:`h_+ + ih_x`. If using the GPU for the response, this should be a CuPy array.
             lam (double): Ecliptic Longitude in radians.
             beta (double): Ecliptic Latitude in radians.
+            t0 (double, optional): Time at which to the waveform. Because of the delays
+                and interpolation towards earlier times, the beginning of the waveform
+                is garbage. ``t0`` tells the waveform generator where to start the waveform
+                compraed to ``t=0``.
+
+        Raises:
+            ValueError: If ``t0`` is not large enough.
+
 
         """
 
@@ -588,6 +592,7 @@ class pyResponseTDI(object):
                 "Need to increase t0. The initial buffer is not large enough."
             )
 
+        # determine sky vectors
         k = np.zeros(3, dtype=np.float)
         u = np.zeros(3, dtype=np.float)
         v = np.zeros(3, dtype=np.float)
@@ -649,10 +654,24 @@ class pyResponseTDI(object):
 
     @property
     def XYZ(self):
+        """Return links as an array"""
         return self.delayed_links_flat.reshape(3, -1)
 
     def get_tdi_delays(self):
+        """Get TDI combinations from projections.
 
+        This functions generates the TDI combinations from the projections
+        computed with ``get_projections``. It can return XYZ, AET, or AE depending
+        on what was input for ``tdi_chan`` into ``__init__``.
+
+        Returns:
+            tuple: (X,Y,Z) or (A,E,T) or (A,E)
+
+        Raises:
+            ValueError: If ``tdi_chan`` is not one of the options.
+
+
+        """
         for key, item in self.orbits_store["tdi"].items():
             setattr(self, key, item)
 
@@ -690,7 +709,8 @@ class pyResponseTDI(object):
         )
 
         if self.tdi_chan == "XYZ":
-            return self.XYZ
+            X, Y, Z = self.XYZ
+            return X, Y, Z
 
         elif self.tdi_chan == "AET" or self.tdi_chan == "AE":
             X, Y, Z = self.XYZ
@@ -729,6 +749,8 @@ class ResponseWrapper:
             with the :code:`*args` formalism producing a list. :code:`index_beta`
             tells the class the index of the ecliptic latitude (or ecliptic polar angle)
             within this list of parameters.
+        t0 (double, optional): Start of returned waveform in seconds leaving ample time for garbage at
+            the beginning of the waveform. It also removed the same amount from the end. (Default: 10000.0)
         flip_hx (bool, optional): If True, :code:`waveform_gen` produces :math:`h_+ - ih_x`.
             :class:`pyResponseTDI` takes :math:`h_+ + ih_x`, so this setting will
             multiply the cross polarization term out of the waveform generator by -1.
@@ -741,6 +763,8 @@ class ResponseWrapper:
             coordinate is the polar angle. In this case, the code will
             convert it with :math:`\beta=\pi / 2 - \Theta`. (Default: :code:`True`)
         use_gpu (bool, optional): If True, use GPU. (Default: :code:`False`)
+        remove_garbage (bool, optional): If True, it removes everything before ``t0``
+            and after the end time - ``t0``. (Default: ``True``)
         **kwargs (dict, optional): Keyword arguments passed to :class:`pyResponseTDI`.
 
     """
@@ -749,15 +773,15 @@ class ResponseWrapper:
         self,
         waveform_gen,
         Tobs,
-        t0,
         dt,
         index_lambda,
         index_beta,
+        t0=10000.0,
         flip_hx=False,
         remove_sky_coords=False,
         is_ecliptic_latitude=True,
         use_gpu=False,
-        remove_garbage=False,
+        remove_garbage=True,
         **kwargs,
     ):
 
@@ -787,6 +811,14 @@ class ResponseWrapper:
             self.xp = np
 
         self.Tobs = (self.n * self.response_model.dt) / YRSID_SI
+
+    @property
+    def citation(self):
+        """Get citations for use of this code"""
+
+        return """
+        # TODO add
+        """
 
     def __call__(self, *args, **kwargs):
         """Run the waveform and response generation
@@ -828,28 +860,7 @@ class ResponseWrapper:
 
         self.response_model.get_projections(h, lam, beta, t0=self.t0)
         tdi_out = self.response_model.get_tdi_delays()
-        """
-        import time
-        num = 5
-        st = time.perf_counter()
-        for _ in range(num):
-            self.response_model.get_projections(h, lam, beta)
 
-        et = time.perf_counter()
-
-        p1 = (et - st) / num
-        # form TDI
-
-        st = time.perf_counter()
-        for _ in range(num):
-            tdi_out = self.response_model.get_tdi_delays()
-
-        et = time.perf_counter()
-        p2 = (et - st) / num
-        print(
-            f"[{self.response_model.order}, {self.response_model.tdi}, {self.Tobs}, {p1}, {p2}],"
-        )
-        """
         out = list(tdi_out)
         if self.remove_garbage:
             for i in range(len(out)):
