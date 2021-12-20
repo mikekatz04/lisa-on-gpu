@@ -1,71 +1,37 @@
-
-
 <!DOCTYPE html>
 <html class="writer-html5" lang="en" >
 <head>
-  <meta charset="utf-8">
-  
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Fast Response Function &mdash; fastlisaresponse 0.1.0 documentation</title>
-  
-
-  
-  <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
-  <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
-
-  
-  
-  
-  
-
-  
+      <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
   <!--[if lt IE 9]>
     <script src="../_static/js/html5shiv.min.js"></script>
   <![endif]-->
   
-    
-      <script type="text/javascript" id="documentation_options" data-url_root="../" src="../_static/documentation_options.js"></script>
+        <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
         <script src="../_static/jquery.js"></script>
         <script src="../_static/underscore.js"></script>
         <script src="../_static/doctools.js"></script>
-        <script src="../_static/language_data.js"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-        <script async="async" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.7/latest.js?config=TeX-AMS-MML_HTMLorMML"></script>
-        <script type="text/x-mathjax-config">MathJax.Hub.Config({"tex2jax": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true, "ignoreClass": "document", "processClass": "math|output_area"}})</script>
-    
-    <script type="text/javascript" src="../_static/js/theme.js"></script>
-
-    
+        <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+    <script src="../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Fast LISA Response Tutorial" href="../fast_LISA_response_tutorial.html" />
     <link rel="prev" title="fastlisaresponse: Generic LISA response function for GPUs" href="../index.html" /> 
 </head>
 
-<body class="wy-body-for-nav">
-
-   
+<body class="wy-body-for-nav"> 
   <div class="wy-grid-for-nav">
-    
     <nav data-toggle="wy-nav-shift" class="wy-nav-side">
       <div class="wy-side-scroll">
         <div class="wy-side-nav-search"  style="background: coral" >
-          
-
-          
-            <a href="../index.html" class="icon icon-home" alt="Documentation Home"> fastlisaresponse
-          
-
-          
+            <a href="../index.html" class="icon icon-home"> fastlisaresponse
           </a>
-
-          
-            
-            
-          
-
-          
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
     <input type="text" name="q" placeholder="Search docs" />
@@ -73,100 +39,45 @@
     <input type="hidden" name="area" value="default" />
   </form>
 </div>
-
-          
-        </div>
-
-        
-        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
-          
-            
-            
-              
-            
-            
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
               <p class="caption"><span class="caption-text">Documentation:</span></p>
 <ul class="current">
 <li class="toctree-l1 current"><a class="current reference internal" href="#">Fast Response Function</a></li>
 <li class="toctree-l1"><a class="reference internal" href="#response-function-wrapper">Response Function Wrapper</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#module-fastlisaresponse.utils.utility">Utilities</a></li>
 </ul>
 <p class="caption"><span class="caption-text">Tutorial:</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../fast_LISA_response_tutorial.html">Fast LISA Response Tutorial</a></li>
 </ul>
 
-            
-          
         </div>
-        
       </div>
     </nav>
 
-    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
-
-      
-      <nav class="wy-nav-top" aria-label="top navigation">
-        
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu"  style="background: coral" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
           <a href="../index.html">fastlisaresponse</a>
-        
       </nav>
 
-
       <div class="wy-nav-content">
-        
         <div class="rst-content">
-        
-          
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-<div role="navigation" aria-label="breadcrumbs navigation">
-
+          <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-    
       <li><a href="../index.html" class="icon icon-home"></a> &raquo;</li>
-        
       <li>Fast Response Function</li>
-    
-    
       <li class="wy-breadcrumbs-aside">
-        
-            
             <a href="../_sources/user/main.rst.txt" rel="nofollow"> View page source</a>
-          
-        
       </li>
-    
-  </ul>
-
-  
-  <div class="rst-breadcrumbs-buttons" role="navigation" aria-label="breadcrumb navigation">
-      
-        <a href="../fast_LISA_response_tutorial.html" class="btn btn-neutral float-right" title="Fast LISA Response Tutorial" accesskey="n">Next <span class="fa fa-arrow-circle-right"></span></a>
-      
-      
-        <a href="../index.html" class="btn btn-neutral float-left" title="fastlisaresponse: Generic LISA response function for GPUs" accesskey="p"><span class="fa fa-arrow-circle-left"></span> Previous</a>
-      
+  </ul><div class="rst-breadcrumbs-buttons" role="navigation" aria-label="Sequential page navigation">
+        <a href="../index.html" class="btn btn-neutral float-left" title="fastlisaresponse: Generic LISA response function for GPUs" accesskey="p"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../fast_LISA_response_tutorial.html" class="btn btn-neutral float-right" title="Fast LISA Response Tutorial" accesskey="n">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
   </div>
-  
   <hr/>
 </div>
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
-            
+             
   
 <style>
 /* CSS overrides for sphinx_rtd_theme */
@@ -191,11 +102,11 @@
     text-align: unset;
 }
 </style>
-<div class="section" id="fast-response-function">
-<h1>Fast Response Function<a class="headerlink" href="#fast-response-function" title="Permalink to this headline">¶</a></h1>
+<section id="fast-response-function">
+<h1>Fast Response Function<a class="headerlink" href="#fast-response-function" title="Permalink to this headline"></a></h1>
 <dl class="py class">
-<dt id="fastlisaresponse.response.pyResponseTDI">
-<em class="property">class </em><code class="sig-prename descclassname">fastlisaresponse.response.</code><code class="sig-name descname">pyResponseTDI</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">sampling_frequency</span></em>, <em class="sig-param"><span class="n">num_pts</span></em>, <em class="sig-param"><span class="n">orbit_kwargs</span></em>, <em class="sig-param"><span class="n">order</span><span class="o">=</span><span class="default_value">25</span></em>, <em class="sig-param"><span class="n">tdi</span><span class="o">=</span><span class="default_value">'1st generation'</span></em>, <em class="sig-param"><span class="n">tdi_orbit_kwargs</span><span class="o">=</span><span class="default_value">{}</span></em>, <em class="sig-param"><span class="n">tdi_chan</span><span class="o">=</span><span class="default_value">'XYZ'</span></em>, <em class="sig-param"><span class="n">use_gpu</span><span class="o">=</span><span class="default_value">False</span></em><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI">
+<em class="property"><span class="pre">class</span> </em><span class="sig-prename descclassname"><span class="pre">fastlisaresponse.response.</span></span><span class="sig-name descname"><span class="pre">pyResponseTDI</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sampling_frequency</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_pts</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">orbit_kwargs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">order</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">25</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tdi</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'1st</span> <span class="pre">generation'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tdi_orbit_kwargs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">{}</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tdi_chan</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'XYZ'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_gpu</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI" title="Permalink to this definition"></a></dt>
 <dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
 <p>Class container for fast LISA response function generation.</p>
 <p>The class computes the generic time-domain response function for LISA.
@@ -222,11 +133,13 @@ waveform being used. (default: 25)</p></li>
 <li><p><strong>tdi</strong> (<em>str</em><em> or </em><em>list</em><em>, </em><em>optional</em>) – TDI setup. Currently, the stock options are
 <code class="code docutils literal notranslate"><span class="pre">'1st</span> <span class="pre">generation'</span></code> and <code class="code docutils literal notranslate"><span class="pre">'2nd</span> <span class="pre">generation'</span></code>. Or the user can provide
 a list of tdi_combinations of the form
-<code class="code docutils literal notranslate"><span class="pre">{&quot;link&quot;:</span> <span class="pre">12,</span> <span class="pre">&quot;links_for_delay&quot;:</span> <span class="pre">[21,</span> <span class="pre">13,</span> <span class="pre">31],</span> <span class="pre">&quot;sign&quot;:</span> <span class="pre">1}</span></code>.
-<code class="code docutils literal notranslate"><span class="pre">'link'</span></code> (<cite>int</cite>) the link index (12, 21, 13, 31, 23, 32) for the projection (<span class="math notranslate nohighlight">\(y_{gw}\)</span>).
-<code class="code docutils literal notranslate"><span class="pre">'links_for_delay'</span></code> (<cite>list</cite>) are the link indexes as a list with which delays
-are applied. <cite>‘sign’</cite> is the sign in front of the contribution to the TDI observable.
-It takes the value of <cite>1</cite> or <cite>-1</cite>. (default: <cite>‘1st generation’</cite>)</p></li>
+<code class="code docutils literal notranslate"><span class="pre">{&quot;link&quot;:</span> <span class="pre">12,</span> <span class="pre">&quot;links_for_delay&quot;:</span> <span class="pre">[21,</span> <span class="pre">13,</span> <span class="pre">31],</span> <span class="pre">&quot;sign&quot;:</span> <span class="pre">1,</span> <span class="pre">&quot;type&quot;:</span> <span class="pre">&quot;delay&quot;}</span></code>.
+<code class="code docutils literal notranslate"><span class="pre">'link'</span></code> (<cite>int</cite>) the link index (12, 21, 13, 31, 23, 32) for the projection (<span class="math notranslate nohighlight">\(y_{ij}\)</span>).
+<code class="code docutils literal notranslate"><span class="pre">'links_for_delay'</span></code> (<cite>list</cite>) are the link indexes as a list used for delays
+applied to the link projections.
+<code class="docutils literal notranslate"><span class="pre">'sign'</span></code> is the sign in front of the contribution to the TDI observable. It takes the value of <cite>+1</cite> or <cite>-1</cite>.
+<code class="docutils literal notranslate"><span class="pre">type</span></code> is either <code class="docutils literal notranslate"><span class="pre">&quot;delay&quot;</span></code> or <code class="docutils literal notranslate"><span class="pre">&quot;advance&quot;</span></code>. It is optional and defaults to <code class="docutils literal notranslate"><span class="pre">&quot;delay&quot;</span></code>.
+(default: <code class="docutils literal notranslate"><span class="pre">&quot;1st</span> <span class="pre">generation&quot;</span></code>)</p></li>
 <li><p><strong>tdi_orbit_kwargs</strong> (<em>dict</em><em>, </em><em>optional</em>) – Same as <code class="code docutils literal notranslate"><span class="pre">orbit_kwargs</span></code>, but specifically for the TDI
 portion of the response computation. This allows the user to use two different orbits
 for the projections and TDI. For example, this can be used to examine the efficacy of
@@ -241,8 +154,8 @@ and TDI will be the same and will be built from <code class="code docutils liter
 </dd>
 </dl>
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.A_in">
-<code class="sig-name descname">A_in</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.A_in" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.A_in">
+<span class="sig-name descname"><span class="pre">A_in</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.A_in" title="Permalink to this definition"></a></dt>
 <dd><p>Array containing y values for linear spline of A
 during Lagrangian interpolation.</p>
 <dl class="field-list simple">
@@ -253,8 +166,8 @@ during Lagrangian interpolation.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.buffer_integer">
-<code class="sig-name descname">buffer_integer</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.buffer_integer" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.buffer_integer">
+<span class="sig-name descname"><span class="pre">buffer_integer</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.buffer_integer" title="Permalink to this definition"></a></dt>
 <dd><p>Self-determined buffer necesary for the given
 value for <code class="code docutils literal notranslate"><span class="pre">order</span></code>.</p>
 <dl class="field-list simple">
@@ -265,8 +178,8 @@ value for <code class="code docutils literal notranslate"><span class="pre">orde
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.channels_no_delays">
-<code class="sig-name descname">channels_no_delays</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.channels_no_delays" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.channels_no_delays">
+<span class="sig-name descname"><span class="pre">channels_no_delays</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.channels_no_delays" title="Permalink to this definition"></a></dt>
 <dd><p>Carrier of link index and sign information
 for arms that do not get delayed during TDI computation.</p>
 <dl class="field-list simple">
@@ -277,8 +190,8 @@ for arms that do not get delayed during TDI computation.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.deps">
-<code class="sig-name descname">deps</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.deps" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.deps">
+<span class="sig-name descname"><span class="pre">deps</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.deps" title="Permalink to this definition"></a></dt>
 <dd><p>The spacing between Epsilon values in the interpolant
 for the A quantity in Lagrangian interpolation. Hard coded to
 1/(<code class="code docutils literal notranslate"><span class="pre">num_A</span></code> - 1).</p>
@@ -290,8 +203,8 @@ for the A quantity in Lagrangian interpolation. Hard coded to
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.dt">
-<code class="sig-name descname">dt</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.dt" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.dt">
+<span class="sig-name descname"><span class="pre">dt</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.dt" title="Permalink to this definition"></a></dt>
 <dd><p>Inverse of the sampling_frequency.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type</dt>
@@ -301,8 +214,8 @@ for the A quantity in Lagrangian interpolation. Hard coded to
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.E_in">
-<code class="sig-name descname">E_in</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.E_in" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.E_in">
+<span class="sig-name descname"><span class="pre">E_in</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.E_in" title="Permalink to this definition"></a></dt>
 <dd><p>Array containing y values for linear spline of E
 during Lagrangian interpolation.</p>
 <dl class="field-list simple">
@@ -313,8 +226,8 @@ during Lagrangian interpolation.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.half_order">
-<code class="sig-name descname">half_order</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.half_order" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.half_order">
+<span class="sig-name descname"><span class="pre">half_order</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.half_order" title="Permalink to this definition"></a></dt>
 <dd><p>Half of <code class="code docutils literal notranslate"><span class="pre">order</span></code> adjusted to be <code class="code docutils literal notranslate"><span class="pre">int</span></code>.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type</dt>
@@ -324,8 +237,8 @@ during Lagrangian interpolation.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.link_inds">
-<code class="sig-name descname">link_inds</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.link_inds" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.link_inds">
+<span class="sig-name descname"><span class="pre">link_inds</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.link_inds" title="Permalink to this definition"></a></dt>
 <dd><p>Link indexes for delays in TDI.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type</dt>
@@ -335,8 +248,8 @@ during Lagrangian interpolation.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.link_space_craft_0_in">
-<code class="sig-name descname">link_space_craft_0_in</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.link_space_craft_0_in" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.link_space_craft_0_in">
+<span class="sig-name descname"><span class="pre">link_space_craft_0_in</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.link_space_craft_0_in" title="Permalink to this definition"></a></dt>
 <dd><p>Link indexes for emitter on each
 arm of the LISA constellation.</p>
 <dl class="field-list simple">
@@ -347,8 +260,8 @@ arm of the LISA constellation.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.link_space_craft_1_in">
-<code class="sig-name descname">link_space_craft_1_in</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.link_space_craft_1_in" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.link_space_craft_1_in">
+<span class="sig-name descname"><span class="pre">link_space_craft_1_in</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.link_space_craft_1_in" title="Permalink to this definition"></a></dt>
 <dd><p>Link indexes for receiver on each
 arm of the LISA constellation.</p>
 <dl class="field-list simple">
@@ -359,8 +272,8 @@ arm of the LISA constellation.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.nlinks">
-<code class="sig-name descname">nlinks</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.nlinks" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.nlinks">
+<span class="sig-name descname"><span class="pre">nlinks</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.nlinks" title="Permalink to this definition"></a></dt>
 <dd><p>The number of links in the constellation. Typically 6.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type</dt>
@@ -370,8 +283,8 @@ arm of the LISA constellation.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.num_A">
-<code class="sig-name descname">num_A</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.num_A" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.num_A">
+<span class="sig-name descname"><span class="pre">num_A</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.num_A" title="Permalink to this definition"></a></dt>
 <dd><p>Number of points to use for A spline values used in the Lagrangian
 interpolation. This is hard coded to 1001.</p>
 <dl class="field-list simple">
@@ -382,8 +295,8 @@ interpolation. This is hard coded to 1001.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.num_channels">
-<code class="sig-name descname">num_channels</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.num_channels" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.num_channels">
+<span class="sig-name descname"><span class="pre">num_channels</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.num_channels" title="Permalink to this definition"></a></dt>
 <dd><ol class="arabic simple" start="3">
 <li></li>
 </ol>
@@ -395,8 +308,8 @@ interpolation. This is hard coded to 1001.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.num_pts">
-<code class="sig-name descname">num_pts</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.num_pts" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.num_pts">
+<span class="sig-name descname"><span class="pre">num_pts</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.num_pts" title="Permalink to this definition"></a></dt>
 <dd><p>Number of points to produce for the final output template.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type</dt>
@@ -406,8 +319,8 @@ interpolation. This is hard coded to 1001.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.num_tdi_combinations">
-<code class="sig-name descname">num_tdi_combinations</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.num_tdi_combinations" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.num_tdi_combinations">
+<span class="sig-name descname"><span class="pre">num_tdi_combinations</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.num_tdi_combinations" title="Permalink to this definition"></a></dt>
 <dd><p>Number of independent arm computations.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type</dt>
@@ -417,8 +330,8 @@ interpolation. This is hard coded to 1001.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.num_tdi_delay_comps">
-<code class="sig-name descname">num_tdi_delay_comps</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.num_tdi_delay_comps" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.num_tdi_delay_comps">
+<span class="sig-name descname"><span class="pre">num_tdi_delay_comps</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.num_tdi_delay_comps" title="Permalink to this definition"></a></dt>
 <dd><p>Number of independent arm computations that require delays.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type</dt>
@@ -428,8 +341,8 @@ interpolation. This is hard coded to 1001.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.orbits_store">
-<code class="sig-name descname">orbits_store</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.orbits_store" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.orbits_store">
+<span class="sig-name descname"><span class="pre">orbits_store</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.orbits_store" title="Permalink to this definition"></a></dt>
 <dd><p>Contains orbital information for the projection and TDI
 steps.</p>
 <dl class="field-list simple">
@@ -440,8 +353,8 @@ steps.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.order">
-<code class="sig-name descname">order</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.order" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.order">
+<span class="sig-name descname"><span class="pre">order</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.order" title="Permalink to this definition"></a></dt>
 <dd><p>Order of Lagrangian interpolation technique.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type</dt>
@@ -451,8 +364,8 @@ steps.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.response_gen">
-<code class="sig-name descname">response_gen</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.response_gen" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.response_gen">
+<span class="sig-name descname"><span class="pre">response_gen</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.response_gen" title="Permalink to this definition"></a></dt>
 <dd><p>Projection generator function.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type</dt>
@@ -462,8 +375,8 @@ steps.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.sampling_frequency">
-<code class="sig-name descname">sampling_frequency</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.sampling_frequency" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.sampling_frequency">
+<span class="sig-name descname"><span class="pre">sampling_frequency</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.sampling_frequency" title="Permalink to this definition"></a></dt>
 <dd><p>The sampling rate in Hz.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type</dt>
@@ -473,8 +386,8 @@ steps.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.tdi">
-<code class="sig-name descname">tdi</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.tdi" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.tdi">
+<span class="sig-name descname"><span class="pre">tdi</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.tdi" title="Permalink to this definition"></a></dt>
 <dd><p>TDI setup.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type</dt>
@@ -484,8 +397,8 @@ steps.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.tdi_buffer">
-<code class="sig-name descname">tdi_buffer</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.tdi_buffer" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.tdi_buffer">
+<span class="sig-name descname"><span class="pre">tdi_buffer</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.tdi_buffer" title="Permalink to this definition"></a></dt>
 <dd><p>The buffer necessary for all information needed at early times
 for the TDI computation. This is set to 200.</p>
 <dl class="field-list simple">
@@ -496,8 +409,8 @@ for the TDI computation. This is set to 200.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.tdi_chan">
-<code class="sig-name descname">tdi_chan</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.tdi_chan" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.tdi_chan">
+<span class="sig-name descname"><span class="pre">tdi_chan</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.tdi_chan" title="Permalink to this definition"></a></dt>
 <dd><p>Which TDI channel combination to return.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type</dt>
@@ -507,8 +420,8 @@ for the TDI computation. This is set to 200.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.tdi_delays">
-<code class="sig-name descname">tdi_delays</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.tdi_delays" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.tdi_delays">
+<span class="sig-name descname"><span class="pre">tdi_delays</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.tdi_delays" title="Permalink to this definition"></a></dt>
 <dd><p>TDI delays.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type</dt>
@@ -518,8 +431,8 @@ for the TDI computation. This is set to 200.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.tdi_gen">
-<code class="sig-name descname">tdi_gen</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.tdi_gen" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.tdi_gen">
+<span class="sig-name descname"><span class="pre">tdi_gen</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.tdi_gen" title="Permalink to this definition"></a></dt>
 <dd><p>TDI generating function.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type</dt>
@@ -529,8 +442,8 @@ for the TDI computation. This is set to 200.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.tdi_signs">
-<code class="sig-name descname">tdi_signs</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.tdi_signs" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.tdi_signs">
+<span class="sig-name descname"><span class="pre">tdi_signs</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.tdi_signs" title="Permalink to this definition"></a></dt>
 <dd><p>Signs applied to the addition of a delayed link. (+1 or -1)</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type</dt>
@@ -540,8 +453,8 @@ for the TDI computation. This is set to 200.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.use_gpu">
-<code class="sig-name descname">use_gpu</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.use_gpu" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.use_gpu">
+<span class="sig-name descname"><span class="pre">use_gpu</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.use_gpu" title="Permalink to this definition"></a></dt>
 <dd><p>If True, run on GPU.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type</dt>
@@ -551,8 +464,8 @@ for the TDI computation. This is set to 200.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt id="fastlisaresponse.response.pyResponseTDI.xp">
-<code class="sig-name descname">xp</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.xp" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.xp">
+<span class="sig-name descname"><span class="pre">xp</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.xp" title="Permalink to this definition"></a></dt>
 <dd><p>Either Numpy or Cupy.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type</dt>
@@ -561,21 +474,21 @@ for the TDI computation. This is set to 200.</p>
 </dl>
 </dd></dl>
 
-<dl class="py method">
-<dt id="fastlisaresponse.response.pyResponseTDI.citation">
-<em class="property">property </em><code class="sig-name descname">citation</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.citation" title="Permalink to this definition">¶</a></dt>
+<dl class="py property">
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.citation">
+<em class="property"><span class="pre">property</span> </em><span class="sig-name descname"><span class="pre">citation</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.citation" title="Permalink to this definition"></a></dt>
 <dd><p>Get citations for use of this code</p>
 </dd></dl>
 
-<dl class="py method">
-<dt id="fastlisaresponse.response.pyResponseTDI.y_gw">
-<em class="property">property </em><code class="sig-name descname">y_gw</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.y_gw" title="Permalink to this definition">¶</a></dt>
+<dl class="py property">
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.y_gw">
+<em class="property"><span class="pre">property</span> </em><span class="sig-name descname"><span class="pre">y_gw</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.y_gw" title="Permalink to this definition"></a></dt>
 <dd><p>Projections along the arms</p>
 </dd></dl>
 
 <dl class="py method">
-<dt id="fastlisaresponse.response.pyResponseTDI.get_projections">
-<code class="sig-name descname">get_projections</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">input_in</span></em>, <em class="sig-param"><span class="n">lam</span></em>, <em class="sig-param"><span class="n">beta</span></em>, <em class="sig-param"><span class="n">t0</span><span class="o">=</span><span class="default_value">10000.0</span></em><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.get_projections" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.get_projections">
+<span class="sig-name descname"><span class="pre">get_projections</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_in</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lam</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">beta</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">t0</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">10000.0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.get_projections" title="Permalink to this definition"></a></dt>
 <dd><p>Compute projections of GW signal on to LISA constellation</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -596,15 +509,15 @@ compraed to <code class="docutils literal notranslate"><span class="pre">t=0</sp
 </dl>
 </dd></dl>
 
-<dl class="py method">
-<dt id="fastlisaresponse.response.pyResponseTDI.XYZ">
-<em class="property">property </em><code class="sig-name descname">XYZ</code><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.XYZ" title="Permalink to this definition">¶</a></dt>
+<dl class="py property">
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.XYZ">
+<em class="property"><span class="pre">property</span> </em><span class="sig-name descname"><span class="pre">XYZ</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.XYZ" title="Permalink to this definition"></a></dt>
 <dd><p>Return links as an array</p>
 </dd></dl>
 
 <dl class="py method">
-<dt id="fastlisaresponse.response.pyResponseTDI.get_tdi_delays">
-<code class="sig-name descname">get_tdi_delays</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.get_tdi_delays" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.get_tdi_delays">
+<span class="sig-name descname"><span class="pre">get_tdi_delays</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.get_tdi_delays" title="Permalink to this definition"></a></dt>
 <dd><p>Get TDI combinations from projections.</p>
 <p>This functions generates the TDI combinations from the projections
 computed with <code class="docutils literal notranslate"><span class="pre">get_projections</span></code>. It can return XYZ, AET, or AE depending
@@ -624,12 +537,12 @@ on what was input for <code class="docutils literal notranslate"><span class="pr
 
 </dd></dl>
 
-</div>
-<div class="section" id="response-function-wrapper">
-<h1>Response Function Wrapper<a class="headerlink" href="#response-function-wrapper" title="Permalink to this headline">¶</a></h1>
+</section>
+<section id="response-function-wrapper">
+<h1>Response Function Wrapper<a class="headerlink" href="#response-function-wrapper" title="Permalink to this headline"></a></h1>
 <dl class="py class">
-<dt id="fastlisaresponse.response.ResponseWrapper">
-<em class="property">class </em><code class="sig-prename descclassname">fastlisaresponse.response.</code><code class="sig-name descname">ResponseWrapper</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">waveform_gen</span></em>, <em class="sig-param"><span class="n">Tobs</span></em>, <em class="sig-param"><span class="n">dt</span></em>, <em class="sig-param"><span class="n">index_lambda</span></em>, <em class="sig-param"><span class="n">index_beta</span></em>, <em class="sig-param"><span class="n">t0</span><span class="o">=</span><span class="default_value">10000.0</span></em>, <em class="sig-param"><span class="n">flip_hx</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">remove_sky_coords</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">is_ecliptic_latitude</span><span class="o">=</span><span class="default_value">True</span></em>, <em class="sig-param"><span class="n">use_gpu</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">remove_garbage</span><span class="o">=</span><span class="default_value">True</span></em>, <em class="sig-param"><span class="o">**</span><span class="n">kwargs</span></em><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.response.ResponseWrapper" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.ResponseWrapper">
+<em class="property"><span class="pre">class</span> </em><span class="sig-prename descclassname"><span class="pre">fastlisaresponse.response.</span></span><span class="sig-name descname"><span class="pre">ResponseWrapper</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">waveform_gen</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">Tobs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dt</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">index_lambda</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">index_beta</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">t0</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">10000.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">flip_hx</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">remove_sky_coords</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">is_ecliptic_latitude</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_gpu</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">remove_garbage</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.response.ResponseWrapper" title="Permalink to this definition"></a></dt>
 <dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
 <p>Wrapper to produce LISA TDI from TD waveforms</p>
 <p>This class takes a waveform generator that produces <span class="math notranslate nohighlight">\(h_+ \pm ih_x\)</span>.
@@ -673,15 +586,15 @@ and after the end time - <code class="docutils literal notranslate"><span class=
 </ul>
 </dd>
 </dl>
-<dl class="py method">
-<dt id="fastlisaresponse.response.ResponseWrapper.citation">
-<em class="property">property </em><code class="sig-name descname">citation</code><a class="headerlink" href="#fastlisaresponse.response.ResponseWrapper.citation" title="Permalink to this definition">¶</a></dt>
+<dl class="py property">
+<dt class="sig sig-object py" id="fastlisaresponse.response.ResponseWrapper.citation">
+<em class="property"><span class="pre">property</span> </em><span class="sig-name descname"><span class="pre">citation</span></span><a class="headerlink" href="#fastlisaresponse.response.ResponseWrapper.citation" title="Permalink to this definition"></a></dt>
 <dd><p>Get citations for use of this code</p>
 </dd></dl>
 
 <dl class="py method">
-<dt id="fastlisaresponse.response.ResponseWrapper.__call__">
-<code class="sig-name descname">__call__</code><span class="sig-paren">(</span><em class="sig-param"><span class="o">*</span><span class="n">args</span></em>, <em class="sig-param"><span class="o">**</span><span class="n">kwargs</span></em><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.response.ResponseWrapper.__call__" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="fastlisaresponse.response.ResponseWrapper.__call__">
+<span class="sig-name descname"><span class="pre">__call__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.response.ResponseWrapper.__call__" title="Permalink to this definition"></a></dt>
 <dd><p>Run the waveform and response generation</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -702,62 +615,40 @@ the sky coordinates.</p></li>
 
 </dd></dl>
 
-</div>
+</section>
+<section id="module-fastlisaresponse.utils.utility">
+<span id="utilities"></span><h1>Utilities<a class="headerlink" href="#module-fastlisaresponse.utils.utility" title="Permalink to this headline"></a></h1>
+</section>
 
 
            </div>
-           
           </div>
-          <footer>
-  
-    <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
-      
-        <a href="../fast_LISA_response_tutorial.html" class="btn btn-neutral float-right" title="Fast LISA Response Tutorial" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right"></span></a>
-      
-      
-        <a href="../index.html" class="btn btn-neutral float-left" title="fastlisaresponse: Generic LISA response function for GPUs" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left"></span> Previous</a>
-      
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../index.html" class="btn btn-neutral float-left" title="fastlisaresponse: Generic LISA response function for GPUs" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../fast_LISA_response_tutorial.html" class="btn btn-neutral float-right" title="Fast LISA Response Tutorial" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
-  
 
   <hr/>
 
   <div role="contentinfo">
-    <p>
-        
-        &copy; Copyright 2021, Michael Katz, Jean-Baptiste Bayle, Alvin Chua, Michele Vallisneri
-
-    </p>
+    <p>&#169; Copyright 2021, Michael Katz, Jean-Baptiste Bayle, Alvin Chua, Michele Vallisneri.</p>
   </div>
-    
-    
-    
-    Built with <a href="http://sphinx-doc.org/">Sphinx</a> using a
-    
-    <a href="https://github.com/rtfd/sphinx_rtd_theme">theme</a>
-    
-    provided by <a href="https://readthedocs.org">Read the Docs</a>. 
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
 
 </footer>
-
         </div>
       </div>
-
     </section>
-
   </div>
-  
-
-  <script type="text/javascript">
+  <script>
       jQuery(function () {
           SphinxRtdTheme.Navigation.enable(true);
       });
-  </script>
-
-  
-  
-    
-   
+  </script> 
 
 </body>
 </html>

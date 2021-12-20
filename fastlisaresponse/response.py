@@ -98,11 +98,13 @@ class pyResponseTDI(object):
         tdi (str or list, optional): TDI setup. Currently, the stock options are
             :code:`'1st generation'` and :code:`'2nd generation'`. Or the user can provide
             a list of tdi_combinations of the form
-            :code:`{"link": 12, "links_for_delay": [21, 13, 31], "sign": 1}`.
-            :code:`'link'` (`int`) the link index (12, 21, 13, 31, 23, 32) for the projection (:math:`y_{gw}`).
-            :code:`'links_for_delay'` (`list`) are the link indexes as a list with which delays
-            are applied. `'sign'` is the sign in front of the contribution to the TDI observable.
-            It takes the value of `1` or `-1`. (default: `'1st generation'`)
+            :code:`{"link": 12, "links_for_delay": [21, 13, 31], "sign": 1, "type": "delay"}`.
+            :code:`'link'` (`int`) the link index (12, 21, 13, 31, 23, 32) for the projection (:math:`y_{ij}`).
+            :code:`'links_for_delay'` (`list`) are the link indexes as a list used for delays
+            applied to the link projections.
+            ``'sign'`` is the sign in front of the contribution to the TDI observable. It takes the value of `+1` or `-1`.
+            ``type`` is either ``"delay"`` or ``"advance"``. It is optional and defaults to ``"delay"``.
+            (default: ``"1st generation"``)
         tdi_orbit_kwargs (dict, optional): Same as :code:`orbit_kwargs`, but specifically for the TDI
             portion of the response computation. This allows the user to use two different orbits
             for the projections and TDI. For example, this can be used to examine the efficacy of
@@ -428,45 +430,47 @@ class pyResponseTDI(object):
             link_dict[int(str(sc0 + 1) + str(sc1 + 1))] = link_i
 
         # setup the actual TDI combination
-        if self.tdi == "1st generation":
+        if self.tdi in ["1st generation", "2nd generation"]:
+            # tdi 1.0
             tdi_combinations = [
-                {"link": 12, "links_for_delay": [21, 13, 31], "sign": 1},
-                {"link": 12, "links_for_delay": [21], "sign": -1},
-                {"link": 21, "links_for_delay": [13, 31], "sign": 1},
-                {"link": 21, "links_for_delay": [], "sign": -1},
-                {"link": 13, "links_for_delay": [31], "sign": +1},
-                {"link": 13, "links_for_delay": [31, 12, 21], "sign": -1},
-                {"link": 31, "links_for_delay": [], "sign": 1},
-                {"link": 31, "links_for_delay": [12, 21], "sign": -1},
+                {"link": 13, "links_for_delay": [], "sign": +1},
+                {"link": 31, "links_for_delay": [13], "sign": +1},
+                {"link": 12, "links_for_delay": [13, 31], "sign": +1},
+                {"link": 21, "links_for_delay": [13, 31, 12], "sign": +1},
+                {"link": 12, "links_for_delay": [], "sign": -1},
+                {"link": 21, "links_for_delay": [12], "sign": -1},
+                {"link": 13, "links_for_delay": [12, 21], "sign": -1},
+                {"link": 31, "links_for_delay": [12, 21, 13], "sign": -1},
             ]
 
-        elif self.tdi == "2nd generation":
-            tdi_combinations = [
-                {"link": 13, "links_for_delay": [], "sign": 1},
-                {"link": 31, "links_for_delay": [21], "sign": 1},
-                {"link": 12, "links_for_delay": [21, 23], "sign": 1},
-                {"link": 21, "links_for_delay": [21, 23, 31], "sign": 1},
-                {"link": 12, "links_for_delay": [21, 23, 31, 32], "sign": 1},
-                {"link": 21, "links_for_delay": [21, 23, 31, 32, 31], "sign": 1},
-                {"link": 13, "links_for_delay": [21, 23, 31, 32, 31, 32], "sign": 1},
-                {
-                    "link": 31,
-                    "links_for_delay": [21, 23, 31, 32, 31, 32, 21],
-                    "sign": 1,
-                },
-                {"link": 12, "links_for_delay": [], "sign": -1},
-                {"link": 21, "links_for_delay": [31], "sign": -1},
-                {"link": 13, "links_for_delay": [31, 32], "sign": -1},
-                {"link": 31, "links_for_delay": [31, 32, 21], "sign": -1},
-                {"link": 13, "links_for_delay": [31, 32, 21, 23], "sign": -1},
-                {"link": 31, "links_for_delay": [31, 32, 21, 23, 21], "sign": -1},
-                {"link": 12, "links_for_delay": [31, 32, 21, 23, 21, 23], "sign": -1},
-                {
-                    "link": 21,
-                    "links_for_delay": [31, 32, 21, 23, 21, 23, 31],
-                    "sign": -1,
-                },
-            ]
+            if self.tdi == "2nd generation":
+                # tdi 2.0 is tdi 1.0 + additional terms
+                tdi_combinations += [
+                    {"link": 12, "links_for_delay": [13, 31, 12, 21], "sign": +1},
+                    {"link": 21, "links_for_delay": [13, 31, 12, 21, 12], "sign": +1},
+                    {
+                        "link": 13,
+                        "links_for_delay": [13, 31, 12, 21, 12, 21],
+                        "sign": +1,
+                    },
+                    {
+                        "link": 31,
+                        "links_for_delay": [13, 31, 12, 21, 12, 21, 13],
+                        "sign": +1,
+                    },
+                    {"link": 13, "links_for_delay": [12, 21, 13, 31], "sign": -1},
+                    {"link": 13, "links_for_delay": [12, 21, 13, 31, 13], "sign": -1},
+                    {
+                        "link": 13,
+                        "links_for_delay": [12, 21, 13, 31, 13, 31],
+                        "sign": -1,
+                    },
+                    {
+                        "link": 13,
+                        "links_for_delay": [12, 21, 13, 31, 13, 31, 12],
+                        "sign": -1,
+                    },
+                ]
 
         elif isinstance(self.tdi, list):
             tdi_combinations = self.tdi
@@ -517,7 +521,12 @@ class pyResponseTDI(object):
                 for link in tdi["links_for_delay"]:
                     link = self._cyclic_permutation(link, j)
                     link_index = link_dict[link]
-                    delays[j][i] -= self.L_in_for_TDI[link_index]
+
+                    # handles advancements
+                    if "type" in tdi and tdi["type"] == "advance":
+                        delays[j][i] += self.L_in_for_TDI[link_index]
+                    else:
+                        delays[j][i] -= self.L_in_for_TDI[link_index]
 
                 if j == 0:
                     signs.append(tdi["sign"])

@@ -1,70 +1,36 @@
-
-
 <!DOCTYPE html>
 <html class="writer-html5" lang="en" >
 <head>
-  <meta charset="utf-8">
-  
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Fast LISA Response Tutorial &mdash; fastlisaresponse 0.1.0 documentation</title>
-  
-
-  
-  <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
-  <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
-
-  
-  
-  
-  
-
-  
+      <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
   <!--[if lt IE 9]>
     <script src="_static/js/html5shiv.min.js"></script>
   <![endif]-->
   
-    
-      <script type="text/javascript" id="documentation_options" data-url_root="./" src="_static/documentation_options.js"></script>
+        <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js"></script>
         <script src="_static/jquery.js"></script>
         <script src="_static/underscore.js"></script>
         <script src="_static/doctools.js"></script>
-        <script src="_static/language_data.js"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-        <script async="async" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.7/latest.js?config=TeX-AMS-MML_HTMLorMML"></script>
-        <script type="text/x-mathjax-config">MathJax.Hub.Config({"tex2jax": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true, "ignoreClass": "document", "processClass": "math|output_area"}})</script>
-    
-    <script type="text/javascript" src="_static/js/theme.js"></script>
-
-    
+        <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+    <script src="_static/js/theme.js"></script>
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
     <link rel="prev" title="Fast Response Function" href="user/main.html" /> 
 </head>
 
-<body class="wy-body-for-nav">
-
-   
+<body class="wy-body-for-nav"> 
   <div class="wy-grid-for-nav">
-    
     <nav data-toggle="wy-nav-shift" class="wy-nav-side">
       <div class="wy-side-scroll">
         <div class="wy-side-nav-search"  style="background: coral" >
-          
-
-          
-            <a href="index.html" class="icon icon-home" alt="Documentation Home"> fastlisaresponse
-          
-
-          
+            <a href="index.html" class="icon icon-home"> fastlisaresponse
           </a>
-
-          
-            
-            
-          
-
-          
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
     <input type="text" name="q" placeholder="Search docs" />
@@ -72,22 +38,12 @@
     <input type="hidden" name="area" value="default" />
   </form>
 </div>
-
-          
-        </div>
-
-        
-        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
-          
-            
-            
-              
-            
-            
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
               <p class="caption"><span class="caption-text">Documentation:</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="user/main.html">Fast Response Function</a></li>
 <li class="toctree-l1"><a class="reference internal" href="user/main.html#response-function-wrapper">Response Function Wrapper</a></li>
+<li class="toctree-l1"><a class="reference internal" href="user/main.html#module-fastlisaresponse.utils.utility">Utilities</a></li>
 </ul>
 <p class="caption"><span class="caption-text">Tutorial:</span></p>
 <ul class="current">
@@ -109,76 +65,32 @@
 </li>
 </ul>
 
-            
-          
         </div>
-        
       </div>
     </nav>
 
-    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
-
-      
-      <nav class="wy-nav-top" aria-label="top navigation">
-        
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu"  style="background: coral" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
           <a href="index.html">fastlisaresponse</a>
-        
       </nav>
 
-
       <div class="wy-nav-content">
-        
         <div class="rst-content">
-        
-          
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-<div role="navigation" aria-label="breadcrumbs navigation">
-
+          <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-    
       <li><a href="index.html" class="icon icon-home"></a> &raquo;</li>
-        
       <li>Fast LISA Response Tutorial</li>
-    
-    
       <li class="wy-breadcrumbs-aside">
-        
-            
             <a href="_sources/fast_LISA_response_tutorial.ipynb.txt" rel="nofollow"> View page source</a>
-          
-        
       </li>
-    
-  </ul>
-
-  
-  <div class="rst-breadcrumbs-buttons" role="navigation" aria-label="breadcrumb navigation">
-      
-      
-        <a href="user/main.html" class="btn btn-neutral float-left" title="Fast Response Function" accesskey="p"><span class="fa fa-arrow-circle-left"></span> Previous</a>
-      
+  </ul><div class="rst-breadcrumbs-buttons" role="navigation" aria-label="Sequential page navigation">
+        <a href="user/main.html" class="btn btn-neutral float-left" title="Fast Response Function" accesskey="p"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
   </div>
-  
   <hr/>
 </div>
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
-            
+             
   
 <style>
 /* CSS for nbsphinx extension */
@@ -449,8 +361,8 @@ div.rendered_html tbody tr:hover {
     text-align: unset;
 }
 </style>
-<div class="section" id="Fast-LISA-Response-Tutorial">
-<h1>Fast LISA Response Tutorial<a class="headerlink" href="#Fast-LISA-Response-Tutorial" title="Permalink to this headline">¶</a></h1>
+<section id="Fast-LISA-Response-Tutorial">
+<h1>Fast LISA Response Tutorial<a class="headerlink" href="#Fast-LISA-Response-Tutorial" title="Permalink to this headline"></a></h1>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[1]:
 </pre></div>
@@ -470,8 +382,8 @@ div.rendered_html tbody tr:hover {
 </div>
 <p>This tutorial provides information on using <code class="docutils literal notranslate"><span class="pre">fastlisaresponse</span></code>: a generic time-domain LISA response function, including both projection on to constellation arms and TDI combinations. It is also GPU/CPU agnostic. The GPU capability is helpful for use in Bayesian inference algorithms. For more information and a detailed API, please see the <a class="reference external" href="https://mikekatz04.github.io/lisa-on-gpu/">documentation</a>.</p>
 <p>If you use this code, please cite (#TODO: add paper) and the code’s Zenodo page (#TODO: add zenodo).</p>
-<div class="section" id="Orbits">
-<h2>Orbits<a class="headerlink" href="#Orbits" title="Permalink to this headline">¶</a></h2>
+<section id="Orbits">
+<h2>Orbits<a class="headerlink" href="#Orbits" title="Permalink to this headline"></a></h2>
 <p>A few files are included with the Github repository. Orbits can also be generated with the LDC orbit module</p>
 <p>Let’s look at <code class="docutils literal notranslate"><span class="pre">esa-trailing-orbits.h5</span></code> and <code class="docutils literal notranslate"><span class="pre">equalarmlength-trailing-fit.h5</span></code>. If you build an orbit file, it needs to be of the same form as these files.</p>
 <div class="nbinput nblast docutils container">
@@ -510,8 +422,8 @@ div.rendered_html tbody tr:hover {
 dict_keys([&#39;l_12&#39;, &#39;l_13&#39;, &#39;l_21&#39;, &#39;l_23&#39;, &#39;l_31&#39;, &#39;l_32&#39;, &#39;sc_1&#39;, &#39;sc_2&#39;, &#39;sc_3&#39;, &#39;t&#39;])
 </pre></div></div>
 </div>
-<div class="section" id="Link-information">
-<h3>Link information<a class="headerlink" href="#Link-information" title="Permalink to this headline">¶</a></h3>
+<section id="Link-information">
+<h3>Link information<a class="headerlink" href="#Link-information" title="Permalink to this headline"></a></h3>
 <p>The link information gives the delay time (<code class="docutils literal notranslate"><span class="pre">tt</span></code>); #TODO fill out; and the vector pointing from the emitter to the receiver (<code class="docutils literal notranslate"><span class="pre">nx</span></code>, <code class="docutils literal notranslate"><span class="pre">ny</span></code>, <code class="docutils literal notranslate"><span class="pre">nz</span></code>).</p>
 <div class="nbinput docutils container">
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[4]:
@@ -559,10 +471,10 @@ dict_keys([&#39;l_12&#39;, &#39;l_13&#39;, &#39;l_21&#39;, &#39;l_23&#39;, &#39;
 <img alt="_images/fast_LISA_response_tutorial_11_1.png" src="_images/fast_LISA_response_tutorial_11_1.png" />
 </div>
 </div>
-</div>
-</div>
-<div class="section" id="Gravitational-wave-signal">
-<h2>Gravitational wave signal<a class="headerlink" href="#Gravitational-wave-signal" title="Permalink to this headline">¶</a></h2>
+</section>
+</section>
+<section id="Gravitational-wave-signal">
+<h2>Gravitational wave signal<a class="headerlink" href="#Gravitational-wave-signal" title="Permalink to this headline"></a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">fastlisaresponse</span></code> takes any time domain signal in the form <span class="math notranslate nohighlight">\(h(t) = h_+ + ih_\times\)</span>. We are going to use a Galactic binary waveform given by</p>
 <div class="math notranslate nohighlight">
 \[h_{+,\text{src}} = -A(1+\cos^2{\iota})\cos{\Phi(t)}\qquad \text{          and}\]</div>
@@ -635,13 +547,13 @@ dict_keys([&#39;l_12&#39;, &#39;l_13&#39;, &#39;l_21&#39;, &#39;l_23&#39;, &#39;
 </pre></div>
 </div>
 </div>
-</div>
-<div class="section" id="Build-waveforms">
-<h2>Build waveforms<a class="headerlink" href="#Build-waveforms" title="Permalink to this headline">¶</a></h2>
+</section>
+<section id="Build-waveforms">
+<h2>Build waveforms<a class="headerlink" href="#Build-waveforms" title="Permalink to this headline"></a></h2>
 <p>We will now move on to the response. The method and specific maths used to determine the response function can be found in our paper: # TODO: add paper. We recommend accessing the response through the <code class="docutils literal notranslate"><span class="pre">fastlisaresponse.ResponseWrapper</span></code> (# TODO: add url to docs). You can access the response function itself through <code class="docutils literal notranslate"><span class="pre">fastlisaresponse.pyTDIResponse</span></code>. See the documentation for using this class directly as it is a bit more complicated. If you need to only to projection or only to TDI, then you
 should access the response class itself. Otherwise, the wrapper should be fine. You can access the projections from the wrapper if need.</p>
-<div class="section" id="Setup-classes">
-<h3>Setup classes<a class="headerlink" href="#Setup-classes" title="Permalink to this headline">¶</a></h3>
+<section id="Setup-classes">
+<h3>Setup classes<a class="headerlink" href="#Setup-classes" title="Permalink to this headline"></a></h3>
 <p>First we will setup everything to properly compute the response function for Galactic binary waveforms.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[8]:
@@ -703,9 +615,9 @@ should access the response class itself. Otherwise, the wrapper should be fine. 
 </pre></div>
 </div>
 </div>
-</div>
-<div class="section" id="Run-generator">
-<h3>Run generator<a class="headerlink" href="#Run-generator" title="Permalink to this headline">¶</a></h3>
+</section>
+<section id="Run-generator">
+<h3>Run generator<a class="headerlink" href="#Run-generator" title="Permalink to this headline"></a></h3>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[9]:
 </pre></div>
@@ -715,9 +627,9 @@ should access the response class itself. Otherwise, the wrapper should be fine. 
 </pre></div>
 </div>
 </div>
-</div>
-<div class="section" id="Plot-results">
-<h3>Plot results<a class="headerlink" href="#Plot-results" title="Permalink to this headline">¶</a></h3>
+</section>
+<section id="Plot-results">
+<h3>Plot results<a class="headerlink" href="#Plot-results" title="Permalink to this headline"></a></h3>
 <div class="nbinput docutils container">
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[10]:
 </pre></div>
@@ -738,10 +650,10 @@ should access the response class itself. Otherwise, the wrapper should be fine. 
 <img alt="_images/fast_LISA_response_tutorial_24_0.png" src="_images/fast_LISA_response_tutorial_24_0.png" />
 </div>
 </div>
-</div>
-</div>
-<div class="section" id="Compare-to-equal-armlength-fit">
-<h2>Compare to equal armlength fit<a class="headerlink" href="#Compare-to-equal-armlength-fit" title="Permalink to this headline">¶</a></h2>
+</section>
+</section>
+<section id="Compare-to-equal-armlength-fit">
+<h2>Compare to equal armlength fit<a class="headerlink" href="#Compare-to-equal-armlength-fit" title="Permalink to this headline"></a></h2>
 <div class="nbinput docutils container">
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[11]:
 </pre></div>
@@ -786,9 +698,9 @@ should access the response class itself. Otherwise, the wrapper should be fine. 
 <img alt="_images/fast_LISA_response_tutorial_26_0.png" src="_images/fast_LISA_response_tutorial_26_0.png" />
 </div>
 </div>
-</div>
-<div class="section" id="Custom-TDI-setup">
-<h2>Custom TDI setup<a class="headerlink" href="#Custom-TDI-setup" title="Permalink to this headline">¶</a></h2>
+</section>
+<section id="Custom-TDI-setup">
+<h2>Custom TDI setup<a class="headerlink" href="#Custom-TDI-setup" title="Permalink to this headline"></a></h2>
 <p>Here is an example of the 2nd Generation TDI implementation within the code.</p>
 <div class="nbinput docutils container">
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[12]:
@@ -858,61 +770,37 @@ should access the response class itself. Otherwise, the wrapper should be fine. 
 <img alt="_images/fast_LISA_response_tutorial_29_0.png" src="_images/fast_LISA_response_tutorial_29_0.png" />
 </div>
 </div>
-</div>
-</div>
+</section>
+</section>
 
 
            </div>
-           
           </div>
-          <footer>
-  
-    <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
-      
-      
-        <a href="user/main.html" class="btn btn-neutral float-left" title="Fast Response Function" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left"></span> Previous</a>
-      
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="user/main.html" class="btn btn-neutral float-left" title="Fast Response Function" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
     </div>
-  
 
   <hr/>
 
   <div role="contentinfo">
-    <p>
-        
-        &copy; Copyright 2021, Michael Katz, Jean-Baptiste Bayle, Alvin Chua, Michele Vallisneri
-
-    </p>
+    <p>&#169; Copyright 2021, Michael Katz, Jean-Baptiste Bayle, Alvin Chua, Michele Vallisneri.</p>
   </div>
-    
-    
-    
-    Built with <a href="http://sphinx-doc.org/">Sphinx</a> using a
-    
-    <a href="https://github.com/rtfd/sphinx_rtd_theme">theme</a>
-    
-    provided by <a href="https://readthedocs.org">Read the Docs</a>. 
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
 
 </footer>
-
         </div>
       </div>
-
     </section>
-
   </div>
-  
-
-  <script type="text/javascript">
+  <script>
       jQuery(function () {
           SphinxRtdTheme.Navigation.enable(true);
       });
-  </script>
-
-  
-  
-    
-   
+  </script> 
 
 </body>
 </html>

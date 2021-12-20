@@ -13,3 +13,8 @@ Response Function Wrapper
     :members:
     :show-inheritance:
     :inherited-members:
+
+Utilities
+~~~~~~~~~~
+
+.. automodule:: fastlisaresponse.utils.utility
