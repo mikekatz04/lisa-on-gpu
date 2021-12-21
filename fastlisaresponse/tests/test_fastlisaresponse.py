@@ -121,7 +121,9 @@ class ResponseTest(unittest.TestCase):
         if gpu_available:
             waveform_gpu = self.run_test("1st generation", True)
             mm = 1.0 - get_overlap(
-                xp.asarray(waveform_cpu), waveform_gpu, use_gpu=gpu_available
+                xp.asarray(waveform_cpu),
+                xp.asarray(waveform_gpu),
+                use_gpu=gpu_available,
             )
             self.assertLess(mm, 1e-10)
 
