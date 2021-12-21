@@ -618,6 +618,39 @@ the sky coordinates.</p></li>
 </section>
 <section id="module-fastlisaresponse.utils.utility">
 <span id="utilities"></span><h1>Utilities<a class="headerlink" href="#module-fastlisaresponse.utils.utility" title="Permalink to this headline"></a></h1>
+<dl class="py function">
+<dt class="sig sig-object py" id="fastlisaresponse.utils.utility.get_overlap">
+<span class="sig-prename descclassname"><span class="pre">fastlisaresponse.utils.utility.</span></span><span class="sig-name descname"><span class="pre">get_overlap</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sig1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sig2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">phase_maximize</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_gpu</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.utils.utility.get_overlap" title="Permalink to this definition"></a></dt>
+<dd><p>Calculate the mismatch across TDI channels</p>
+<p>Calculates the overlap between two sets of TDI observables in the time
+domain. The overlap is complex allowing for the addition of overlap
+over all channels. It can be phase maximized as well.</p>
+<p>This function has GPU capabilities.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>sig1</strong> (<em>list</em><em> or </em><em>xp.ndarray</em>) – TDI observables for first signal. Must be <code class="docutils literal notranslate"><span class="pre">list</span></code> of
+<code class="docutils literal notranslate"><span class="pre">xp.ndarray</span></code> or a single <code class="docutils literal notranslate"><span class="pre">xp.ndarray</span></code>. Must have same length as <code class="docutils literal notranslate"><span class="pre">sig2</span></code> in terms
+of number of channels and length of the indivudal channels.</p></li>
+<li><p><strong>sig2</strong> (<em>list</em><em> or </em><em>xp.ndarray</em>) – TDI observables for second signal. Must be <code class="docutils literal notranslate"><span class="pre">list</span></code> of
+<code class="docutils literal notranslate"><span class="pre">xp.ndarray</span></code> or a single <code class="docutils literal notranslate"><span class="pre">xp.ndarray</span></code>. Must have same length as <code class="docutils literal notranslate"><span class="pre">sig1</span></code> in terms
+of number of channels and length of the individual channels.</p></li>
+<li><p><strong>phase_maximize</strong> (<em>bool</em><em>, </em><em>optional</em>) – If <code class="docutils literal notranslate"><span class="pre">True</span></code>, maximize over the phase in the overlap.
+This is equivalent to getting the magnitude of the phasor that is the complex
+overlap. (Defaut: <code class="docutils literal notranslate"><span class="pre">False</span></code>)</p></li>
+<li><p><strong>use_gpu</strong> (<em>bool</em><em>, </em><em>optional</em>) – If <code class="docutils literal notranslate"><span class="pre">True</span></code>, use the GPU. This sets <code class="docutils literal notranslate"><span class="pre">xp=cupy</span></code>. If <code class="docutils literal notranslate"><span class="pre">False,</span>
+<span class="pre">use</span> <span class="pre">the</span> <span class="pre">CPU</span> <span class="pre">and</span> <span class="pre">set</span> <span class="pre">``xp=numpy</span></code>.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>Overlap as a real value.</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>double</p>
+</dd>
+</dl>
+</dd></dl>
+
 </section>
 
 
