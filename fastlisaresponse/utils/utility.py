@@ -67,9 +67,9 @@ def get_overlap(sig1, sig2, phase_maximize=False, use_gpu=False):
     # complex overlap
     overlap = 0.0 + 1j * 0.0
     for sig1_i, sig2_i in zip(sig1, sig2):
-        overlap_i = np.dot(np.fft.rfft(sig1_i).conj(), np.ftt.rfft(sig2_i)) / np.sqrt(
-            np.dot(np.fft.rfft(sig1_i).conj(), np.ftt.rfft(sig1_i))
-            * np.dot(np.fft.rfft(sig2_i).conj(), np.ftt.rfft(sig2_i))
+        overlap_i = np.dot(np.fft.rfft(sig1_i).conj(), np.fft.rfft(sig2_i)) / np.sqrt(
+            np.dot(np.fft.rfft(sig1_i).conj(), np.fft.rfft(sig1_i))
+            * np.dot(np.fft.rfft(sig2_i).conj(), np.fft.rfft(sig2_i))
         )
 
         overlap += overlap_i
