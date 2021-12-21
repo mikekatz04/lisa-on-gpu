@@ -40,18 +40,33 @@ def get_overlap(sig1, sig2, phase_maximize=False, use_gpu=False):
 
     """
 
+    # choose right array library
     if use_gpu:
         xp = cp
     else:
         xp = np
 
+    # check inputs
     if not isinstance(sig1, list):
         if not isinstance(sig1, xp.ndarray):
             raise ValueError("sig1 must be list of or single xp.ndarray.")
 
+        else:
+            sig1 = [sig1]
+
+    if not isinstance(sig2, list):
+        if not isinstance(sig2, xp.ndarray):
+            raise ValueError("sig1 must be list of or single xp.ndarray.")
+
+        else:
+            sig2 = [sig2]
+
     assert len(sig1) == len(sig2)
+    assert len(sig1[0]) == len(sig2[0])
+
+    # complex overlap
     overlap = 0.0 + 1j * 0.0
-    for sig1_i, sig2_i in zip(sip1, sip2):
+    for sig1_i, sig2_i in zip(sig1, sig2):
         overlap_i = np.dot(np.fft.rfft(sig1_i).conj(), np.ftt.rfft(sig2_i)) / np.sqrt(
             np.dot(np.fft.rfft(sig1_i).conj(), np.ftt.rfft(sig1_i))
             * np.dot(np.fft.rfft(sig2_i).conj(), np.ftt.rfft(sig2_i))
