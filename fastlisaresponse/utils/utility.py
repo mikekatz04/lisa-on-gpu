@@ -1,7 +1,7 @@
 import numpy as np
 
 try:
-    import cupy as xp
+    import cupy as cp
     from pyresponse import get_response_wrap as get_response_wrap_gpu
     from pyresponse import get_tdi_delays_wrap as get_tdi_delays_wrap_gpu
 
