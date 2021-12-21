@@ -58,7 +58,7 @@ def get_overlap(sig1, sig2, phase_maximize=False, use_gpu=False):
         if not isinstance(sig2, xp.ndarray):
             raise ValueError("sig1 must be list of or single xp.ndarray.")
 
-        else:
+        elif sig1.ndim < 2:
             sig2 = [sig2]
 
     assert len(sig1) == len(sig2)
