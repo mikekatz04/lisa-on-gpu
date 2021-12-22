@@ -14,7 +14,7 @@ void get_response(double *y_gw, double* t_data, double *k_in, double *u_in, doub
               cmplx *input_in, int num_inputs, int order,
               double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in,
               int projections_start_ind,
-              double* x_in_emitter, double* x_in_receiver, double* L_in, int num_orbit_inputs);
+              double* x_in_receiver, double* x_in_emitter, double* L_in, int num_orbit_inputs);
 
 void get_tdi_delays(double* delayed_links, double* input_links, int num_inputs, int num_orbit_info, double* delays, int num_delays, double dt, int* link_inds_in, int* tdi_signs_in, int num_units, int num_channels,
                int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, int tdi_start_ind);

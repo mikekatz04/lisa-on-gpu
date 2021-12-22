@@ -339,7 +339,7 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
              // at i = 0, delay ind should be at TDI_buffer = total_buffer - projection_buffer
              int delay_ind = unit_i * num_delays + i;
              delay = delays[delay_ind];
-             
+
              // delays are still with respect to projection start
              clipped_delay = delay;
              integer_delay = (int) ceil(clipped_delay * sampling_frequency) - 1;
@@ -433,7 +433,7 @@ void response(double *y_gw, double* t_data, double *k_in, double *u_in, double *
               int num_delays, int *link_space_craft_0_in, int *link_space_craft_1_in,
               cmplx *input_in, int num_inputs, int order, double sampling_frequency,
               int buffer_integer, double* A_in, double deps, int num_A, double* E_in, int projections_start_ind,
-              double* x_in_emitter, double* x_in_receiver, double* L_in, int num_orbit_inputs)
+              double* x_in_receiver, double* x_in_emitter, double* L_in, int num_orbit_inputs)
 {
 
         #ifdef __CUDACC__
@@ -559,9 +559,9 @@ void response(double *y_gw, double* t_data, double *k_in, double *u_in, double *
          {
              int ind = (link_i * 3 + coord) * num_orbit_inputs + i;
 
-             x0[coord] = x_in_emitter[ind];
-             x1[coord] = x_in_receiver[ind];
-             n_temp = x1[coord] - x0[coord];
+             x0[coord] = x_in_receiver[ind];
+             x1[coord] = x_in_emitter[ind];
+             n_temp = x0[coord] - x1[coord];
              n[coord] = n_temp;
              norm += n_temp * n_temp;
          }
@@ -584,11 +584,11 @@ void response(double *y_gw, double* t_data, double *k_in, double *u_in, double *
          xi_projections(&xi_p, &xi_c, u, v, n);
 
          k_dot_n = dot_product_1d(k, n);
-         k_dot_x0 = dot_product_1d(k, x0);
-         k_dot_x1 = dot_product_1d(k, x1);
+         k_dot_x0 = dot_product_1d(k, x0); // receiver
+         k_dot_x1 = dot_product_1d(k, x1); // emitter
 
-         delay0 = t - L - k_dot_x0*C_inv;
-         delay1 = t - k_dot_x1*C_inv;
+         delay0 = t - k_dot_x0*C_inv;
+         delay1 = t - L - k_dot_x1*C_inv;
 
          // start time for hp hx is really -(projection_buffer * dt)
 
@@ -637,23 +637,14 @@ void response(double *y_gw, double* t_data, double *k_in, double *u_in, double *
          interp(&hp_del0, &hc_del0, input, half_point_count, integer_delay0, fraction0, A_arr, deps, E_arr, start_input_ind, i, link_i);
          interp(&hp_del1, &hc_del1, input, half_point_count, integer_delay1, fraction1, A_arr, deps, E_arr, start_input_ind, i, link_i);
 
-         //hp_del0 = interp_h(delay0, 1.0);
-         //if (i <500) printf("%d %d: %e \n", i, link_i, hp_del1);
-         //hc_del0 = interp_h(delay0, 2.0);
-         //hp_del1 = interp_h(delay1, 3.0);
-         //hc_del1 = interp_h(delay1, 3.0);
-
-         //if ((i == 100) && (link_i == 0)) printf("%e %e %e %e %e %e %e\n", hp_del0, hc_del0, hp_del1, hc_del1, k_dot_n, xi_p, xi_c);
          pre_factor = 1./(1. - k_dot_n);
          large_factor = (hp_del0 - hp_del1)*xi_p + (hc_del0 - hc_del1)*xi_c;
 
          y_gw[link_i*num_delays + i] = pre_factor*large_factor;
-         //printf("%d %e %e %e %e %e %e %e %e \n", threadIdx.x, pre_factor, hp_del0, hp_del1, hc_del0, hc_del1, xi_p, xi_c, large_factor);
          CUDA_SYNC_THREADS;
-    }
+        }
 
-}
-        //double min_delay = (double) half_point_count / sampling_frequency;
+    }
 
 }
 
@@ -663,7 +654,7 @@ void get_response(double *y_gw, double* t_data, double *k_in, double *u_in, doub
               cmplx *input_in, int num_inputs, int order,
               double sampling_frequency, int buffer_integer,
               double* A_in, double deps, int num_A, double* E_in, int projections_start_ind,
-              double* x_in_emitter, double* x_in_receiver, double* L_in, int num_orbit_inputs)
+              double* x_in_receiver, double* x_in_emitter, double* L_in, int num_orbit_inputs)
 {
 
     #ifdef __CUDACC__
@@ -680,7 +671,7 @@ void get_response(double *y_gw, double* t_data, double *k_in, double *u_in, doub
                   num_delays, link_space_craft_0_in, link_space_craft_1_in,
                     input_in, num_inputs, order, sampling_frequency, buffer_integer,
                     A_in, deps, num_A, E_in, projections_start_ind,
-                    x_in_emitter, x_in_receiver, L_in, num_orbit_inputs);
+                    x_in_receiver, x_in_emitter, L_in, num_orbit_inputs);
     cudaDeviceSynchronize();
     gpuErrchk(cudaGetLastError());
     #else
@@ -690,7 +681,7 @@ void get_response(double *y_gw, double* t_data, double *k_in, double *u_in, doub
                   num_delays, link_space_craft_0_in, link_space_craft_1_in,
                     input_in, num_inputs, order, sampling_frequency, buffer_integer,
                     A_in, deps, num_A, E_in, projections_start_ind,
-                    x_in_emitter, x_in_receiver, L_in, num_orbit_inputs);
+                    x_in_receiver, x_in_emitter, L_in, num_orbit_inputs);
     #endif
 }
 

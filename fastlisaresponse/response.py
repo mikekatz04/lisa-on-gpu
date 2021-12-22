@@ -347,8 +347,8 @@ class pyResponseTDI(object):
             for i in range(self.nlinks):
                 L_in[i] = CubicSpline(t_in, L_in[i])(t_new)
 
-            x_in_emitter = [None for _ in range(2 * len(x_in))]
             x_in_receiver = [None for _ in range(2 * len(x_in))]
+            x_in_emitter = [None for _ in range(2 * len(x_in))]
             for link_i in range(self.nlinks):
                 sc0 = self.link_space_craft_0_in[link_i].item()  # receiver
                 sc1 = self.link_space_craft_1_in[link_i].item()  # emitter
@@ -460,14 +460,14 @@ class pyResponseTDI(object):
                         "sign": +1,
                     },
                     {"link": 13, "links_for_delay": [12, 21, 13, 31], "sign": -1},
-                    {"link": 13, "links_for_delay": [12, 21, 13, 31, 13], "sign": -1},
+                    {"link": 31, "links_for_delay": [12, 21, 13, 31, 13], "sign": -1},
                     {
-                        "link": 13,
+                        "link": 12,
                         "links_for_delay": [12, 21, 13, 31, 13, 31],
                         "sign": -1,
                     },
                     {
-                        "link": 13,
+                        "link": 21,
                         "links_for_delay": [12, 21, 13, 31, 13, 31, 12],
                         "sign": -1,
                     },
@@ -653,8 +653,8 @@ class pyResponseTDI(object):
             len(self.A_in),
             self.E_in,
             self.projections_start_ind,
-            self.x_in_emitter,
             self.x_in_receiver,
+            self.x_in_emitter,
             self.L_in,
             self.num_orbit_inputs,
         )
