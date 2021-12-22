@@ -273,6 +273,7 @@ class pyResponseTDI(object):
 
             self.nlinks = 6
 
+            # link order: 21, 12, 31, 13, 32, 23
             # setup spacecraft links indexes
             link_space_craft_0 = np.zeros((self.nlinks,), dtype=int)
             link_space_craft_1 = np.zeros((self.nlinks,), dtype=int)
@@ -667,12 +668,18 @@ class pyResponseTDI(object):
         """Return links as an array"""
         return self.delayed_links_flat.reshape(3, -1)
 
-    def get_tdi_delays(self):
+    def get_tdi_delays(self, y_gw=None):
         """Get TDI combinations from projections.
 
         This functions generates the TDI combinations from the projections
         computed with ``get_projections``. It can return XYZ, AET, or AE depending
         on what was input for ``tdi_chan`` into ``__init__``.
+
+        Args:
+            y_gw (xp.ndarray, optional): Projections along each link. Must be
+                a 2D ``numpy`` or ``cupy`` array with shape: ``(nlinks, num_pts)``.
+                The links must be entered in the proper order in the code:
+                21, 12, 31, 13, 32, 23. (Default: None)
 
         Returns:
             tuple: (X,Y,Z) or (A,E,T) or (A,E)
@@ -688,6 +695,17 @@ class pyResponseTDI(object):
         self.delayed_links_flat = self.xp.zeros(
             (3, self.num_pts), dtype=self.xp.float64
         )
+
+        # y_gw entered directly
+        if y_gw is not None:
+            assert y_gw.shape == (len(self.link_space_craft_0_in), self.num_pts)
+            self.y_gw_flat = y_gw.flatten().copy()
+            self.y_gw_length = self.num_pts
+
+        elif self.y_gw_flat is None:
+            raise ValueError(
+                "Need to either enter projection array or have this code determine projections."
+            )
 
         for j in range(3):
             for link_ind, sign in self.channels_no_delays[j]:

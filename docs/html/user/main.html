@@ -250,7 +250,7 @@ during Lagrangian interpolation.</p>
 <dl class="py attribute">
 <dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.link_space_craft_0_in">
 <span class="sig-name descname"><span class="pre">link_space_craft_0_in</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.link_space_craft_0_in" title="Permalink to this definition"></a></dt>
-<dd><p>Link indexes for emitter on each
+<dd><p>Link indexes for receiver on each
 arm of the LISA constellation.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type</dt>
@@ -262,7 +262,7 @@ arm of the LISA constellation.</p>
 <dl class="py attribute">
 <dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.link_space_craft_1_in">
 <span class="sig-name descname"><span class="pre">link_space_craft_1_in</span></span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.link_space_craft_1_in" title="Permalink to this definition"></a></dt>
-<dd><p>Link indexes for receiver on each
+<dd><p>Link indexes for emitter on each
 arm of the LISA constellation.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type</dt>
@@ -517,20 +517,26 @@ compraed to <code class="docutils literal notranslate"><span class="pre">t=0</sp
 
 <dl class="py method">
 <dt class="sig sig-object py" id="fastlisaresponse.response.pyResponseTDI.get_tdi_delays">
-<span class="sig-name descname"><span class="pre">get_tdi_delays</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.get_tdi_delays" title="Permalink to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">get_tdi_delays</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">y_gw</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#fastlisaresponse.response.pyResponseTDI.get_tdi_delays" title="Permalink to this definition"></a></dt>
 <dd><p>Get TDI combinations from projections.</p>
 <p>This functions generates the TDI combinations from the projections
 computed with <code class="docutils literal notranslate"><span class="pre">get_projections</span></code>. It can return XYZ, AET, or AE depending
 on what was input for <code class="docutils literal notranslate"><span class="pre">tdi_chan</span></code> into <code class="docutils literal notranslate"><span class="pre">__init__</span></code>.</p>
 <dl class="field-list simple">
-<dt class="field-odd">Returns</dt>
-<dd class="field-odd"><p>(X,Y,Z) or (A,E,T) or (A,E)</p>
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>y_gw</strong> (<em>xp.ndarray</em><em>, </em><em>optional</em>) – Projections along each link. Must be
+a 2D <code class="docutils literal notranslate"><span class="pre">numpy</span></code> or <code class="docutils literal notranslate"><span class="pre">cupy</span></code> array with shape: <code class="docutils literal notranslate"><span class="pre">(nlinks,</span> <span class="pre">num_pts)</span></code>.
+The links must be entered in the proper order in the code:
+21, 12, 31, 13, 32, 23. (Default: None)</p>
 </dd>
-<dt class="field-even">Return type</dt>
-<dd class="field-even"><p>tuple</p>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>(X,Y,Z) or (A,E,T) or (A,E)</p>
 </dd>
-<dt class="field-odd">Raises</dt>
-<dd class="field-odd"><p><strong>ValueError</strong> – If <code class="docutils literal notranslate"><span class="pre">tdi_chan</span></code> is not one of the options.</p>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>tuple</p>
+</dd>
+<dt class="field-even">Raises</dt>
+<dd class="field-even"><p><strong>ValueError</strong> – If <code class="docutils literal notranslate"><span class="pre">tdi_chan</span></code> is not one of the options.</p>
 </dd>
 </dl>
 </dd></dl>
