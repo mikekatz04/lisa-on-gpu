@@ -131,9 +131,9 @@ class pyResponseTDI(object):
             during Lagrangian interpolation.
         half_order (int): Half of :code:`order` adjusted to be :code:`int`.
         link_inds (xp.ndarray): Link indexes for delays in TDI.
-        link_space_craft_0_in (xp.ndarray): Link indexes for emitter on each
+        link_space_craft_0_in (xp.ndarray): Link indexes for receiver on each
             arm of the LISA constellation.
-        link_space_craft_1_in (xp.ndarray): Link indexes for receiver on each
+        link_space_craft_1_in (xp.ndarray): Link indexes for emitter on each
             arm of the LISA constellation.
         nlinks (int): The number of links in the constellation. Typically 6.
         num_A (int): Number of points to use for A spline values used in the Lagrangian
@@ -350,18 +350,19 @@ class pyResponseTDI(object):
             x_in_emitter = [None for _ in range(2 * len(x_in))]
             x_in_receiver = [None for _ in range(2 * len(x_in))]
             for link_i in range(self.nlinks):
-                sc0 = self.link_space_craft_0_in[link_i].item()  # emitter
-                sc1 = self.link_space_craft_1_in[link_i].item()  # receiver
+                sc0 = self.link_space_craft_0_in[link_i].item()  # receiver
+                sc1 = self.link_space_craft_1_in[link_i].item()  # emitter
 
                 for j in range(3):
-                    x_in_emitter[link_i * 3 + j] = CubicSpline(t_in, x_in[sc0 * 3 + j])(
+                    x_in_receiver[link_i * 3 + j] = CubicSpline(
+                        t_in, x_in[sc0 * 3 + j]
+                    )(t_new)
+                    x_in_emitter[link_i * 3 + j] = CubicSpline(t_in, x_in[sc1 * 3 + j])(
                         t_new - L_in[link_i]
                     )
-                    x_in_receiver[link_i * 3 + j] = CubicSpline(
-                        t_in, x_in[sc1 * 3 + j]
-                    )(t_new)
 
         else:
+            raise NotImplementedError
             # perform computations from LDC orbit class
             t_new = np.arange(self.num_pts) * self.dt
             self.nlinks = orbit_module.number_of_arms
