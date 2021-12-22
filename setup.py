@@ -214,7 +214,7 @@ setup(
     author_email="mikekatz04@gmail.com",
     ext_modules=extensions,
     # Inject our custom trigger
-    packages=["fastlisaresponse"],
+    packages=["fastlisaresponse", "fastlisaresponse.utils"],
     cmdclass={"build_ext": custom_build_ext},
     # Since the package has c code, the egg cannot be zipped
     zip_safe=False,
