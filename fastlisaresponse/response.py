@@ -709,7 +709,6 @@ class pyResponseTDI(object):
 
         for j in range(3):
             for link_ind, sign in self.channels_no_delays[j]:
-                # TODO: check boundaries
                 self.delayed_links_flat[j] += sign * self.y_gw[link_ind]
 
         self.delayed_links_flat = self.delayed_links_flat.flatten()

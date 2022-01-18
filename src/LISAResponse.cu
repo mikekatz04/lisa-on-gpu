@@ -579,8 +579,6 @@ void response(double *y_gw, double* t_data, double *k_in, double *u_in, double *
 
             //if (i <500) printf("%d %d: start \n", i, link_i);
 
-         // TODO: COULD remove n completely for memory
-
          xi_projections(&xi_p, &xi_c, u, v, n);
 
          k_dot_n = dot_product_1d(k, n);
