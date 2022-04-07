@@ -1,4 +1,5 @@
 import numpy as np
+import warnings 
 
 try:
     import cupy as xp
@@ -20,6 +21,7 @@ import h5py
 from scipy.interpolate import CubicSpline
 
 YRSID_SI = 31558149.763545603
+AU = 1.49597870660e11
 
 
 def get_factorial(n):
@@ -174,7 +176,6 @@ class pyResponseTDI(object):
         # setup all quantities
         self.sampling_frequency = sampling_frequency
         self.dt = 1 / sampling_frequency
-        self.tdi_buffer = 200
 
         self.num_pts = num_pts
 
@@ -202,14 +203,17 @@ class pyResponseTDI(object):
         # prepare the interpolation of A and E in the Lagrangian interpolation
         self._fill_A_E()
 
+        orbit_kwargs["order"] = order
         # setup orbits
         self.orbits_store = {}
+
         self.orbits_store["projection"] = self._init_orbit_information(**orbit_kwargs)
 
         # if tdi_orbit_kwargs are given, fill TDI specific orbit info
         if tdi_orbit_kwargs == {}:
             self.orbits_store["tdi"] = self.orbits_store["projection"]
         else:
+            tdi_orbit_kwargs["order"] = order
             self.orbits_store["tdi"] = self._init_orbit_information(**tdi_orbit_kwargs)
 
         # setup TDI info
@@ -263,7 +267,7 @@ class pyResponseTDI(object):
         self.E_in = self.xp.asarray(E_in)
 
     def _init_orbit_information(
-        self, orbit_module=None, max_t_orbits=None, orbit_file=None, order=0,
+        self, orbit_module=None, max_t_orbits=None, orbit_file=None, order=25,
     ):
         """Initialize orbital information"""
 
@@ -391,7 +395,7 @@ class pyResponseTDI(object):
                     x_in.append(temp[j])
 
         # get max buffer for projections
-        projection_buffer = int(np.max(x_in) * C_inv + np.max(np.abs(L_in))) + 4 * order
+        projection_buffer = int(1.05 * AU * C_inv + np.max(np.abs(L_in))) + 4 * order
         x_in_receiver = self.xp.asarray(np.concatenate(x_in_receiver))
         x_in_emitter = self.xp.asarray(np.concatenate(x_in_emitter))
         L_in_for_TDI = L_in
@@ -543,7 +547,7 @@ class pyResponseTDI(object):
         self.max_delay = np.max(np.abs(t_arr - delays[:]))
 
         # get necessary buffer for TDI
-        self.check_tdi_buffer = (
+        self.tdi_buffer = (
             int(self.max_delay * self.sampling_frequency) + 4 * self.order
         )
 
@@ -552,6 +556,26 @@ class pyResponseTDI(object):
         self.link_inds = self.xp.asarray(link_inds.flatten()).astype(self.xp.int32)
         self.tdi_delays = self.xp.asarray(delays.flatten())
         self.tdi_signs = self.xp.asarray(signs, dtype=np.int32)
+
+    @property
+    def tdi_buffer(self):
+        return self._tdi_buffer
+
+    @tdi_buffer.setter
+    def tdi_buffer(self, tdi_buffer):
+        if tdi_buffer < int(self.max_delay * self.sampling_frequency) + 4 * self.order:
+            warnings.warn("Inputing tdi_buffer that is lower than the default determined value: int(self.max_delay * self.sampling_frequency) + 4 * self.order. Proceed with caution.")
+        self._tdi_buffer = tdi_buffer
+
+    @property
+    def projection_buffer(self):
+        return self._projection_buffer
+
+    @projection_buffer.setter
+    def projection_buffer(self, projection_buffer):
+        if projection_buffer < int(AU * C_inv) + 4 * self.order:
+            warnings.warn("Inputing projection_buffer that is lower than the advised value: int(AU * C_inv) + 4 * self.order. Proceed with caution.")
+        self._projection_buffer = projection_buffer
 
     def _cyclic_permutation(self, link, permutation):
         """permute indexes by cyclic permutation"""
@@ -572,7 +596,7 @@ class pyResponseTDI(object):
         """Projections along the arms"""
         return self.y_gw_flat.reshape(self.nlinks, -1)
 
-    def get_projections(self, input_in, lam, beta, t0=10000.0):
+    def get_projections(self, input_in, lam, beta, t0=10000.0, projections_start_ind=None, projections_cut_ind=None, remove_projection_buffer=False):
         """Compute projections of GW signal on to LISA constellation
 
         Args:
@@ -593,12 +617,30 @@ class pyResponseTDI(object):
 
         # get break points
         for key, item in self.orbits_store["projection"].items():
+            if key == "projection_buffer" and remove_projection_buffer:
+                setattr(self, "projection_buffer", 1e10)
+                warnings.warn("Not using default projection_buffer. Proceed with caution.")
+                continue
+
             setattr(self, key, item)
 
         self.tdi_start_ind = int(t0 / self.dt)
-        self.projections_start_ind = self.tdi_start_ind - 2 * self.check_tdi_buffer
 
-        if self.projections_start_ind < self.projection_buffer:
+        base_projections_start_ind = self.tdi_start_ind - 2 * self.tdi_buffer
+
+        if projections_start_ind is None:
+            projections_start_ind = base_projections_start_ind
+
+        if projections_cut_ind is None:
+            # set to default which is just - projections_start_ind effectively
+            projections_cut_ind = base_projections_start_ind
+
+        if projections_cut_ind < self.projection_buffer:
+            raise ValueError(
+                "Need to increase t0. The initial buffer is not large enough."
+            )
+
+        if projections_start_ind < self.projection_buffer:
             raise ValueError(
                 "Need to increase t0. The initial buffer is not large enough."
             )
@@ -653,11 +695,12 @@ class pyResponseTDI(object):
             self.deps,
             len(self.A_in),
             self.E_in,
-            self.projections_start_ind,
+            projections_start_ind,
             self.x_in_receiver,
             self.x_in_emitter,
             self.L_in,
             self.num_orbit_inputs,
+            projections_cut_ind
         )
 
         self.y_gw_flat = y_gw
@@ -668,7 +711,7 @@ class pyResponseTDI(object):
         """Return links as an array"""
         return self.delayed_links_flat.reshape(3, -1)
 
-    def get_tdi_delays(self, y_gw=None):
+    def get_tdi_delays(self, y_gw=None, tdi_cut_ind=None):
         """Get TDI combinations from projections.
 
         This functions generates the TDI combinations from the projections
@@ -713,6 +756,15 @@ class pyResponseTDI(object):
 
         self.delayed_links_flat = self.delayed_links_flat.flatten()
 
+        if tdi_cut_ind is None:
+            # set to default which is just - tdi_start_ind effectively
+            tdi_cut_ind = self.tdi_start_ind
+
+        if tdi_cut_ind < self.tdi_buffer:
+            raise ValueError(
+                "Need to increase t0. The initial buffer is not large enough."
+            )
+
         self.tdi_gen(
             self.delayed_links_flat,
             self.y_gw_flat,
@@ -733,6 +785,7 @@ class pyResponseTDI(object):
             len(self.A_in),
             self.E_in,
             self.tdi_start_ind,
+            tdi_cut_ind,
         )
 
         if self.tdi_chan == "XYZ":

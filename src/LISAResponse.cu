@@ -231,7 +231,7 @@ void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, do
 
 CUDA_KERNEL
 void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int num_orbit_info, double* delays, int num_delays, double dt, int* link_inds_in, int* tdi_signs_in, int num_units, int num_channels,
-               int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, int tdi_start_ind)
+               int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, int tdi_start_ind, int tdi_cut_ind)
 {
     #ifdef __CUDACC__
     CUDA_SHARED double input[BUFFER_SIZE];
@@ -324,7 +324,7 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
         #pragma omp parallel for
         #endif
         for (int i=start2;
-             i < num_delays - tdi_start_ind;
+             i < num_delays - tdi_cut_ind;
              i += increment2)
         {
 
@@ -350,7 +350,7 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
              min_integer_delay = integer_delay;
 
              #ifdef __CUDACC__
-             int max_thread_num = ((num_delays - 2 * tdi_start_ind) - blockDim.x*blockIdx.x > NUM_THREADS) ? NUM_THREADS : (num_delays - 2 * tdi_start_ind) - blockDim.x*blockIdx.x;
+             int max_thread_num = ((num_delays - tdi_start_ind - tdi_cut_ind) - blockDim.x*blockIdx.x > NUM_THREADS) ? NUM_THREADS : (num_delays - tdi_start_ind - tdi_cut_ind) - blockDim.x*blockIdx.x;
              CUDA_SYNC_THREADS;
              if (threadIdx.x == 0){
                   start_input_ind = min_integer_delay - buffer_integer;
@@ -405,24 +405,24 @@ void TDI_delay(double* delayed_links, double* input_links, int num_inputs, int n
 }
 
 void get_tdi_delays(double* delayed_links, double* input_links, int num_inputs, int num_orbit_info, double* delays, int num_delays, double dt, int* link_inds_in, int* tdi_signs_in, int num_units, int num_channels,
-               int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, int tdi_start_ind){
+               int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, int tdi_start_ind, int tdi_cut_ind){
 
 
         #ifdef __CUDACC__
-        int num_blocks = std::ceil((num_delays - 2 * tdi_start_ind + NUM_THREADS -1)/NUM_THREADS);
+        int num_blocks = std::ceil((num_delays - tdi_start_ind - tdi_cut_ind + NUM_THREADS -1)/NUM_THREADS);
 
         dim3 gridDim(num_blocks, num_units * num_channels);
 
         //printf("RUNNING: %d\n", i);
         TDI_delay<<<gridDim, NUM_THREADS>>>
                       (delayed_links, input_links, num_inputs, num_orbit_info, delays, num_delays, dt, link_inds_in, tdi_signs_in, num_units, num_channels,
-                         order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind);
+                         order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind, tdi_cut_ind);
 
         cudaDeviceSynchronize();
         gpuErrchk(cudaGetLastError());
         #else
         TDI_delay (delayed_links, input_links, num_inputs, num_orbit_info, delays, num_delays, dt, link_inds_in, tdi_signs_in, num_units, num_channels,
-                         order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind);
+                         order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind, tdi_cut_ind);
 
         #endif
 }
@@ -433,7 +433,7 @@ void response(double *y_gw, double* t_data, double *k_in, double *u_in, double *
               int num_delays, int *link_space_craft_0_in, int *link_space_craft_1_in,
               cmplx *input_in, int num_inputs, int order, double sampling_frequency,
               int buffer_integer, double* A_in, double deps, int num_A, double* E_in, int projections_start_ind,
-              double* x_in_receiver, double* x_in_emitter, double* L_in, int num_orbit_inputs)
+              double* x_in_receiver, double* x_in_emitter, double* L_in, int num_orbit_inputs, int projections_cut_ind)
 {
 
         #ifdef __CUDACC__
@@ -526,7 +526,7 @@ void response(double *y_gw, double* t_data, double *k_in, double *u_in, double *
     #endif
 
     for (int i=start2;
-         i < num_delays - projections_start_ind;
+         i < num_delays - projections_cut_ind;
          i += increment2){
 
          #ifdef __CUDACC__
@@ -604,7 +604,7 @@ void response(double *y_gw, double* t_data, double *k_in, double *u_in, double *
          min_integer_delay = (integer_delay0 < integer_delay1) ? integer_delay0 : integer_delay1;
 
          #ifdef __CUDACC__
-         int max_thread_num = ((num_delays - 2 * projections_start_ind) - blockDim.x*blockIdx.x > NUM_THREADS) ? NUM_THREADS : (num_delays - 2 * projections_start_ind) - blockDim.x*blockIdx.x;
+         int max_thread_num = ((num_delays - projections_start_ind - projections_cut_ind) - blockDim.x*blockIdx.x > NUM_THREADS) ? NUM_THREADS : (num_delays - projections_start_ind - projections_cut_ind) - blockDim.x*blockIdx.x;
 
          if (threadIdx.x == 0){
               start_input_ind = min_integer_delay - buffer_integer;
@@ -652,12 +652,12 @@ void get_response(double *y_gw, double* t_data, double *k_in, double *u_in, doub
               cmplx *input_in, int num_inputs, int order,
               double sampling_frequency, int buffer_integer,
               double* A_in, double deps, int num_A, double* E_in, int projections_start_ind,
-              double* x_in_receiver, double* x_in_emitter, double* L_in, int num_orbit_inputs)
+              double* x_in_receiver, double* x_in_emitter, double* L_in, int num_orbit_inputs, int projections_cut_ind)
 {
 
     #ifdef __CUDACC__
 
-    int num_delays_here = (num_delays - 2 * projections_start_ind);
+    int num_delays_here = (num_delays - projections_start_ind - projections_cut_ind);
     int num_blocks = std::ceil((num_delays_here + NUM_THREADS -1)/NUM_THREADS);
 
     dim3 gridDim(num_blocks, 1);
@@ -669,7 +669,7 @@ void get_response(double *y_gw, double* t_data, double *k_in, double *u_in, doub
                   num_delays, link_space_craft_0_in, link_space_craft_1_in,
                     input_in, num_inputs, order, sampling_frequency, buffer_integer,
                     A_in, deps, num_A, E_in, projections_start_ind,
-                    x_in_receiver, x_in_emitter, L_in, num_orbit_inputs);
+                    x_in_receiver, x_in_emitter, L_in, num_orbit_inputs, projections_cut_ind);
     cudaDeviceSynchronize();
     gpuErrchk(cudaGetLastError());
     #else
@@ -679,7 +679,7 @@ void get_response(double *y_gw, double* t_data, double *k_in, double *u_in, doub
                   num_delays, link_space_craft_0_in, link_space_craft_1_in,
                     input_in, num_inputs, order, sampling_frequency, buffer_integer,
                     A_in, deps, num_A, E_in, projections_start_ind,
-                    x_in_receiver, x_in_emitter, L_in, num_orbit_inputs);
+                    x_in_receiver, x_in_emitter, L_in, num_orbit_inputs, projections_cut_ind);
     #endif
 }
 
