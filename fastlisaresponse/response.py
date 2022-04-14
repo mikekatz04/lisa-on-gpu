@@ -900,7 +900,7 @@ class ResponseWrapper:
         # TODO add
         """
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args, projections_start_ind=None, projections_cut_ind=None, remove_projection_buffer=False, tdi_cut_ind=None, **kwargs):
         """Run the waveform and response generation
 
         Args:
@@ -938,8 +938,8 @@ class ResponseWrapper:
         if self.flip_hx:
             h = h.real - 1j * h.imag
 
-        self.response_model.get_projections(h, lam, beta, t0=self.t0)
-        tdi_out = self.response_model.get_tdi_delays()
+        self.response_model.get_projections(h, lam, beta, t0=self.t0, projections_start_ind=projections_start_ind, projections_cut_ind=projections_cut_ind, remove_projection_buffer=remove_projection_buffer)
+        tdi_out = self.response_model.get_tdi_delays(tdi_cut_ind=tdi_cut_ind)
 
         out = list(tdi_out)
         if self.remove_garbage:
