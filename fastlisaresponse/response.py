@@ -618,7 +618,7 @@ class pyResponseTDI(object):
         # get break points
         for key, item in self.orbits_store["projection"].items():
             if key == "projection_buffer" and remove_projection_buffer:
-                setattr(self, "projection_buffer", 1e10)
+                setattr(self, "projection_buffer", -1e10)
                 warnings.warn("Not using default projection_buffer. Proceed with caution.")
                 continue
 
