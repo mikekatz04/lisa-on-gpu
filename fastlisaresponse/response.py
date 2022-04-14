@@ -676,6 +676,9 @@ class pyResponseTDI(object):
 
         input_in = self.xp.asarray(input_in)
 
+        self.projections_start_ind = projections_start_ind
+        self.projections_cut_ind = projections_cut_ind
+
         self.response_gen(
             y_gw,
             self.t_data,
@@ -765,6 +768,7 @@ class pyResponseTDI(object):
                 "Need to increase t0. The initial buffer is not large enough."
             )
 
+        self.tdi_cut_ind = tdi_cut_ind
         self.tdi_gen(
             self.delayed_links_flat,
             self.y_gw_flat,
