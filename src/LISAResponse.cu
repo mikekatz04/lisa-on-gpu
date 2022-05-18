@@ -684,6 +684,183 @@ void get_response(double *y_gw, double* t_data, double *k_in, double *u_in, doub
 }
 
 
+
+CUDA_KERNEL
+void get_delays(double *delay0_out, double *delay1_out, double *xi_p_out, double *xi_c_out, double *k_dot_n_out, 
+              double* t_data, double *k_in, double *u_in, double *v_in, double dt,
+              int num_delays, int *link_space_craft_0_in, int *link_space_craft_1_in, int projections_start_ind,
+              double* x_in_receiver, double* x_in_emitter, double* L_in, int num_orbit_inputs, int projections_cut_ind)
+{
+
+
+        CUDA_SHARED double k[3];
+        CUDA_SHARED double u[3];
+        CUDA_SHARED double v[3];
+        CUDA_SHARED int link_space_craft_0[NLINKS];
+        CUDA_SHARED int link_space_craft_1[NLINKS];
+
+        #ifdef __CUDACC__
+        CUDA_SHARED double x0_all[NUM_THREADS * 3];
+        CUDA_SHARED double x1_all[NUM_THREADS * 3];
+        CUDA_SHARED double n_all[NUM_THREADS * 3];
+
+        double* x0 = &x0_all[3 * threadIdx.x];
+        double* x1 = &x1_all[3 * threadIdx.x];
+        double* n = &n_all[3 * threadIdx.x];
+        #endif
+
+        int start, increment;
+
+    CUDA_SYNC_THREADS;
+
+    #ifdef __CUDACC__
+    start = threadIdx.x;
+    increment = blockDim.x;
+    #else
+    start = 0;
+    increment = 1;
+    #endif
+    for (int i = start; i < 3; i += increment){
+        k[i] = k_in[i];
+        u[i] = u_in[i];
+        v[i] = v_in[i];
+         //if (threadIdx.x == 1) printf("%e %e %e\n", k[i], u[i], v[i]);
+    }
+    CUDA_SYNC_THREADS;
+
+    for (int i=start; i<NLINKS; i+=increment){
+        link_space_craft_0[i] = link_space_craft_0_in[i];
+        link_space_craft_1[i] = link_space_craft_1_in[i];
+
+        //if (threadIdx.x == 1) printf("%d %d %d %d\n", link_space_craft_0_in[i],link_space_craft_1_in[i], link_space_craft_1[i], link_space_craft_0[i]);
+    }
+    CUDA_SYNC_THREADS;
+
+    #ifdef __CUDACC__
+    start = blockIdx.y;
+    increment = gridDim.y;
+    #else
+    start = 0;
+    increment = 1;
+    #endif
+    for (int link_i=start; link_i<NLINKS; link_i+=increment){
+
+        int sc0 = link_space_craft_0[link_i];
+        int sc1 = link_space_craft_1[link_i];
+
+    int start2, increment2;
+    #ifdef __CUDACC__
+    start2 = projections_start_ind + threadIdx.x + blockDim.x*blockIdx.x;
+    increment2 = blockDim.x * gridDim.x;
+    #else
+    start2 = projections_start_ind;
+    increment2 = 1;
+    #endif
+
+    for (int i=start2;
+         i < num_delays - projections_cut_ind;
+         i += increment2)
+         {
+
+            #ifdef __CUDACC__
+            #else
+            double x0_all[3];
+            CUDA_SHARED double x1_all[3];
+            CUDA_SHARED double n_all[3];
+
+            double* x0 = &x0_all[0];
+            double* x1 = &x1_all[0];
+            double* n = &n_all[0];
+
+            #endif
+
+            double xi_p, xi_c;
+            double k_dot_n, k_dot_x0, k_dot_x1;
+            double t, L, delay0, delay1;
+            double hp_del0, hp_del1, hc_del0, hc_del1;
+
+            double large_factor, pre_factor;
+            double clipped_delay0, clipped_delay1, out, fraction0, fraction1;
+            int integer_delay0, integer_delay1, max_integer_delay, min_integer_delay;
+
+            t = t_data[i];
+
+
+            double norm = 0.0;
+            double n_temp;
+            for (int coord = 0; coord < 3; coord +=1)
+            {
+                int ind = (link_i * 3 + coord) * num_orbit_inputs + i;
+
+                x0[coord] = x_in_receiver[ind];
+                x1[coord] = x_in_emitter[ind];
+                n_temp = x0[coord] - x1[coord];
+                n[coord] = n_temp;
+                norm += n_temp * n_temp;
+            }
+
+            norm = sqrt(norm);
+
+            #pragma unroll
+            for (int coord = 0; coord < 3; coord +=1)
+            {
+                n[coord] = n[coord] / norm;
+            }
+
+            int L_ind = link_i * num_orbit_inputs + i;
+            L = L_in[L_ind];
+
+                //if (i <500) printf("%d %d: start \n", i, link_i);
+
+            xi_projections(&xi_p, &xi_c, u, v, n);
+
+            k_dot_n = dot_product_1d(k, n);
+            k_dot_x0 = dot_product_1d(k, x0); // receiver
+            k_dot_x1 = dot_product_1d(k, x1); // emitter
+
+            delay0_out[link_i*num_delays + i] = t - k_dot_x0*C_inv;
+            delay1_out[link_i*num_delays + i] = t - L - k_dot_x1*C_inv;
+            xi_p_out[link_i*num_delays + i] = xi_p;
+            xi_c_out[link_i*num_delays + i] = xi_c;
+            k_dot_n_out[link_i*num_delays + i] = k_dot_n;
+        }
+    }
+
+}
+
+
+void get_delays_wrap(double *delay0_out, double *delay1_out, double *xi_p_out, double *xi_c_out, double *k_dot_n_out, 
+              double* t_data, double *k_in, double *u_in, double *v_in, double dt,
+              int num_delays, int *link_space_craft_0_in, int *link_space_craft_1_in, int projections_start_ind,
+              double* x_in_receiver, double* x_in_emitter, double* L_in, int num_orbit_inputs, int projections_cut_ind)
+{
+
+    #ifdef __CUDACC__
+
+    int num_delays_here = (num_delays - projections_start_ind - projections_cut_ind);
+    int num_blocks = std::ceil((num_delays_here + NUM_THREADS -1)/NUM_THREADS);
+
+    dim3 gridDim(num_blocks, 1);
+
+
+    //printf("RUNNING: %d\n", i);
+    get_delays<<<gridDim, NUM_THREADS>>>(delay0_out, delay1_out, xi_p_out, xi_c_out, k_dot_n_out, 
+              t_data, k_in, u_in, v_in, dt,
+              num_delays, link_space_craft_0_in, link_space_craft_1_in, projections_start_ind,
+              x_in_receiver, x_in_emitter, L_in, num_orbit_inputs, projections_cut_ind);
+    cudaDeviceSynchronize();
+    gpuErrchk(cudaGetLastError());
+    #else
+
+    // CPU waveform generation
+    get_delays(delay0_out, delay1_out, xi_p_out, xi_c_out, k_dot_n_out, 
+              t_data, k_in, u_in, v_in, dt,
+              num_delays, link_space_craft_0_in, link_space_craft_1_in, projections_start_ind,
+              x_in_receiver, x_in_emitter, L_in, num_orbit_inputs, projections_cut_ind);
+    #endif
+}
+
+
 /*
 int main()
 {

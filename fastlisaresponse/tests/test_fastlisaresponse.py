@@ -5,7 +5,7 @@ import os
 
 path_to_file = os.path.dirname(__file__)
 
-from fastlisaresponse import ResponseWrapper
+from fastlisaresponse import ResponseWrapper, ResponseWrapperDetectorFrame
 from fastlisaresponse.utils import get_overlap
 
 try:
@@ -32,10 +32,13 @@ class GBWave:
         else:
             self.xp = np
 
-    def __call__(self, A, f, fdot, iota, phi0, psi, T=1.0, dt=10.0):
+    def __call__(self, A, f, fdot, iota, phi0, psi, T=1.0, dt=10.0, t=None):
 
         # get the t array
-        t = self.xp.arange(0.0, T * YRSID_SI, dt)
+        if t is None:
+            t = self.xp.arange(0.0, T * YRSID_SI, dt)
+        elif not isinstance(t, self.xp.ndarray):
+            raise ValueError("If providing t, must be xp.ndarray.")
         cos2psi = self.xp.cos(2.0 * psi)
         sin2psi = self.xp.sin(2.0 * psi)
         cosiota = self.xp.cos(iota)
@@ -58,7 +61,7 @@ class GBWave:
 
 
 class ResponseTest(unittest.TestCase):
-    def run_test(self, tdi_gen, use_gpu):
+    def run_test(self, tdi_gen, use_gpu, delays_first=False):
 
         gb = GBWave(use_gpu=use_gpu)
 
@@ -82,20 +85,36 @@ class ResponseTest(unittest.TestCase):
             orbit_kwargs=orbit_kwargs_esa, order=order, tdi=tdi_gen, tdi_chan="AET",
         )
 
-        gb_lisa_esa = ResponseWrapper(
-            gb,
-            T,
-            dt,
-            index_lambda,
-            index_beta,
-            t0=t0,
-            flip_hx=False,  # set to True if waveform is h+ - ihx
-            use_gpu=use_gpu,
-            remove_sky_coords=True,  # True if the waveform generator does not take sky coordinates
-            is_ecliptic_latitude=True,  # False if using polar angle (theta)
-            remove_garbage=True,  # removes the beginning of the signal that has bad information
-            **tdi_kwargs_esa,
-        )
+        if delays_first:
+            gb_lisa_esa = ResponseWrapperDetectorFrame(
+                gb,
+                T,
+                dt,
+                index_lambda,
+                index_beta,
+                t0=t0,
+                flip_hx=False,  # set to True if waveform is h+ - ihx
+                use_gpu=use_gpu,
+                remove_sky_coords=True,  # True if the waveform generator does not take sky coordinates
+                is_ecliptic_latitude=True,  # False if using polar angle (theta)
+                remove_garbage=True,  # removes the beginning of the signal that has bad information
+                **tdi_kwargs_esa,
+            )
+        else:
+            gb_lisa_esa = ResponseWrapper(
+                gb,
+                T,
+                dt,
+                index_lambda,
+                index_beta,
+                t0=t0,
+                flip_hx=False,  # set to True if waveform is h+ - ihx
+                use_gpu=use_gpu,
+                remove_sky_coords=True,  # True if the waveform generator does not take sky coordinates
+                is_ecliptic_latitude=True,  # False if using polar angle (theta)
+                remove_garbage=True,  # removes the beginning of the signal that has bad information
+                **tdi_kwargs_esa,
+            )
 
         # define GB parameters
         A = 1.084702251e-22
@@ -135,6 +154,18 @@ class ResponseTest(unittest.TestCase):
 
         if gpu_available:
             waveform_gpu = self.run_test("2nd generation", True)
+            mm = 1.0 - get_overlap(
+                xp.asarray(waveform_cpu), waveform_gpu, use_gpu=gpu_available
+            )
+            self.assertLess(mm, 1e-10)
+
+    def test_delays_first_tdi_2nd_generation(self):
+
+        waveform_cpu = self.run_test("2nd generation", False, delays_first=True)
+        self.assertTrue(np.all(np.isnan(waveform_cpu) == False))
+
+        if gpu_available:
+            waveform_gpu = self.run_test("2nd generation", True, delays_first=True)
             mm = 1.0 - get_overlap(
                 xp.asarray(waveform_cpu), waveform_gpu, use_gpu=gpu_available
             )

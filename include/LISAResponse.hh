@@ -19,4 +19,10 @@ void get_response(double *y_gw, double* t_data, double *k_in, double *u_in, doub
 void get_tdi_delays(double* delayed_links, double* input_links, int num_inputs, int num_orbit_info, double* delays, int num_delays, double dt, int* link_inds_in, int* tdi_signs_in, int num_units, int num_channels,
                int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, int tdi_start_ind, int tdi_cut_ind);
 
+void get_delays_wrap(double *delay0_out, double *delay1_out, double *xi_p_out, double *xi_c_out, double *k_dot_n_out, 
+              double* t_data, double *k_in, double *u_in, double *v_in, double dt,
+              int num_delays, int *link_space_craft_0_in, int *link_space_craft_1_in, int projections_start_ind,
+              double* x_in_receiver, double* x_in_emitter, double* L_in, int num_orbit_inputs, int projections_cut_ind);
+
+
 #endif // __LISA_RESPONSE__

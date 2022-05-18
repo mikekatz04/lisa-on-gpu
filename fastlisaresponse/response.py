@@ -5,6 +5,7 @@ try:
     import cupy as xp
     from pyresponse import get_response_wrap as get_response_wrap_gpu
     from pyresponse import get_tdi_delays_wrap as get_tdi_delays_wrap_gpu
+    from pyresponse import get_delays as get_delays_gpu
 
     gpu = True
 
@@ -15,6 +16,7 @@ except (ImportError, ModuleNotFoundError) as e:
 
 from pyresponse_cpu import get_response_wrap as get_response_wrap_cpu
 from pyresponse_cpu import get_tdi_delays_wrap as get_tdi_delays_wrap_cpu
+from pyresponse_cpu import get_delays as get_delays_cpu
 import time
 import h5py
 
@@ -193,11 +195,13 @@ class pyResponseTDI(object):
         if use_gpu:
             self.xp = xp
             self.response_gen = get_response_wrap_gpu
+            self.delays_gen = get_delays_gpu
             self.tdi_gen = get_tdi_delays_wrap_gpu
 
         else:
             self.xp = np
             self.response_gen = get_response_wrap_cpu
+            self.delays_gen = get_delays_cpu
             self.tdi_gen = get_tdi_delays_wrap_cpu
 
         # prepare the interpolation of A and E in the Lagrangian interpolation
@@ -646,28 +650,10 @@ class pyResponseTDI(object):
             )
 
         # determine sky vectors
-        k = np.zeros(3, dtype=np.float)
-        u = np.zeros(3, dtype=np.float)
-        v = np.zeros(3, dtype=np.float)
+        k, u, v = self.get_sky_basis_vecs(lam, beta)
 
         assert len(input_in) >= self.num_pts
         self.num_total_points = len(input_in)
-
-        cosbeta = np.cos(beta)
-        sinbeta = np.sin(beta)
-
-        coslam = np.cos(lam)
-        sinlam = np.sin(lam)
-
-        v[0] = -sinbeta * coslam
-        v[1] = -sinbeta * sinlam
-        v[2] = cosbeta
-        u[0] = sinlam
-        u[1] = -coslam
-        u[2] = 0.0
-        k[0] = -cosbeta * coslam
-        k[1] = -cosbeta * sinlam
-        k[2] = -sinbeta
 
         y_gw = self.xp.zeros((self.nlinks * self.num_pts,), dtype=self.xp.float)
         k_in = self.xp.asarray(k)
@@ -708,6 +694,123 @@ class pyResponseTDI(object):
 
         self.y_gw_flat = y_gw
         self.y_gw_length = self.num_pts
+
+    def get_sky_basis_vecs(self, lam, beta):
+        cosbeta = np.cos(beta)
+        sinbeta = np.sin(beta)
+
+        coslam = np.cos(lam)
+        sinlam = np.sin(lam)
+
+        # determine sky vectors
+        k = np.zeros(3, dtype=np.float)
+        u = np.zeros(3, dtype=np.float)
+        v = np.zeros(3, dtype=np.float)
+
+        v[0] = -sinbeta * coslam
+        v[1] = -sinbeta * sinlam
+        v[2] = cosbeta
+        u[0] = sinlam
+        u[1] = -coslam
+        u[2] = 0.0
+        k[0] = -cosbeta * coslam
+        k[1] = -cosbeta * sinlam
+        k[2] = -sinbeta
+
+        return k, u, v
+
+    def get_delays(self, lam, beta, t0=10000.0, projections_start_ind=None, projections_cut_ind=None, remove_projection_buffer=False):
+        """Compute delays of GW signal from SSB to LISA constellation
+
+        Args:
+            lam (double): Ecliptic Longitude in radians.
+            beta (double): Ecliptic Latitude in radians.
+            t0 (double, optional): Time at which to the waveform. Because of the delays
+                and interpolation towards earlier times, the beginning of the waveform
+                is garbage. ``t0`` tells the waveform generator where to start the waveform
+                compraed to ``t=0``.
+
+        Raises:
+            ValueError: If ``t0`` is not large enough.
+
+
+        """
+
+        # get break points
+        for key, item in self.orbits_store["projection"].items():
+            if key == "projection_buffer" and remove_projection_buffer:
+                setattr(self, "projection_buffer", -1e10)
+                warnings.warn("Not using default projection_buffer. Proceed with caution.")
+                continue
+
+            setattr(self, key, item)
+
+        self.tdi_start_ind = int(t0 / self.dt)
+
+        base_projections_start_ind = self.tdi_start_ind - 2 * self.tdi_buffer
+
+        if projections_start_ind is None:
+            projections_start_ind = base_projections_start_ind
+
+        if projections_cut_ind is None:
+            # set to default which is just - projections_start_ind effectively
+            projections_cut_ind = base_projections_start_ind
+
+        if projections_cut_ind < self.projection_buffer:
+            raise ValueError(
+                "Need to increase t0. The initial buffer is not large enough."
+            )
+
+        if projections_start_ind < self.projection_buffer:
+            raise ValueError(
+                "Need to increase t0. The initial buffer is not large enough."
+            )
+
+        k, u, v = self.get_sky_basis_vecs(lam, beta)
+        
+        k_in = self.xp.asarray(k)
+        u_in = self.xp.asarray(u)
+        v_in = self.xp.asarray(v)
+
+        self.projections_start_ind = projections_start_ind
+        self.projections_cut_ind = projections_cut_ind
+
+        delay0_out = self.xp.zeros((self.nlinks * self.num_pts,), dtype=self.xp.float)
+        delay1_out = self.xp.zeros((self.nlinks * self.num_pts,), dtype=self.xp.float)
+        xi_p_out = self.xp.zeros((self.nlinks * self.num_pts,), dtype=self.xp.float)
+        xi_c_out = self.xp.zeros((self.nlinks * self.num_pts,), dtype=self.xp.float)
+        k_dot_n_out = self.xp.zeros((self.nlinks * self.num_pts,), dtype=self.xp.float)
+
+        self.delays_gen(
+            delay0_out, 
+            delay1_out, 
+            xi_p_out, 
+            xi_c_out, 
+            k_dot_n_out,
+            self.t_data,
+            k_in,
+            u_in,
+            v_in,
+            self.dt,
+            self.num_pts,
+            self.link_space_craft_0_in,
+            self.link_space_craft_1_in,
+            projections_start_ind,
+            self.x_in_receiver,
+            self.x_in_emitter,
+            self.L_in,
+            self.num_orbit_inputs,
+            projections_cut_ind
+        )
+
+        return (
+            delay0_out.reshape(self.nlinks, self.num_pts), 
+            delay1_out.reshape(self.nlinks, self.num_pts), 
+            xi_p_out.reshape(self.nlinks, self.num_pts), 
+            xi_c_out.reshape(self.nlinks, self.num_pts), 
+            k_dot_n_out.reshape(self.nlinks, self.num_pts),
+        )
+
 
     @property
     def XYZ(self):
@@ -944,6 +1047,72 @@ class ResponseWrapper:
 
         self.response_model.get_projections(h, lam, beta, t0=self.t0, projections_start_ind=projections_start_ind, projections_cut_ind=projections_cut_ind, remove_projection_buffer=remove_projection_buffer)
         tdi_out = self.response_model.get_tdi_delays(tdi_cut_ind=tdi_cut_ind)
+
+        out = list(tdi_out)
+        if self.remove_garbage:
+            for i in range(len(out)):
+                out[i] = out[i][
+                    self.response_model.tdi_start_ind : -self.response_model.tdi_start_ind
+                ]
+
+        return out
+
+
+class ResponseWrapperDetectorFrame(ResponseWrapper):
+    def __call__(self, *args, projections_start_ind=None, projections_cut_ind=None, remove_projection_buffer=False, tdi_cut_ind=None, **kwargs):
+        """Run the waveform and response generation
+
+        Args:
+            *args (list): Arguments to the waveform generator. This must include
+                the sky coordinates.
+            **kwargs (dict): kwargs necessary for the waveform generator.
+
+        Return:
+            list: TDI Channels.
+
+        """
+
+        args = list(args)
+
+        # get sky coords
+        beta = args[self.index_beta]
+        lam = args[self.index_lambda]
+
+        # remove them from the list if waveform generator does not take them
+        if self.remove_sky_coords:
+            args.pop(self.index_beta)
+            args.pop(self.index_lambda)
+
+        # transform polar angle
+        if not self.is_ecliptic_latitude:
+            beta = np.pi / 2.0 - beta
+        
+        delay0_out, delay1_out, xi_p_out, xi_c_out, k_dot_n_out = self.response_model.get_delays(lam, beta, t0=self.t0, projections_start_ind=projections_start_ind, projections_cut_ind=projections_cut_ind, remove_projection_buffer=remove_projection_buffer)
+
+        y_gw = self.xp.zeros_like(delay0_out)
+
+        # add the new Tobs and dt info to the waveform generator kwargs
+        for i, (delay0, delay1, xi_p, xi_c, k_dot_n)  in enumerate(zip(delay0_out, delay1_out, xi_p_out, xi_c_out, k_dot_n_out)):
+            kwargs["t"] = delay0
+            # get the waveform
+            h0 = self.waveform_gen(*args, **kwargs)
+
+            if self.flip_hx:
+                h0 = h0.real - 1j * h0.imag
+
+            kwargs["t"] = delay1
+            # get the waveform
+            h1 = self.waveform_gen(*args, **kwargs)
+
+            if self.flip_hx:
+                h1 = h1.real - 1j * h1.imag
+
+            pre_factor = 1./(1. - k_dot_n)
+            large_factor = (h0.real - h1.real) * xi_p + (h0.imag - h1.imag) * xi_c
+
+            y_gw[i] = pre_factor * large_factor
+            
+        tdi_out = self.response_model.get_tdi_delays(y_gw=y_gw, tdi_cut_ind=tdi_cut_ind)
 
         out = list(tdi_out)
         if self.remove_garbage:

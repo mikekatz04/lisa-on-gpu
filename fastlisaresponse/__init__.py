@@ -1,1 +1,1 @@
-from .response import pyResponseTDI, ResponseWrapper
+from .response import pyResponseTDI, ResponseWrapper, ResponseWrapperDetectorFrame
