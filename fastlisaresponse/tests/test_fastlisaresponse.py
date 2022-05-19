@@ -164,27 +164,10 @@ class ResponseTest(unittest.TestCase):
         waveform_cpu1 = self.run_test("2nd generation", False, delays_first=True)
         self.assertTrue(np.all(np.isnan(waveform_cpu1) == False))
 
-        waveform_cpu2 = self.run_test("2nd generation", False, delays_first=False)
-        self.assertTrue(np.all(np.isnan(waveform_cpu2) == False))
-
-        mismatch0 = 1.0 - (np.dot(waveform_cpu1[0].conj(), waveform_cpu2[0]) / np.sqrt(np.dot(waveform_cpu2[0].conj(), waveform_cpu2[0]) * np.dot(waveform_cpu1[0].conj(), waveform_cpu1[0])))
-
-        mismatch1 = 1.0 - (np.dot(waveform_cpu1[1].conj(), waveform_cpu2[1]) / np.sqrt(np.dot(waveform_cpu2[1].conj(), waveform_cpu2[1]) * np.dot(waveform_cpu1[1].conj(), waveform_cpu1[1])))
-        self.assertTrue((mismatch0 < 1e-8) and (mismatch1 < 1e-8))
-
         if gpu_available:
             waveform_gpu1 = self.run_test("2nd generation", True, delays_first=True)
+            self.assertTrue(np.all(np.isnan(waveform_gpu1) == False))
             mm = 1.0 - get_overlap(
                 xp.asarray(waveform_cpu1), waveform_gpu1, use_gpu=gpu_available
             )
             self.assertLess(mm, 1e-10)
-            waveform_gpu2 = self.run_test("2nd generation", True, delays_first=True)
-            mm = 1.0 - get_overlap(
-                xp.asarray(waveform_cpu2), waveform_gpu2, use_gpu=gpu_available
-            )
-            self.assertLess(mm, 1e-10)
-
-            mismatch0 = 1.0 - (np.dot(waveform_gpu1[0].conj(), waveform_gpu2[0]) / np.sqrt(np.dot(waveform_gpu2[0].conj(), waveform_gpu2[0]) * np.dot(waveform_gpu1[0].conj(), waveform_gpu1[0])))
-
-            mismatch1 = 1.0 - (np.dot(waveform_gpu1[1].conj(), waveform_gpu2[1]) / np.sqrt(np.dot(waveform_gpu2[1].conj(), waveform_gpu2[1]) * np.dot(waveform_gpu1[1].conj(), waveform_gpu1[1])))
-            self.assertTrue((mismatch0 < 1e-8) and (mismatch1 < 1e-8))

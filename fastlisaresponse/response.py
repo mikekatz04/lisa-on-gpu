@@ -1059,7 +1059,7 @@ class ResponseWrapper:
 
 
 class ResponseWrapperDetectorFrame(ResponseWrapper):
-    def __call__(self, *args, projections_start_ind=None, projections_cut_ind=None, remove_projection_buffer=False, tdi_cut_ind=None, **kwargs):
+    def __call__(self, *args, tdi_cut_ind=None, **kwargs):
         """Run the waveform and response generation
 
         Args:
@@ -1071,6 +1071,10 @@ class ResponseWrapperDetectorFrame(ResponseWrapper):
             list: TDI Channels.
 
         """
+
+        remove_projection_buffer = True
+        projections_start_ind = 0
+        projections_cut_ind = 0
 
         args = list(args)
 
@@ -1088,6 +1092,11 @@ class ResponseWrapperDetectorFrame(ResponseWrapper):
             beta = np.pi / 2.0 - beta
         
         delay0_out, delay1_out, xi_p_out, xi_c_out, k_dot_n_out = self.response_model.get_delays(lam, beta, t0=self.t0, projections_start_ind=projections_start_ind, projections_cut_ind=projections_cut_ind, remove_projection_buffer=remove_projection_buffer)
+
+        # normalize to delay0 and link zero
+        min_time = self.xp.min(delay0_out[0]).item()
+        delay0_out -= min_time
+        delay1_out -= min_time
 
         y_gw = self.xp.zeros_like(delay0_out)
 
