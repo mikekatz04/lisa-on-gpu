@@ -1,6 +1,8 @@
 import numpy as np
 import warnings 
 
+from scipy.interpolate import CubicSpline
+
 try:
     import cupy as xp
     from pyresponse import get_response_wrap as get_response_wrap_gpu
@@ -775,6 +777,7 @@ class pyResponseTDI(object):
         self.projections_start_ind = projections_start_ind
         self.projections_cut_ind = projections_cut_ind
 
+        self.num_pts = self.num_pts
         delay0_out = self.xp.zeros((self.nlinks * self.num_pts,), dtype=self.xp.float)
         delay1_out = self.xp.zeros((self.nlinks * self.num_pts,), dtype=self.xp.float)
         xi_p_out = self.xp.zeros((self.nlinks * self.num_pts,), dtype=self.xp.float)
@@ -1059,7 +1062,17 @@ class ResponseWrapper:
 
 
 class ResponseWrapperDetectorFrame(ResponseWrapper):
-    def __call__(self, *args, tdi_cut_ind=None, **kwargs):
+
+    def __init__(self, *args, reference_time=None, **kwargs):
+        ResponseWrapper.__init__(self, *args, **kwargs)
+        if isinstance(reference_time, float):
+            self.reference_time = reference_time
+        elif isinstance(reference_time, int):
+            self.index_reference = reference_time
+        else:
+            raise ValueError("Reference time must be provided. It must be either a float if it is fixed or and integer giving the index into the parameter set where the reference time is found (this is similar to the index_beta argument) if it will be adjusted for each call.")
+
+    def __call__(self, *args, projections_start_ind=None, projections_cut_ind=None, remove_projection_buffer=False, tdi_cut_ind=None, **kwargs):
         """Run the waveform and response generation
 
         Args:
@@ -1072,31 +1085,60 @@ class ResponseWrapperDetectorFrame(ResponseWrapper):
 
         """
 
-        remove_projection_buffer = True
-        projections_start_ind = 0
-        projections_cut_ind = 0
-
         args = list(args)
 
         # get sky coords
         beta = args[self.index_beta]
         lam = args[self.index_lambda]
 
+        if hasattr(self, "reference_time"):
+            reference_time = self.reference_time
+
+        else:
+            assert hasattr(self, "index_reference")
+            reference_time = args[self.index_reference]
+
         # remove them from the list if waveform generator does not take them
         if self.remove_sky_coords:
+            args.pop(self.index_reference)
             args.pop(self.index_beta)
             args.pop(self.index_lambda)
 
         # transform polar angle
         if not self.is_ecliptic_latitude:
             beta = np.pi / 2.0 - beta
-        
+
         delay0_out, delay1_out, xi_p_out, xi_c_out, k_dot_n_out = self.response_model.get_delays(lam, beta, t0=self.t0, projections_start_ind=projections_start_ind, projections_cut_ind=projections_cut_ind, remove_projection_buffer=remove_projection_buffer)
 
+        if reference_time == 0.0:
+            delay0_out[0, 0].item()
+        
+        ind_reference = int(reference_time / self.dt)
+        if ind_reference < 5:
+            inds_keep = np.arange(0, 10)
+            t_fit = inds_keep * self.dt
+            
+        elif ind_reference > delay0_out.shape[1] - 5:
+            inds_keep = np.arange(-10, 0) + delay0_out.shape[1]
+            t_fit = inds_keep * self.dt
+           
+        else:
+            inds_keep = np.arange(ind_reference - 5, ind_reference + 5)
+            t_fit = inds_keep * self.dt
+
+        vals = delay0_out[0, self.xp.asarray(inds_keep)].copy()
+        try:
+            vals = vals.get()
+        except AttributeError:
+            pass
+
+        ssb_reference_delay = CubicSpline(t_fit, vals)(reference_time).item()
+
         # normalize to delay0 and link zero
-        min_time = self.xp.min(delay0_out[0]).item()
-        delay0_out -= min_time
-        delay1_out -= min_time
+        delay0_out -= ssb_reference_delay
+        delay1_out -= ssb_reference_delay
+
+        self.ssb_reference_time = ssb_reference_delay
 
         y_gw = self.xp.zeros_like(delay0_out)
 

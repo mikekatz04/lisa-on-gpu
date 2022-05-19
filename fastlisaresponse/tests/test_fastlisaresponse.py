@@ -80,6 +80,7 @@ class ResponseTest(unittest.TestCase):
 
         index_lambda = 6
         index_beta = 7
+        index_reference_time = 8
 
         tdi_kwargs_esa = dict(
             orbit_kwargs=orbit_kwargs_esa, order=order, tdi=tdi_gen, tdi_chan="AET",
@@ -92,7 +93,8 @@ class ResponseTest(unittest.TestCase):
                 dt,
                 index_lambda,
                 index_beta,
-                t0=t0,
+                reference_time=int(index_reference_time),
+                t0=2000.0,
                 flip_hx=False,  # set to True if waveform is h+ - ihx
                 use_gpu=use_gpu,
                 remove_sky_coords=True,  # True if the waveform generator does not take sky coordinates
@@ -126,8 +128,17 @@ class ResponseTest(unittest.TestCase):
 
         beta = 0.9805742971871619
         lam = 5.22979888
+        
+        reference_time = 10023.342342
 
-        chans = gb_lisa_esa(A, f, fdot, iota, phi0, psi, lam, beta)
+        if delays_first:
+            args = (A, f, fdot, iota, phi0, psi, lam, beta, reference_time)
+            kwargs = dict(projections_start_ind=0, projections_cut_ind=0, remove_projection_buffer=True)
+        else:
+            args = (A, f, fdot, iota, phi0, psi, lam, beta)
+            kwargs = dict()
+
+        chans = gb_lisa_esa(*args, **kwargs)
 
         return chans
 
