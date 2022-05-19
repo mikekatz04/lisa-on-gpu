@@ -1100,7 +1100,8 @@ class ResponseWrapperDetectorFrame(ResponseWrapper):
 
         # remove them from the list if waveform generator does not take them
         if self.remove_sky_coords:
-            args.pop(self.index_reference)
+            if hasattr(self, "index_reference"):
+                args.pop(self.index_reference)
             args.pop(self.index_beta)
             args.pop(self.index_lambda)
 
