@@ -1,3 +1,4 @@
+from multiprocessing.sharedctypes import Value
 import numpy as np
 
 try:
@@ -810,6 +811,7 @@ class ResponseWrapper:
         is_ecliptic_latitude=True,
         use_gpu=False,
         remove_garbage=True,
+        n_overide=None,
         **kwargs,
     ):
 
@@ -820,7 +822,14 @@ class ResponseWrapper:
         self.dt = dt
         self.t0 = t0
         self.sampling_frequency = 1.0 / dt
-        self.n = int(Tobs * YRSID_SI / dt)
+        if n_overide is not None:
+            if not isinstance(n_overide, int):
+                raise ValueError("n_overide must be an integer if not None.")
+            self.n = n_overide
+
+        else:   
+            self.n = int(Tobs * YRSID_SI / dt)
+        
         self.Tobs = self.n * dt
         self.is_ecliptic_latitude = is_ecliptic_latitude
         self.remove_sky_coords = remove_sky_coords
@@ -890,10 +899,18 @@ class ResponseWrapper:
         tdi_out = self.response_model.get_tdi_delays()
 
         out = list(tdi_out)
-        if self.remove_garbage:
+        if self.remove_garbage is True:  # bool
             for i in range(len(out)):
                 out[i] = out[i][
                     self.response_model.tdi_start_ind : -self.response_model.tdi_start_ind
                 ]
+
+        elif isinstance(self.remove_garbage, str):  # bool
+            if self.remove_garbage != "zero":
+                raise ValueError("remove_garbage must be True, False, or 'zero'.")
+            for i in range(len(out)):
+                out[i][
+                    self.response_model.tdi_start_ind : -self.response_model.tdi_start_ind
+                ] = 0.0
 
         return out
