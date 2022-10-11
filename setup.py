@@ -207,6 +207,19 @@ if run_cuda_install:
 else:
     extensions = cpu_extensions
 
+with open("README.md", "r") as fh:
+    long_description = fh.read()
+    
+# setup version file
+with open("README.md", "r") as fh:
+    lines = fh.readlines()
+
+for line in lines:
+    if line.startswith("Current Version"):
+        version_string = line.split("Current Version: ")[1].split("\n")[0]
+
+with open("fastlisaresponse/_version.py", "w") as f:
+    f.write("__version__ = '{}'".format(version_string))
 
 setup(
     name="response",
@@ -218,4 +231,25 @@ setup(
     cmdclass={"build_ext": custom_build_ext},
     # Since the package has c code, the egg cannot be zipped
     zip_safe=False,
+    long_description=long_description,
+    long_description_content_type="text/markdown",
+    version=version_string,
+    url="https://github.com/mikekatz04/lisa-on-gpu",
+    classifiers=[
+        "Programming Language :: Python :: 3",
+        "License :: OSI Approved :: GNU General Public License (GPL)",
+        "Environment :: GPU :: NVIDIA CUDA",
+        "Natural Language :: English",
+        "Programming Language :: C++",
+        "Programming Language :: Cython",
+        "Programming Language :: Python :: 3.7",
+    ],
+    python_requires=">=3.6",
 )
+
+# remove src files created in this setup (cpp, pyx cpu files for gpu modules)
+for fp in fps_cu_to_cpp:
+    os.remove(fp + ".cpp")
+
+for fp in fps_pyx:
+    os.remove(fp + "_cpu.pyx")
