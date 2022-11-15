@@ -908,8 +908,7 @@ class ResponseWrapper:
             if self.remove_garbage != "zero":
                 raise ValueError("remove_garbage must be True, False, or 'zero'.")
             for i in range(len(out)):
-                out[i][
-                    self.response_model.tdi_start_ind : -self.response_model.tdi_start_ind
-                ] = 0.0
+                out[i][:self.response_model.tdi_start_ind] = 0.0
+                out[i][-self.response_model.tdi_start_ind:] = 0.0
 
         return out
