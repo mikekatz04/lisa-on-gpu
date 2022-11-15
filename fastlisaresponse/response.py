@@ -791,8 +791,13 @@ class ResponseWrapper:
             coordinate is the polar angle. In this case, the code will
             convert it with :math:`\beta=\pi / 2 - \Theta`. (Default: :code:`True`)
         use_gpu (bool, optional): If True, use GPU. (Default: :code:`False`)
-        remove_garbage (bool, optional): If True, it removes everything before ``t0``
-            and after the end time - ``t0``. (Default: ``True``)
+        remove_garbage (bool or str, optional): If True, it removes everything before ``t0``
+            and after the end time - ``t0``. If ``str``, it must be ``"zero"``. If ``"zero"``, 
+            it will not remove the points, but set them to zero. This is ideal for PE. (Default: ``True``)
+        n_overide (int, optional): If not ``None``, this will override the determination of 
+            the number of points, ``n``, from ``int(T/dt)`` to the ``n_overide``. This is used
+            if there is an issue matching points between the waveform generator and the response 
+            model.  
         **kwargs (dict, optional): Keyword arguments passed to :class:`pyResponseTDI`.
 
     """
