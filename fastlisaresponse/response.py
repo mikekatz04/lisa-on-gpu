@@ -605,9 +605,9 @@ class pyResponseTDI(object):
             )
 
         # determine sky vectors
-        k = np.zeros(3, dtype=np.float)
-        u = np.zeros(3, dtype=np.float)
-        v = np.zeros(3, dtype=np.float)
+        k = np.zeros(3, dtype=np.float64)
+        u = np.zeros(3, dtype=np.float64)
+        v = np.zeros(3, dtype=np.float64)
 
         assert len(input_in) >= self.num_pts
         self.num_total_points = len(input_in)
@@ -628,7 +628,7 @@ class pyResponseTDI(object):
         k[1] = -cosbeta * sinlam
         k[2] = -sinbeta
 
-        y_gw = self.xp.zeros((self.nlinks * self.num_pts,), dtype=self.xp.float)
+        y_gw = self.xp.zeros((self.nlinks * self.num_pts,), dtype=self.xp.float64)
         k_in = self.xp.asarray(k)
         u_in = self.xp.asarray(u)
         v_in = self.xp.asarray(v)

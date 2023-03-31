@@ -1,23 +1,25 @@
 <!DOCTYPE html>
 <html class="writer-html5" lang="en" >
 <head>
-  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Fast LISA Response Tutorial &mdash; fastlisaresponse 0.1.0 documentation</title>
       <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="_static/nbsphinx-code-cells.css" type="text/css" />
   <!--[if lt IE 9]>
     <script src="_static/js/html5shiv.min.js"></script>
   <![endif]-->
   
-        <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js"></script>
         <script src="_static/jquery.js"></script>
-        <script src="_static/underscore.js"></script>
+        <script src="_static/_sphinx_javascript_frameworks_compat.js"></script>
+        <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js"></script>
         <script src="_static/doctools.js"></script>
+        <script src="_static/sphinx_highlight.js"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-        <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
         <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <script src="_static/js/theme.js"></script>
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
@@ -29,11 +31,15 @@
     <nav data-toggle="wy-nav-shift" class="wy-nav-side">
       <div class="wy-side-scroll">
         <div class="wy-side-nav-search"  style="background: coral" >
-            <a href="index.html" class="icon icon-home"> fastlisaresponse
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            fastlisaresponse
           </a>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
-    <input type="text" name="q" placeholder="Search docs" />
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
     <input type="hidden" name="check_keywords" value="yes" />
     <input type="hidden" name="area" value="default" />
   </form>
@@ -78,8 +84,8 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="index.html" class="icon icon-home"></a> &raquo;</li>
-      <li>Fast LISA Response Tutorial</li>
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Fast LISA Response Tutorial</li>
       <li class="wy-breadcrumbs-aside">
             <a href="_sources/fast_LISA_response_tutorial.ipynb.txt" rel="nofollow"> View page source</a>
       </li>
@@ -91,284 +97,13 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  
-<style>
-/* CSS for nbsphinx extension */
-
-/* remove conflicting styling from Sphinx themes */
-div.nbinput.container div.prompt *,
-div.nboutput.container div.prompt *,
-div.nbinput.container div.input_area pre,
-div.nboutput.container div.output_area pre,
-div.nbinput.container div.input_area .highlight,
-div.nboutput.container div.output_area .highlight {
-    border: none;
-    padding: 0;
-    margin: 0;
-    box-shadow: none;
-}
-
-div.nbinput.container > div[class*=highlight],
-div.nboutput.container > div[class*=highlight] {
-    margin: 0;
-}
-
-div.nbinput.container div.prompt *,
-div.nboutput.container div.prompt * {
-    background: none;
-}
-
-div.nboutput.container div.output_area .highlight,
-div.nboutput.container div.output_area pre {
-    background: unset;
-}
-
-div.nboutput.container div.output_area div.highlight {
-    color: unset;  /* override Pygments text color */
-}
-
-/* avoid gaps between output lines */
-div.nboutput.container div[class*=highlight] pre {
-    line-height: normal;
-}
-
-/* input/output containers */
-div.nbinput.container,
-div.nboutput.container {
-    display: -webkit-flex;
-    display: flex;
-    align-items: flex-start;
-    margin: 0;
-    width: 100%;
-}
-@media (max-width: 540px) {
-    div.nbinput.container,
-    div.nboutput.container {
-        flex-direction: column;
-    }
-}
-
-/* input container */
-div.nbinput.container {
-    padding-top: 5px;
-}
-
-/* last container */
-div.nblast.container {
-    padding-bottom: 5px;
-}
-
-/* input prompt */
-div.nbinput.container div.prompt pre {
-    color: #307FC1;
-}
-
-/* output prompt */
-div.nboutput.container div.prompt pre {
-    color: #BF5B3D;
-}
-
-/* all prompts */
-div.nbinput.container div.prompt,
-div.nboutput.container div.prompt {
-    width: 4.5ex;
-    padding-top: 5px;
-    position: relative;
-    user-select: none;
-}
-
-div.nbinput.container div.prompt > div,
-div.nboutput.container div.prompt > div {
-    position: absolute;
-    right: 0;
-    margin-right: 0.3ex;
-}
-
-@media (max-width: 540px) {
-    div.nbinput.container div.prompt,
-    div.nboutput.container div.prompt {
-        width: unset;
-        text-align: left;
-        padding: 0.4em;
-    }
-    div.nboutput.container div.prompt.empty {
-        padding: 0;
-    }
-
-    div.nbinput.container div.prompt > div,
-    div.nboutput.container div.prompt > div {
-        position: unset;
-    }
-}
-
-/* disable scrollbars on prompts */
-div.nbinput.container div.prompt pre,
-div.nboutput.container div.prompt pre {
-    overflow: hidden;
-}
-
-/* input/output area */
-div.nbinput.container div.input_area,
-div.nboutput.container div.output_area {
-    -webkit-flex: 1;
-    flex: 1;
-    overflow: auto;
-}
-@media (max-width: 540px) {
-    div.nbinput.container div.input_area,
-    div.nboutput.container div.output_area {
-        width: 100%;
-    }
-}
-
-/* input area */
-div.nbinput.container div.input_area {
-    border: 1px solid #e0e0e0;
-    border-radius: 2px;
-    /*background: #f5f5f5;*/
-}
-
-/* override MathJax center alignment in output cells */
-div.nboutput.container div[class*=MathJax] {
-    text-align: left !important;
-}
-
-/* override sphinx.ext.imgmath center alignment in output cells */
-div.nboutput.container div.math p {
-    text-align: left;
-}
-
-/* standard error */
-div.nboutput.container div.output_area.stderr {
-    background: #fdd;
-}
-
-/* ANSI colors */
-.ansi-black-fg { color: #3E424D; }
-.ansi-black-bg { background-color: #3E424D; }
-.ansi-black-intense-fg { color: #282C36; }
-.ansi-black-intense-bg { background-color: #282C36; }
-.ansi-red-fg { color: #E75C58; }
-.ansi-red-bg { background-color: #E75C58; }
-.ansi-red-intense-fg { color: #B22B31; }
-.ansi-red-intense-bg { background-color: #B22B31; }
-.ansi-green-fg { color: #00A250; }
-.ansi-green-bg { background-color: #00A250; }
-.ansi-green-intense-fg { color: #007427; }
-.ansi-green-intense-bg { background-color: #007427; }
-.ansi-yellow-fg { color: #DDB62B; }
-.ansi-yellow-bg { background-color: #DDB62B; }
-.ansi-yellow-intense-fg { color: #B27D12; }
-.ansi-yellow-intense-bg { background-color: #B27D12; }
-.ansi-blue-fg { color: #208FFB; }
-.ansi-blue-bg { background-color: #208FFB; }
-.ansi-blue-intense-fg { color: #0065CA; }
-.ansi-blue-intense-bg { background-color: #0065CA; }
-.ansi-magenta-fg { color: #D160C4; }
-.ansi-magenta-bg { background-color: #D160C4; }
-.ansi-magenta-intense-fg { color: #A03196; }
-.ansi-magenta-intense-bg { background-color: #A03196; }
-.ansi-cyan-fg { color: #60C6C8; }
-.ansi-cyan-bg { background-color: #60C6C8; }
-.ansi-cyan-intense-fg { color: #258F8F; }
-.ansi-cyan-intense-bg { background-color: #258F8F; }
-.ansi-white-fg { color: #C5C1B4; }
-.ansi-white-bg { background-color: #C5C1B4; }
-.ansi-white-intense-fg { color: #A1A6B2; }
-.ansi-white-intense-bg { background-color: #A1A6B2; }
-
-.ansi-default-inverse-fg { color: #FFFFFF; }
-.ansi-default-inverse-bg { background-color: #000000; }
-
-.ansi-bold { font-weight: bold; }
-.ansi-underline { text-decoration: underline; }
-
-
-div.nbinput.container div.input_area div[class*=highlight] > pre,
-div.nboutput.container div.output_area div[class*=highlight] > pre,
-div.nboutput.container div.output_area div[class*=highlight].math,
-div.nboutput.container div.output_area.rendered_html,
-div.nboutput.container div.output_area > div.output_javascript,
-div.nboutput.container div.output_area:not(.rendered_html) > img{
-    padding: 5px;
-    margin: 0;
-}
-
-/* fix copybtn overflow problem in chromium (needed for 'sphinx_copybutton') */
-div.nbinput.container div.input_area > div[class^='highlight'],
-div.nboutput.container div.output_area > div[class^='highlight']{
-    overflow-y: hidden;
-}
-
-/* hide copybtn icon on prompts (needed for 'sphinx_copybutton') */
-.prompt a.copybtn {
-    display: none;
-}
-
-/* Some additional styling taken form the Jupyter notebook CSS */
-div.rendered_html table {
-  border: none;
-  border-collapse: collapse;
-  border-spacing: 0;
-  color: black;
-  font-size: 12px;
-  table-layout: fixed;
-}
-div.rendered_html thead {
-  border-bottom: 1px solid black;
-  vertical-align: bottom;
-}
-div.rendered_html tr,
-div.rendered_html th,
-div.rendered_html td {
-  text-align: right;
-  vertical-align: middle;
-  padding: 0.5em 0.5em;
-  line-height: normal;
-  white-space: normal;
-  max-width: none;
-  border: none;
-}
-div.rendered_html th {
-  font-weight: bold;
-}
-div.rendered_html tbody tr:nth-child(odd) {
-  background: #f5f5f5;
-}
-div.rendered_html tbody tr:hover {
-  background: rgba(66, 165, 245, 0.2);
-}
-
-/* CSS overrides for sphinx_rtd_theme */
-
-/* 24px margin */
-.nbinput.nblast.container,
-.nboutput.nblast.container {
-    margin-bottom: 19px;  /* padding has already 5px */
-}
-
-/* ... except between code cells! */
-.nblast.container + .nbinput.container {
-    margin-top: -19px;
-}
-
-.admonition > p:before {
-    margin-right: 4px;  /* make room for the exclamation icon */
-}
-
-/* Fix math alignment, see https://github.com/rtfd/sphinx_rtd_theme/pull/686 */
-.math {
-    text-align: unset;
-}
-</style>
-<section id="Fast-LISA-Response-Tutorial">
-<h1>Fast LISA Response Tutorial<a class="headerlink" href="#Fast-LISA-Response-Tutorial" title="Permalink to this headline"></a></h1>
+  <section id="Fast-LISA-Response-Tutorial">
+<h1>Fast LISA Response Tutorial<a class="headerlink" href="#Fast-LISA-Response-Tutorial" title="Permalink to this heading"></a></h1>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[1]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre>
-<span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
 <span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 <span class="o">%</span><span class="k">matplotlib</span> inline
 
@@ -383,15 +118,14 @@ div.rendered_html tbody tr:hover {
 <p>This tutorial provides information on using <code class="docutils literal notranslate"><span class="pre">fastlisaresponse</span></code>: a generic time-domain LISA response function, including both projection on to constellation arms and TDI combinations. It is also GPU/CPU agnostic. The GPU capability is helpful for use in Bayesian inference algorithms. For more information and a detailed API, please see the <a class="reference external" href="https://mikekatz04.github.io/lisa-on-gpu/">documentation</a>.</p>
 <p>If you use this code, please cite (#TODO: add paper) and the code’s Zenodo page (#TODO: add zenodo).</p>
 <section id="Orbits">
-<h2>Orbits<a class="headerlink" href="#Orbits" title="Permalink to this headline"></a></h2>
+<h2>Orbits<a class="headerlink" href="#Orbits" title="Permalink to this heading"></a></h2>
 <p>A few files are included with the Github repository. Orbits can also be generated with the LDC orbit module.</p>
 <p>Let’s look at <code class="docutils literal notranslate"><span class="pre">esa-trailing-orbits.h5</span></code> and <code class="docutils literal notranslate"><span class="pre">equalarmlength-trailing-fit.h5</span></code>. If you build an orbit file, it needs to be of the same form as these files.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[2]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre>
-<span></span><span class="n">out_esa</span> <span class="o">=</span> <span class="p">{}</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">out_esa</span> <span class="o">=</span> <span class="p">{}</span>
 <span class="k">with</span> <span class="n">h5py</span><span class="o">.</span><span class="n">File</span><span class="p">(</span><span class="s2">&quot;../orbit_files/esa-trailing-orbits.h5&quot;</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
     <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">f</span><span class="p">[</span><span class="s2">&quot;tcb&quot;</span><span class="p">]:</span>
         <span class="n">out_esa</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">f</span><span class="p">[</span><span class="s2">&quot;tcb&quot;</span><span class="p">][</span><span class="n">key</span><span class="p">][:]</span>
@@ -408,8 +142,7 @@ div.rendered_html tbody tr:hover {
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[3]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre>
-<span></span><span class="n">out_esa</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">out_esa</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span>
 </pre></div>
 </div>
 </div>
@@ -423,14 +156,13 @@ dict_keys([&#39;l_12&#39;, &#39;l_13&#39;, &#39;l_21&#39;, &#39;l_23&#39;, &#39;
 </pre></div></div>
 </div>
 <section id="Link-information">
-<h3>Link information<a class="headerlink" href="#Link-information" title="Permalink to this headline"></a></h3>
+<h3>Link information<a class="headerlink" href="#Link-information" title="Permalink to this heading"></a></h3>
 <p>The link information gives the delay time (<code class="docutils literal notranslate"><span class="pre">tt</span></code>) and the unit vector from emitter to receiver: <span class="math notranslate nohighlight">\(\vec{n}=\)</span>(<code class="docutils literal notranslate"><span class="pre">nx</span></code>, <code class="docutils literal notranslate"><span class="pre">ny</span></code>, <code class="docutils literal notranslate"><span class="pre">nz</span></code>).</p>
 <div class="nbinput docutils container">
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[4]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre>
-<span></span><span class="n">out_esa</span><span class="p">[</span><span class="s2">&quot;l_12&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dtype</span><span class="o">.</span><span class="n">names</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">out_esa</span><span class="p">[</span><span class="s2">&quot;l_12&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dtype</span><span class="o">.</span><span class="n">names</span>
 </pre></div>
 </div>
 </div>
@@ -447,8 +179,7 @@ dict_keys([&#39;l_12&#39;, &#39;l_13&#39;, &#39;l_21&#39;, &#39;l_23&#39;, &#39;
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[5]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre>
-<span></span><span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">out_esa</span><span class="p">[</span><span class="s2">&quot;t&quot;</span><span class="p">],</span> <span class="n">out_esa</span><span class="p">[</span><span class="s2">&quot;l_12&quot;</span><span class="p">][</span><span class="s2">&quot;tt&quot;</span><span class="p">],</span> <span class="n">label</span><span class="o">=</span><span class="s1">&#39;esa&#39;</span><span class="p">)</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">out_esa</span><span class="p">[</span><span class="s2">&quot;t&quot;</span><span class="p">],</span> <span class="n">out_esa</span><span class="p">[</span><span class="s2">&quot;l_12&quot;</span><span class="p">][</span><span class="s2">&quot;tt&quot;</span><span class="p">],</span> <span class="n">label</span><span class="o">=</span><span class="s1">&#39;esa&#39;</span><span class="p">)</span>
 <span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">out_equal</span><span class="p">[</span><span class="s2">&quot;t&quot;</span><span class="p">],</span> <span class="n">out_equal</span><span class="p">[</span><span class="s2">&quot;l_12&quot;</span><span class="p">][</span><span class="s2">&quot;tt&quot;</span><span class="p">],</span> <span class="n">label</span><span class="o">=</span><span class="s1">&#39;equal&#39;</span><span class="p">)</span>
 <span class="n">plt</span><span class="o">.</span><span class="n">legend</span><span class="p">()</span>
 <span class="c1">#plt.savefig(&quot;esa_equalarm_l_12.png&quot;)</span>
@@ -474,7 +205,7 @@ dict_keys([&#39;l_12&#39;, &#39;l_13&#39;, &#39;l_21&#39;, &#39;l_23&#39;, &#39;
 </section>
 </section>
 <section id="Gravitational-wave-signal">
-<h2>Gravitational wave signal<a class="headerlink" href="#Gravitational-wave-signal" title="Permalink to this headline"></a></h2>
+<h2>Gravitational wave signal<a class="headerlink" href="#Gravitational-wave-signal" title="Permalink to this heading"></a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">fastlisaresponse</span></code> takes any time domain signal in the form <span class="math notranslate nohighlight">\(h(t) = h_+ + ih_\times\)</span>. We are going to use a Galactic binary waveform given by</p>
 <div class="math notranslate nohighlight">
 \[h_{+,\text{src}} = -A(1+\cos^2{\iota})\cos{\Phi(t)}\qquad \text{          and}\]</div>
@@ -503,8 +234,7 @@ dict_keys([&#39;l_12&#39;, &#39;l_13&#39;, &#39;l_21&#39;, &#39;l_23&#39;, &#39;
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[6]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre>
-<span></span><span class="k">class</span> <span class="nc">GBWave</span><span class="p">:</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">GBWave</span><span class="p">:</span>
     <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">use_gpu</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
 
         <span class="k">if</span> <span class="n">use_gpu</span><span class="p">:</span>
@@ -542,25 +272,23 @@ dict_keys([&#39;l_12&#39;, &#39;l_13&#39;, &#39;l_21&#39;, &#39;l_23&#39;, &#39;
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[7]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre>
-<span></span><span class="n">gb</span> <span class="o">=</span> <span class="n">GBWave</span><span class="p">(</span><span class="n">use_gpu</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">gb</span> <span class="o">=</span> <span class="n">GBWave</span><span class="p">(</span><span class="n">use_gpu</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
 </section>
 <section id="Build-waveforms">
-<h2>Build waveforms<a class="headerlink" href="#Build-waveforms" title="Permalink to this headline"></a></h2>
+<h2>Build waveforms<a class="headerlink" href="#Build-waveforms" title="Permalink to this heading"></a></h2>
 <p>We will now move on to the response. The method and specific maths used to determine the response function can be found in our paper: # TODO: add paper. We recommend accessing the response through the <code class="docutils literal notranslate"><span class="pre">`fastlisaresponse.ResponseWrapper</span></code> &lt;<a class="reference external" href="https://mikekatz04.github.io/lisa-on-gpu/html/user/main.html#response-function-wrapper">https://mikekatz04.github.io/lisa-on-gpu/html/user/main.html#response-function-wrapper</a>&gt;`__. You can access the response function itself through
 <code class="docutils literal notranslate"><span class="pre">`fastlisaresponse.pyTDIResponse</span></code> &lt;<a class="reference external" href="https://mikekatz04.github.io/lisa-on-gpu/html/user/main.html#fast-response-function">https://mikekatz04.github.io/lisa-on-gpu/html/user/main.html#fast-response-function</a>&gt;`__. See the <a class="reference external" href="https://mikekatz04.github.io/lisa-on-gpu/">documentation</a> for using this class directly as it is a bit more complicated. If you only need to use the projection portion or the TDI part, then you should access the response class itself. Otherwise, the wrapper should be fine. You can access the projections from the wrapper if need.</p>
 <section id="Setup-classes">
-<h3>Setup classes<a class="headerlink" href="#Setup-classes" title="Permalink to this headline"></a></h3>
+<h3>Setup classes<a class="headerlink" href="#Setup-classes" title="Permalink to this heading"></a></h3>
 <p>First we will setup everything to properly compute the response function for Galactic binary waveforms.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[8]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre>
-<span></span><span class="n">use_gpu</span> <span class="o">=</span> <span class="kc">False</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">use_gpu</span> <span class="o">=</span> <span class="kc">False</span>
 
 <span class="n">T</span> <span class="o">=</span> <span class="mf">2.0</span>  <span class="c1"># years</span>
 <span class="n">t0</span> <span class="o">=</span> <span class="mf">10000.0</span>  <span class="c1"># time at which signal starts (chops off data at start of waveform where information is not correct)</span>
@@ -610,32 +338,28 @@ dict_keys([&#39;l_12&#39;, &#39;l_13&#39;, &#39;l_21&#39;, &#39;l_23&#39;, &#39;
 
 <span class="n">beta</span> <span class="o">=</span> <span class="mf">0.9805742971871619</span>
 <span class="n">lam</span> <span class="o">=</span> <span class="mf">5.22979888</span>
-
-
-</pre></div>
+<br/><br/></pre></div>
 </div>
 </div>
 </section>
 <section id="Run-generator">
-<h3>Run generator<a class="headerlink" href="#Run-generator" title="Permalink to this headline"></a></h3>
+<h3>Run generator<a class="headerlink" href="#Run-generator" title="Permalink to this heading"></a></h3>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[9]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre>
-<span></span><span class="n">chans</span> <span class="o">=</span> <span class="n">gb_lisa_esa</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">f</span><span class="p">,</span> <span class="n">fdot</span><span class="p">,</span> <span class="n">iota</span><span class="p">,</span> <span class="n">phi0</span><span class="p">,</span> <span class="n">psi</span><span class="p">,</span> <span class="n">lam</span><span class="p">,</span> <span class="n">beta</span><span class="p">)</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">chans</span> <span class="o">=</span> <span class="n">gb_lisa_esa</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">f</span><span class="p">,</span> <span class="n">fdot</span><span class="p">,</span> <span class="n">iota</span><span class="p">,</span> <span class="n">phi0</span><span class="p">,</span> <span class="n">psi</span><span class="p">,</span> <span class="n">lam</span><span class="p">,</span> <span class="n">beta</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
 </section>
 <section id="Plot-results">
-<h3>Plot results<a class="headerlink" href="#Plot-results" title="Permalink to this headline"></a></h3>
+<h3>Plot results<a class="headerlink" href="#Plot-results" title="Permalink to this heading"></a></h3>
 <div class="nbinput docutils container">
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[10]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre>
-<span></span><span class="o">%</span><span class="k">matplotlib</span> inline
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="o">%</span><span class="k">matplotlib</span> inline
 <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">sharex</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
 <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">lab</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">([</span><span class="s2">&quot;A&quot;</span><span class="p">,</span> <span class="s2">&quot;E&quot;</span><span class="p">,</span> <span class="s2">&quot;T&quot;</span><span class="p">]):</span>
@@ -654,13 +378,12 @@ dict_keys([&#39;l_12&#39;, &#39;l_13&#39;, &#39;l_21&#39;, &#39;l_23&#39;, &#39;
 </section>
 </section>
 <section id="Compare-to-equal-armlength-fit">
-<h2>Compare to equal armlength fit<a class="headerlink" href="#Compare-to-equal-armlength-fit" title="Permalink to this headline"></a></h2>
+<h2>Compare to equal armlength fit<a class="headerlink" href="#Compare-to-equal-armlength-fit" title="Permalink to this heading"></a></h2>
 <div class="nbinput docutils container">
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[11]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre>
-<span></span><span class="n">orbit_file_equal</span> <span class="o">=</span> <span class="s2">&quot;../orbit_files/equalarmlength-trailing-fit.h5&quot;</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">orbit_file_equal</span> <span class="o">=</span> <span class="s2">&quot;../orbit_files/equalarmlength-trailing-fit.h5&quot;</span>
 
 <span class="n">orbit_kwargs_equal</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">orbit_file</span><span class="o">=</span><span class="n">orbit_file_equal</span><span class="p">)</span>
 
@@ -701,14 +424,13 @@ dict_keys([&#39;l_12&#39;, &#39;l_13&#39;, &#39;l_21&#39;, &#39;l_23&#39;, &#39;
 </div>
 </section>
 <section id="Custom-TDI-setup">
-<h2>Custom TDI setup<a class="headerlink" href="#Custom-TDI-setup" title="Permalink to this headline"></a></h2>
+<h2>Custom TDI setup<a class="headerlink" href="#Custom-TDI-setup" title="Permalink to this heading"></a></h2>
 <p>Here is an example of the 2nd Generation TDI implementation within the code.</p>
 <div class="nbinput docutils container">
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[12]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre>
-<span></span><span class="n">X1</span> <span class="o">=</span> <span class="p">[</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">X1</span> <span class="o">=</span> <span class="p">[</span>
     <span class="p">{</span><span class="s2">&quot;link&quot;</span><span class="p">:</span> <span class="mi">13</span><span class="p">,</span> <span class="s2">&quot;links_for_delay&quot;</span><span class="p">:</span> <span class="p">[],</span> <span class="s2">&quot;sign&quot;</span><span class="p">:</span> <span class="o">+</span><span class="mi">1</span><span class="p">},</span>
     <span class="p">{</span><span class="s2">&quot;link&quot;</span><span class="p">:</span> <span class="mi">31</span><span class="p">,</span> <span class="s2">&quot;links_for_delay&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">13</span><span class="p">],</span> <span class="s2">&quot;sign&quot;</span><span class="p">:</span> <span class="o">+</span><span class="mi">1</span><span class="p">},</span>
     <span class="p">{</span><span class="s2">&quot;link&quot;</span><span class="p">:</span> <span class="mi">12</span><span class="p">,</span> <span class="s2">&quot;links_for_delay&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">13</span><span class="p">,</span> <span class="mi">31</span><span class="p">],</span> <span class="s2">&quot;sign&quot;</span><span class="p">:</span> <span class="o">+</span><span class="mi">1</span><span class="p">},</span>

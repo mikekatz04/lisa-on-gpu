@@ -139,7 +139,7 @@ We use `SemVer <http://semver.org/>`__ for versioning. For the versions
 available, see the `tags on this
 repository <https://github.com/mikekatz04/lisa-on-gpu/tags>`__.
 
-Current Version: 1.0.1
+Current Version: 1.0.2
 
 Authors
 -------
