@@ -1,28 +1,31 @@
 import numpy as np
 cimport numpy as np
 
-from fastlisaresponse.pointer_adjust import pointer_adjust
+from lisatools.utils.pointeradjust import pointer_adjust
 
 assert sizeof(int) == sizeof(np.int32_t)
+
+cdef extern from "Detector.hpp":
+    ctypedef void* Orbits 'Orbits'
 
 cdef extern from "LISAResponse.hh":
     ctypedef void* cmplx 'cmplx'
     void get_response(double* y_gw, double* t_data, double* k_in, double* u_in, double* v_in, double dt,
-                  int num_delays, int *link_space_craft_0_in, int *link_space_craft_1_in,
+                  int num_delays,
                   cmplx *input_in, int num_inputs, int order,
                   double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in,
                   int projections_start_ind,
-                  double* x_in_receiver, double* x_in_emitter, double* L_in, int num_orbit_inputs);
+                  Orbits *orbits);
 
-    void get_tdi_delays(double* delayed_links, double* input_links, int num_inputs, int num_orbit_info, double* delays, int num_delays, double dt, int* link_inds_in, int* tdi_signs_in, int num_units, int num_channels,
-                   int order, double sampling_frequency, int buffer_integer, double* A_in, double deps, int num_A, double* E_in, int tdi_start_ind);
+    void get_tdi_delays(double *delayed_links, double *input_links, int num_inputs, int num_delays, double *t_arr, int *tdi_base_link, int *tdi_link_combinations, int *tdi_signs, int *channels, int num_units, int num_channels,
+                    int order, double sampling_frequency, int buffer_integer, double *A_in, double deps, int num_A, double *E_in, int tdi_start_ind, Orbits *orbits);
 
 @pointer_adjust
 def get_response_wrap(y_gw, t_data, k_in, u_in, v_in, dt,
-              num_delays, link_space_craft_0_in, link_space_craft_1_in,
+              num_delays,
               input_in, num_inputs, order, sampling_frequency, buffer_integer,
               A_in, deps, num_A, E_in, projections_start_ind,
-              x_in_receiver, x_in_emitter, L_in, num_orbit_inputs):
+              orbits):
 
     cdef size_t y_gw_in = y_gw
     cdef size_t t_data_in = t_data
@@ -30,35 +33,33 @@ def get_response_wrap(y_gw, t_data, k_in, u_in, v_in, dt,
     cdef size_t u_in_in = u_in
     cdef size_t v_in_in = v_in
 
-    cdef size_t x_in_receiver_in = x_in_receiver
-    cdef size_t x_in_emitter_in = x_in_emitter
-    cdef size_t L_in_in = L_in
-
-    cdef size_t link_space_craft_0_in_in = link_space_craft_0_in
-    cdef size_t link_space_craft_1_in_in = link_space_craft_1_in
+    cdef size_t orbits_in = orbits
     cdef size_t input_in_in = input_in
 
     cdef size_t A_in_in = A_in
     cdef size_t E_in_in = E_in
 
     get_response(<double* >y_gw_in, <double*> t_data_in, <double* >k_in_in, <double* >u_in_in, <double* >v_in_in, dt,
-                num_delays, <int *>link_space_craft_0_in_in, <int *>link_space_craft_1_in_in,
+                num_delays, 
                 <cmplx *>input_in_in, num_inputs, order, sampling_frequency, buffer_integer,
                 <double*> A_in_in, deps, num_A, <double*> E_in_in, projections_start_ind,
-                <double* > x_in_receiver_in, <double* > x_in_emitter_in, <double* > L_in_in, num_orbit_inputs)
+                <Orbits*> orbits_in)
 
 
 @pointer_adjust
-def get_tdi_delays_wrap(delayed_links, y_gw, num_inputs, num_orbit_info, delays, num_delays, dt, link_inds, tdi_signs, num_units, num_channels,
-               order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind):
+def get_tdi_delays_wrap(delayed_links, y_gw, num_inputs, num_delays, t_arr, tdi_base_link, tdi_link_combinations, tdi_signs, channels, num_units, num_channels,
+               order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind, orbits):
 
     cdef size_t delayed_links_in = delayed_links
     cdef size_t y_gw_in = y_gw
-    cdef size_t link_inds_in = link_inds
-    cdef size_t tdi_signs_in = tdi_signs
-    cdef size_t delays_in = delays
     cdef size_t A_in_in = A_in
     cdef size_t E_in_in = E_in
+    cdef size_t t_arr_in = t_arr
+    cdef size_t tdi_base_link_in = tdi_base_link
+    cdef size_t tdi_link_combinations_in = tdi_link_combinations
+    cdef size_t tdi_signs_in = tdi_signs
+    cdef size_t channels_in = channels
+    cdef size_t orbits_in = orbits
 
-    get_tdi_delays(<double*> delayed_links_in, <double*> y_gw_in, num_inputs, num_orbit_info, <double*> delays_in, num_delays, dt, <int*> link_inds_in, <int*> tdi_signs_in, num_units, num_channels,
-                   order, sampling_frequency, buffer_integer, <double*> A_in_in, deps, num_A, <double*> E_in_in, tdi_start_ind)
+    get_tdi_delays(<double*> delayed_links_in, <double*> y_gw_in, num_inputs, num_delays, <double*> t_arr_in, <int*> tdi_base_link_in, <int*> tdi_link_combinations_in, <int*> tdi_signs_in, <int*> channels_in, num_units, num_channels,
+                   order, sampling_frequency, buffer_integer, <double*> A_in_in, deps, num_A, <double*> E_in_in, tdi_start_ind, <Orbits*> orbits_in)

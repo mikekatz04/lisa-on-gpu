@@ -163,7 +163,11 @@ if run_cuda_install:
                 # "-lineinfo",
             ],  # for debugging
         },
-        include_dirs=[numpy_include, CUDA["include"], "include/",],
+        include_dirs=[
+            numpy_include,
+            CUDA["include"],
+            "include/",
+        ],
     )
 
     response_ext = Extension(
@@ -189,13 +193,19 @@ cpu_extension = dict(
     # we're only going to use certain compiler args with nvcc
     # and not with gcc the implementation of this trick is in
     # customize_compiler()
-    extra_compile_args={"gcc": ["-std=c++11", "-fopenmp"],},  # '-g'],
-    include_dirs=[numpy_include, "include"],
+    extra_compile_args={
+        "gcc": [],
+    },  # '-g'],
+    include_dirs=[numpy_include, "include", "../LISAanalysistools/include"],
 )
 
 response_cpu_ext = Extension(
     "pyresponse_cpu",
-    sources=["src/LISAResponse.cpp", "src/responselisa_cpu.pyx"],
+    sources=[
+        "../LISAanalysistools/src/Detector.cpp",
+        "src/LISAResponse.cpp",
+        "src/responselisa_cpu.pyx",
+    ],
     **cpu_extension
 )
 
@@ -209,7 +219,7 @@ else:
 
 with open("README.md", "r") as fh:
     long_description = fh.read()
-    
+
 # setup version file
 with open("README.md", "r") as fh:
     lines = fh.readlines()
