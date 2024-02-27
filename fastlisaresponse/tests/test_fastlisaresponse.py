@@ -40,11 +40,11 @@ class GBWave:
         sin2psi = self.xp.sin(2.0 * psi)
         cosiota = self.xp.cos(iota)
 
-        fddot = 11.0 / 3.0 * fdot ** 2 / f
+        fddot = 11.0 / 3.0 * fdot**2 / f
 
         # phi0 is phi(t = 0) not phi(t = t0)
         phase = (
-            2 * np.pi * (f * t + 1.0 / 2.0 * fdot * t ** 2 + 1.0 / 6.0 * fddot * t ** 3)
+            2 * np.pi * (f * t + 1.0 / 2.0 * fdot * t**2 + 1.0 / 6.0 * fddot * t**3)
             - phi0
         )
 
@@ -71,15 +71,18 @@ class ResponseTest(unittest.TestCase):
         # order of the langrangian interpolation
         order = 25
 
-        orbit_file_esa = path_to_file + "/../../orbit_files/esa-trailing-orbits.h5"
+        # orbit_file_esa = path_to_file + "/../../orbit_files/esa-trailing-orbits.h5"
 
-        orbit_kwargs_esa = dict(orbit_file=orbit_file_esa)
+        # orbit_kwargs_esa = dict(orbit_file=orbit_file_esa)
 
         index_lambda = 6
         index_beta = 7
 
         tdi_kwargs_esa = dict(
-            orbit_kwargs=orbit_kwargs_esa, order=order, tdi=tdi_gen, tdi_chan="AET",
+            orbits=None,
+            order=order,
+            tdi=tdi_gen,
+            tdi_chan="AET",
         )
 
         gb_lisa_esa = ResponseWrapper(
@@ -131,6 +134,7 @@ class ResponseTest(unittest.TestCase):
 
         waveform_cpu = self.run_test("2nd generation", False)
 
+        breakpoint()
         self.assertTrue(np.all(np.isnan(waveform_cpu) == False))
 
         if gpu_available:

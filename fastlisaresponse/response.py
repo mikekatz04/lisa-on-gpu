@@ -1,8 +1,9 @@
 from multiprocessing.sharedctypes import Value
 import numpy as np
+from typing import Optional, List
 
 try:
-    import cupy as xp
+    import cupy as cp
     from pyresponse import get_response_wrap as get_response_wrap_gpu
     from pyresponse import get_tdi_delays_wrap as get_tdi_delays_wrap_gpu
 
@@ -19,6 +20,10 @@ import time
 import h5py
 
 from scipy.interpolate import CubicSpline
+
+from lisatools.detector import EqualArmlengthOrbits, Orbits
+from lisatools.utils.utility import AET
+from lisatools.utils.pointeradjust import pointer_adjust
 
 YRSID_SI = 31558149.763545603
 
@@ -37,38 +42,6 @@ from math import factorial
 factorials = np.array([factorial(i) for i in range(30)])
 
 C_inv = 3.3356409519815204e-09
-
-
-def AET(X, Y, Z):
-    return (
-        (Z - X) / np.sqrt(2.0),
-        (X - 2.0 * Y + Z) / np.sqrt(6.0),
-        (X + Y + Z) / np.sqrt(3.0),
-    )
-
-
-def pointer_adjust(func):
-    def func_wrapper(*args, **kwargs):
-        targs = []
-        for arg in args:
-            if gpu:
-                if isinstance(arg, xp.ndarray):
-                    targs.append(arg.data.mem.ptr)
-                    continue
-
-            if isinstance(arg, np.ndarray):
-                targs.append(arg.__array_interface__["data"][0])
-                continue
-
-            try:
-                targs.append(arg.ptr)
-                continue
-            except AttributeError:
-                targs.append(arg)
-
-        return func(*targs, **kwargs)
-
-    return func_wrapper
 
 
 class pyResponseTDI(object):
@@ -164,10 +137,10 @@ class pyResponseTDI(object):
         self,
         sampling_frequency,
         num_pts,
-        orbit_kwargs,
         order=25,
         tdi="1st generation",
-        tdi_orbit_kwargs={},
+        orbits: Optional[Orbits] = EqualArmlengthOrbits,
+        tdi_orbits: Optional[Orbits] = None,
         tdi_chan="XYZ",
         use_gpu=False,
     ):
@@ -191,12 +164,10 @@ class pyResponseTDI(object):
         # setup functions for GPU or CPU
         self.use_gpu = use_gpu
         if use_gpu:
-            self.xp = xp
             self.response_gen = get_response_wrap_gpu
             self.tdi_gen = get_tdi_delays_wrap_gpu
 
         else:
-            self.xp = np
             self.response_gen = get_response_wrap_cpu
             self.tdi_gen = get_tdi_delays_wrap_cpu
 
@@ -204,17 +175,54 @@ class pyResponseTDI(object):
         self._fill_A_E()
 
         # setup orbits
-        self.orbits_store = {}
-        self.orbits_store["projection"] = self._init_orbit_information(**orbit_kwargs)
+        self.response_orbits = orbits
 
-        # if tdi_orbit_kwargs are given, fill TDI specific orbit info
-        if tdi_orbit_kwargs == {}:
-            self.orbits_store["tdi"] = self.orbits_store["projection"]
-        else:
-            self.orbits_store["tdi"] = self._init_orbit_information(**tdi_orbit_kwargs)
+        if tdi_orbits is None:
+            tdi_orbits = self.response_orbits
+
+        self.tdi_orbits = tdi_orbits
+
+        # setup spacecraft links indexes
 
         # setup TDI info
         self._init_TDI_delays()
+
+    @property
+    def xp(self) -> object:
+        return np if not self.use_gpu else cp
+
+    @property
+    def response_orbits(self) -> Orbits:
+        """Response function orbits."""
+        return self._response_orbits
+
+    @response_orbits.setter
+    def response_orbits(self, orbits: Orbits) -> None:
+        """Set response orbits."""
+
+        if orbits is None:
+            orbits = EqualArmlengthOrbits()
+
+        assert isinstance(orbits, Orbits)
+
+        orbits.configure(linear_interp_setup=True)
+        self._response_orbits = orbits
+
+    @property
+    def tdi_orbits(self) -> Orbits:
+        """TDI function orbits."""
+        return self._tdi_orbits
+
+    @tdi_orbits.setter
+    def tdi_orbits(self, orbits: Orbits) -> None:
+        """Set TDI orbits."""
+
+        if orbits is None:
+            orbits = EqualArmlengthOrbits()
+
+        assert isinstance(orbits, Orbits)
+
+        self._tdi_orbits = orbits
 
     @property
     def citation(self):
@@ -263,174 +271,8 @@ class pyResponseTDI(object):
 
         self.E_in = self.xp.asarray(E_in)
 
-    def _init_orbit_information(
-        self, orbit_module=None, max_t_orbits=None, orbit_file=None, order=0,
-    ):
-        """Initialize orbital information"""
-
-        if orbit_module is None:
-            if orbit_file is None:
-                raise ValueError("Must provide either orbit file or orbit module.")
-
-            self.nlinks = 6
-
-            # link order: 21, 12, 31, 13, 32, 23
-            # setup spacecraft links indexes
-            link_space_craft_0 = np.zeros((self.nlinks,), dtype=int)
-            link_space_craft_1 = np.zeros((self.nlinks,), dtype=int)
-            link_space_craft_0[0] = 1
-            link_space_craft_1[0] = 0
-            link_space_craft_0[1] = 0
-            link_space_craft_1[1] = 1
-
-            link_space_craft_0[2] = 2
-            link_space_craft_1[2] = 0
-            link_space_craft_0[3] = 0
-            link_space_craft_1[3] = 2
-
-            link_space_craft_0[4] = 2
-            link_space_craft_1[4] = 1
-            link_space_craft_0[5] = 1
-            link_space_craft_1[5] = 2
-
-            self.link_space_craft_0_in = self.xp.asarray(link_space_craft_0).astype(
-                self.xp.int32
-            )
-            self.link_space_craft_1_in = self.xp.asarray(link_space_craft_1).astype(
-                self.xp.int32
-            )
-
-            # get info from the file
-            out = {}
-            with h5py.File(orbit_file, "r") as f:
-                for key in f["tcb"]:
-                    out[key] = f["tcb"][key][:]
-
-            # get t and normalize so first point is at t=0
-            t_in = out["t"]
-            t_in = t_in - t_in[0]
-            length_in = len(t_in)
-
-            # get x and L information
-            x_in = []
-            for i in range(3):
-                for let in ["x", "y", "z"]:
-                    x_in.append(out["sc_" + str(i + 1)][let])
-
-            L_in = []
-
-            for link_i in range(self.nlinks):
-                sc0 = self.link_space_craft_0_in[link_i] + 1
-                sc1 = self.link_space_craft_1_in[link_i] + 1
-
-                x_val = out["sc_" + str(sc0)]["x"] - out["sc_" + str(sc1)]["x"]
-                y_val = out["sc_" + str(sc0)]["y"] - out["sc_" + str(sc1)]["y"]
-                z_val = out["sc_" + str(sc0)]["z"] - out["sc_" + str(sc1)]["z"]
-
-                norm = np.sqrt(x_val ** 2 + y_val ** 2 + z_val ** 2)
-
-                L_in.append(out["l_" + str(sc0) + str(sc1)]["tt"])
-
-            # constrain maximum time used for orbits
-            if max_t_orbits is not None and max_t_orbits < t_in[-1]:
-                t_max = max_t_orbits
-            else:
-                t_max = t_in[-1]
-
-            if t_max < self.num_pts * self.dt:
-                raise ValueError(
-                    "End time for projection is greater than end time for orbital information."
-                )
-
-            # new time array
-            t_new = np.arange(self.num_pts) * self.dt
-
-            # evaluate splines on everything
-            for i in range(self.nlinks):
-                L_in[i] = CubicSpline(t_in, L_in[i])(t_new)
-
-            x_in_receiver = [None for _ in range(2 * len(x_in))]
-            x_in_emitter = [None for _ in range(2 * len(x_in))]
-            for link_i in range(self.nlinks):
-                sc0 = self.link_space_craft_0_in[link_i].item()  # receiver
-                sc1 = self.link_space_craft_1_in[link_i].item()  # emitter
-
-                for j in range(3):
-                    x_in_receiver[link_i * 3 + j] = CubicSpline(
-                        t_in, x_in[sc0 * 3 + j]
-                    )(t_new)
-                    x_in_emitter[link_i * 3 + j] = CubicSpline(t_in, x_in[sc1 * 3 + j])(
-                        t_new - L_in[link_i]
-                    )
-
-        else:
-            raise NotImplementedError
-            # perform computations from LDC orbit class
-            t_new = np.arange(self.num_pts) * self.dt
-            self.nlinks = orbit_module.number_of_arms
-            self.link_space_craft_0_in = self.xp.zeros(self.nlinks, dtype=self.xp.int32)
-            self.link_space_craft_1_in = self.xp.zeros(self.nlinks, dtype=self.xp.int32)
-
-            L_in = []
-            for i in range(orbit_module.number_of_arms):
-                emitter, receiver = orbit_module.get_pairs()[i]
-
-                self.link_space_craft_0_in[i] = emitter - 1
-                self.link_space_craft_1_in[i] = receiver - 1
-
-                L_in.append(
-                    orbit_module.compute_travel_time(
-                        emitter, receiver, t_new, order=order
-                    )
-                )
-
-            x_in = []
-            # alphas = orbit_module.compute_alpha(t_new)
-            for i in range(1, orbit_module.number_of_spacecraft + 1):
-                temp = orbit_module.compute_position(i, t_new)
-                for j in range(3):
-                    x_in.append(temp[j])
-
-        # get max buffer for projections
-        projection_buffer = int(np.max(x_in) * C_inv + np.max(np.abs(L_in))) + 4 * order
-        x_in_receiver = self.xp.asarray(np.concatenate(x_in_receiver))
-        x_in_emitter = self.xp.asarray(np.concatenate(x_in_emitter))
-        L_in_for_TDI = L_in
-        L_in = self.xp.asarray(np.concatenate(L_in))
-        num_orbit_inputs = len(t_new)
-        t_data_cpu = t_new
-        t_data = self.xp.asarray(t_new)
-        final_t = t_new[-1]
-
-        # read out all info in a dictionary
-        orbits_store = dict(
-            projection_buffer=projection_buffer,
-            x_in_receiver=x_in_receiver,
-            x_in_emitter=x_in_emitter,
-            L_in_for_TDI=L_in_for_TDI,
-            L_in=L_in,
-            num_orbit_inputs=num_orbit_inputs,
-            t_data_cpu=t_data_cpu,
-            t_data=t_data,
-            final_t=final_t,
-            orbit_file=orbit_file,
-            orbit_module=orbit_module,
-            max_t_orbits=max_t_orbits,
-        )
-        return orbits_store
-
     def _init_TDI_delays(self):
         """Initialize TDI specific information"""
-
-        # sets attributes in class related to orbits_store
-        for key, item in self.orbits_store["tdi"].items():
-            setattr(self, key, item)
-
-        link_dict = {}
-        for link_i in range(self.nlinks):
-            sc0 = self.link_space_craft_0_in[link_i]
-            sc1 = self.link_space_craft_1_in[link_i]
-            link_dict[int(str(sc0 + 1) + str(sc1 + 1))] = link_i
 
         # setup the actual TDI combination
         if self.tdi in ["1st generation", "2nd generation"]:
@@ -482,77 +324,54 @@ class pyResponseTDI(object):
             raise ValueError(
                 "tdi kwarg should be '1st generation', '2nd generation', or a list with a specific tdi combination."
             )
+        self.tdi_combinations = tdi_combinations
 
-        # setup computation of channels that are not delayed in order to save time
-        channels_no_delays = [[], [], []]
+    @property
+    def tdi_combinations(self) -> List:
+        """TDI Combination setup"""
+        return self._tdi_combinations
 
-        num_delay_comps = 0
-        for i, tdi in enumerate(tdi_combinations):
-            if len(tdi["links_for_delay"]) == 0:
-                for j in range(3):
-                    ind = link_dict[self._cyclic_permutation(tdi["link"], j)]
-                    channels_no_delays[j].append([ind, tdi["sign"]])
+    @tdi_combinations.setter
+    def tdi_combinations(self, tdi_combinations: List) -> None:
+        """Set TDI combinations and fill out setup."""
+        tdi_base_links = []
+        tdi_link_combinations = []
+        tdi_signs = []
+        channels = []
 
-            else:
-                num_delay_comps += 1
-
-        self.channels_no_delays = np.asarray(channels_no_delays)
-
-        self.num_tdi_combinations = len(tdi_combinations)
-        self.num_tdi_delay_comps = num_delay_comps
-
-        delays = np.zeros((3, self.num_tdi_delay_comps, self.num_pts))
-
-        delays[:] = self.t_data_cpu
-
-        link_inds = np.zeros((3, self.num_tdi_delay_comps), dtype=np.int32)
-
-        signs = []
-        # cyclic permuatations for X, Y, Z
-        # computing all of the delays a priori
-        for j in range(3):
-            i = 0
-            for tdi in tdi_combinations:
-
-                if len(tdi["links_for_delay"]) == 0:
+        for permutation_number in range(3):
+            for tmp in tdi_combinations:
+                if len(tmp["links_for_delay"]) == 0:
+                    tdi_base_links.append(
+                        self._cyclic_permutation(tmp["link"], permutation_number)
+                    )
+                    tdi_link_combinations.append(-11)
+                    tdi_signs.append(tmp["sign"])
+                    channels.append(permutation_number)
                     continue
 
-                link = self._cyclic_permutation(tdi["link"], j)
-                link_inds[j][i] = link_dict[link]
+                for link_delay in tmp["links_for_delay"]:
+                    tdi_base_links.append(
+                        self._cyclic_permutation(tmp["link"], permutation_number)
+                    )
+                    tdi_link_combinations.append(
+                        self._cyclic_permutation(link_delay, permutation_number)
+                    )
+                    tdi_signs.append(tmp["sign"])
+                    channels.append(permutation_number)
 
-                temp_delay = 0.0
-                for link in tdi["links_for_delay"]:
-                    link = self._cyclic_permutation(link, j)
-                    link_index = link_dict[link]
-
-                    # handles advancements
-                    if "type" in tdi and tdi["type"] == "advance":
-                        delays[j][i] += self.L_in_for_TDI[link_index]
-                    else:
-                        delays[j][i] -= self.L_in_for_TDI[link_index]
-
-                if j == 0:
-                    signs.append(tdi["sign"])
-                i += 1
-
-        try:
-            t_arr = self.t_data.get()
-        except AttributeError:
-            t_arr = self.t_data
-
-        # find the maximum delayed applied to the combinations
-        self.max_delay = np.max(np.abs(t_arr - delays[:]))
-
-        # get necessary buffer for TDI
-        self.check_tdi_buffer = (
-            int(self.max_delay * self.sampling_frequency) + 4 * self.order
+        self.tdi_base_links = self.xp.asarray(tdi_base_links).astype(self.xp.int32)
+        self.tdi_link_combinations = self.xp.asarray(tdi_link_combinations).astype(
+            self.xp.int32
         )
-
-        # prepare final info needed for TDI
-        self.num_channels = 3
-        self.link_inds = self.xp.asarray(link_inds.flatten()).astype(self.xp.int32)
-        self.tdi_delays = self.xp.asarray(delays.flatten())
-        self.tdi_signs = self.xp.asarray(signs, dtype=np.int32)
+        self.tdi_signs = self.xp.asarray(tdi_signs).astype(self.xp.int32)
+        self.channels = self.xp.asarray(channels).astype(self.xp.int32)
+        assert (
+            len(self.tdi_base_links)
+            == len(self.tdi_link_combinations)
+            == len(self.tdi_signs)
+            == len(self.channels)
+        )
 
     def _cyclic_permutation(self, link, permutation):
         """permute indexes by cyclic permutation"""
@@ -591,12 +410,12 @@ class pyResponseTDI(object):
 
 
         """
-
-        # get break points
-        for key, item in self.orbits_store["projection"].items():
-            setattr(self, key, item)
-
         self.tdi_start_ind = int(t0 / self.dt)
+        # get necessary buffer for TDI
+        self.check_tdi_buffer = int(100.0 * self.sampling_frequency) + 4 * self.order
+        self.projection_buffer = (
+            int(np.max(1e11) * C_inv + np.max(np.abs(9.5))) + 4 * self.order
+        )
         self.projections_start_ind = self.tdi_start_ind - 2 * self.check_tdi_buffer
 
         if self.projections_start_ind < self.projection_buffer:
@@ -628,25 +447,25 @@ class pyResponseTDI(object):
         k[1] = -cosbeta * sinlam
         k[2] = -sinbeta
 
+        self.nlinks = 6
         y_gw = self.xp.zeros((self.nlinks * self.num_pts,), dtype=self.xp.float64)
         k_in = self.xp.asarray(k)
         u_in = self.xp.asarray(u)
         v_in = self.xp.asarray(v)
 
         input_in = self.xp.asarray(input_in)
+        t_data = self.xp.arange(len(input_in)) * self.dt
 
         self.response_gen(
             y_gw,
-            self.t_data,
+            t_data,
             k_in,
             u_in,
             v_in,
             self.dt,
-            self.num_pts,
-            self.link_space_craft_0_in,
-            self.link_space_craft_1_in,
+            len(input_in),
             input_in,
-            self.num_total_points,
+            len(input_in),
             self.order,
             self.sampling_frequency,
             self.buffer_integer,
@@ -655,10 +474,7 @@ class pyResponseTDI(object):
             len(self.A_in),
             self.E_in,
             self.projections_start_ind,
-            self.x_in_receiver,
-            self.x_in_emitter,
-            self.L_in,
-            self.num_orbit_inputs,
+            self.response_orbits,
         )
 
         self.y_gw_flat = y_gw
@@ -690,9 +506,6 @@ class pyResponseTDI(object):
 
 
         """
-        for key, item in self.orbits_store["tdi"].items():
-            setattr(self, key, item)
-
         self.delayed_links_flat = self.xp.zeros(
             (3, self.num_pts), dtype=self.xp.float64
         )
@@ -708,24 +521,22 @@ class pyResponseTDI(object):
                 "Need to either enter projection array or have this code determine projections."
             )
 
-        for j in range(3):
-            for link_ind, sign in self.channels_no_delays[j]:
-                self.delayed_links_flat[j] += sign * self.y_gw[link_ind]
-
         self.delayed_links_flat = self.delayed_links_flat.flatten()
+
+        t_data = self.xp.arange(self.y_gw_length) * self.dt
 
         self.tdi_gen(
             self.delayed_links_flat,
             self.y_gw_flat,
             self.y_gw_length,
-            self.num_orbit_inputs,
-            self.tdi_delays,
             self.num_pts,
-            self.dt,
-            self.link_inds,
+            t_data,
+            self.tdi_base_links,
+            self.tdi_link_combinations,
             self.tdi_signs,
-            self.num_tdi_delay_comps,
-            self.num_channels,
+            self.channels,
+            len(self.tdi_base_links),  # num_units
+            3,  # num channels
             self.order,
             self.sampling_frequency,
             self.buffer_integer,
@@ -734,6 +545,7 @@ class pyResponseTDI(object):
             len(self.A_in),
             self.E_in,
             self.tdi_start_ind,
+            self.tdi_orbits,
         )
 
         if self.tdi_chan == "XYZ":
@@ -792,12 +604,12 @@ class ResponseWrapper:
             convert it with :math:`\beta=\pi / 2 - \Theta`. (Default: :code:`True`)
         use_gpu (bool, optional): If True, use GPU. (Default: :code:`False`)
         remove_garbage (bool or str, optional): If True, it removes everything before ``t0``
-            and after the end time - ``t0``. If ``str``, it must be ``"zero"``. If ``"zero"``, 
+            and after the end time - ``t0``. If ``str``, it must be ``"zero"``. If ``"zero"``,
             it will not remove the points, but set them to zero. This is ideal for PE. (Default: ``True``)
-        n_overide (int, optional): If not ``None``, this will override the determination of 
+        n_overide (int, optional): If not ``None``, this will override the determination of
             the number of points, ``n``, from ``int(T/dt)`` to the ``n_overide``. This is used
-            if there is an issue matching points between the waveform generator and the response 
-            model.  
+            if there is an issue matching points between the waveform generator and the response
+            model.
         **kwargs (dict, optional): Keyword arguments passed to :class:`pyResponseTDI`.
 
     """
@@ -831,9 +643,9 @@ class ResponseWrapper:
                 raise ValueError("n_overide must be an integer if not None.")
             self.n = n_overide
 
-        else:   
+        else:
             self.n = int(Tobs * YRSID_SI / dt)
-        
+
         self.Tobs = self.n * dt
         self.is_ecliptic_latitude = is_ecliptic_latitude
         self.remove_sky_coords = remove_sky_coords
@@ -846,12 +658,12 @@ class ResponseWrapper:
         )
 
         self.use_gpu = use_gpu
-        if use_gpu:
-            self.xp = xp
-        else:
-            self.xp = np
 
         self.Tobs = (self.n * self.response_model.dt) / YRSID_SI
+
+    @property
+    def xp(self) -> object:
+        return np if not self.use_gpu else cp
 
     @property
     def citation(self):
@@ -913,7 +725,7 @@ class ResponseWrapper:
             if self.remove_garbage != "zero":
                 raise ValueError("remove_garbage must be True, False, or 'zero'.")
             for i in range(len(out)):
-                out[i][:self.response_model.tdi_start_ind] = 0.0
-                out[i][-self.response_model.tdi_start_ind:] = 0.0
+                out[i][: self.response_model.tdi_start_ind] = 0.0
+                out[i][-self.response_model.tdi_start_ind :] = 0.0
 
         return out
