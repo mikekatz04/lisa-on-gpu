@@ -133,8 +133,6 @@ class ResponseTest(unittest.TestCase):
     def test_tdi_2nd_generation(self):
 
         waveform_cpu = self.run_test("2nd generation", False)
-
-        breakpoint()
         self.assertTrue(np.all(np.isnan(waveform_cpu) == False))
 
         if gpu_available:

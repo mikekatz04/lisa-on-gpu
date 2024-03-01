@@ -1,6 +1,8 @@
 from multiprocessing.sharedctypes import Value
 import numpy as np
 from typing import Optional, List
+import warnings
+from typing import Tuple
 
 try:
     import cupy as cp
@@ -182,6 +184,12 @@ class pyResponseTDI(object):
 
         self.tdi_orbits = tdi_orbits
 
+        if self.num_pts * self.dt > self.response_orbits.t_base.max():
+            warnings.warn(
+                "Input number of points is longer in time than available orbital information. Trimming to fit orbital information."
+            )
+            self.num_pts = int(self.response_orbits.t_base.max() / self.dt)
+
         # setup spacecraft links indexes
 
         # setup TDI info
@@ -205,7 +213,8 @@ class pyResponseTDI(object):
 
         assert isinstance(orbits, Orbits)
 
-        orbits.configure(linear_interp_setup=True)
+        if not orbits.configured:
+            orbits.configure(linear_interp_setup=True)
         self._response_orbits = orbits
 
     @property
@@ -392,6 +401,21 @@ class pyResponseTDI(object):
         """Projections along the arms"""
         return self.y_gw_flat.reshape(self.nlinks, -1)
 
+    def _data_time_check(
+        self, t_data: np.ndarray, input_in: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        # remove input data that goes beyond orbital information
+        if t_data.max() > self.response_orbits.t.max():
+            warnings.warn(
+                "Input waveform is longer than available orbital information. Trimming to fit orbital information."
+            )
+
+            max_ind = np.where(t_data <= self.response_orbits.t.max())[0][-1]
+
+            t_data = t_data[:max_ind]
+            input_in = input_in[:max_ind]
+        return (t_data, input_in)
+
     def get_projections(self, input_in, lam, beta, t0=10000.0):
         """Compute projections of GW signal on to LISA constellation
 
@@ -413,8 +437,22 @@ class pyResponseTDI(object):
         self.tdi_start_ind = int(t0 / self.dt)
         # get necessary buffer for TDI
         self.check_tdi_buffer = int(100.0 * self.sampling_frequency) + 4 * self.order
+
+        from copy import deepcopy
+
+        tmp_orbits = deepcopy(self.response_orbits.x_base)
         self.projection_buffer = (
-            int(np.max(1e11) * C_inv + np.max(np.abs(9.5))) + 4 * self.order
+            int(
+                (
+                    np.sum(
+                        tmp_orbits.copy() * tmp_orbits.copy(),
+                        axis=-1,
+                    )
+                    ** (1 / 2)
+                ).max()
+                * C_inv
+            )
+            + 4 * self.order
         )
         self.projections_start_ind = self.tdi_start_ind - 2 * self.check_tdi_buffer
 
@@ -428,7 +466,6 @@ class pyResponseTDI(object):
         u = np.zeros(3, dtype=np.float64)
         v = np.zeros(3, dtype=np.float64)
 
-        assert len(input_in) >= self.num_pts
         self.num_total_points = len(input_in)
 
         cosbeta = np.cos(beta)
@@ -448,13 +485,18 @@ class pyResponseTDI(object):
         k[2] = -sinbeta
 
         self.nlinks = 6
-        y_gw = self.xp.zeros((self.nlinks * self.num_pts,), dtype=self.xp.float64)
         k_in = self.xp.asarray(k)
         u_in = self.xp.asarray(u)
         v_in = self.xp.asarray(v)
 
         input_in = self.xp.asarray(input_in)
+
         t_data = self.xp.arange(len(input_in)) * self.dt
+
+        t_data, input_in = self._data_time_check(t_data, input_in)
+
+        assert len(input_in) >= self.num_pts
+        y_gw = self.xp.zeros((self.nlinks * self.num_pts,), dtype=self.xp.float64)
 
         self.response_gen(
             y_gw,
@@ -628,6 +670,7 @@ class ResponseWrapper:
         use_gpu=False,
         remove_garbage=True,
         n_overide=None,
+        orbits: Optional[Orbits] = EqualArmlengthOrbits,
         **kwargs,
     ):
 
@@ -638,6 +681,18 @@ class ResponseWrapper:
         self.dt = dt
         self.t0 = t0
         self.sampling_frequency = 1.0 / dt
+
+        if orbits is None:
+            orbits = EqualArmlengthOrbits()
+
+        assert isinstance(orbits, Orbits)
+
+        if Tobs * YRSID_SI > orbits.t_base.max():
+            warnings.warn(
+                f"Tobs is larger than available orbital information time array. Reducing Tobs to {orbits.t_base.max()}"
+            )
+            Tobs = orbits.t_base.max() / YRSID_SI
+
         if n_overide is not None:
             if not isinstance(n_overide, int):
                 raise ValueError("n_overide must be an integer if not None.")
@@ -654,7 +709,7 @@ class ResponseWrapper:
 
         # initialize response function class
         self.response_model = pyResponseTDI(
-            self.sampling_frequency, self.n, use_gpu=use_gpu, **kwargs
+            self.sampling_frequency, self.n, orbits=orbits, use_gpu=use_gpu, **kwargs
         )
 
         self.use_gpu = use_gpu
