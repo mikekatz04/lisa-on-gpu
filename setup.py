@@ -177,14 +177,6 @@ if run_cuda_install:
     )
 
     # gpu_extensions.append(Extension(extension_name, **temp_dict))
-fps_cu_to_cpp = ["src/LISAResponse"]
-fps_pyx = ["src/responselisa"]
-
-for fp in fps_cu_to_cpp:
-    shutil.copy(fp + ".cu", fp + ".cpp")
-
-for fp in fps_pyx:
-    shutil.copy(fp + ".pyx", fp + "_cpu.pyx")
 
 cpu_extension = dict(
     libraries=["gomp"],
@@ -194,20 +186,21 @@ cpu_extension = dict(
     # and not with gcc the implementation of this trick is in
     # customize_compiler()
     extra_compile_args={
-        "gcc": [],
+        "gcc": ["-std=c++11", "-fopenmp"],
     },  # '-g'],
-    include_dirs=[numpy_include, "include", "../LISAanalysistools/include"],
+    include_dirs=[numpy_include, "./include"],
 )
 
 response_cpu_ext = Extension(
     "pyresponse_cpu",
     sources=[
-        "../LISAanalysistools/src/Detector.cpp",
+        "src/Detector.cpp",
         "src/LISAResponse.cpp",
         "src/responselisa_cpu.pyx",
     ],
     **cpu_extension
 )
+
 
 cpu_extensions = [response_cpu_ext]
 
@@ -220,19 +213,8 @@ else:
 with open("README.md", "r") as fh:
     long_description = fh.read()
 
-# setup version file
-with open("README.md", "r") as fh:
-    lines = fh.readlines()
-
-for line in lines:
-    if line.startswith("Current Version"):
-        version_string = line.split("Current Version: ")[1].split("\n")[0]
-
-with open("fastlisaresponse/_version.py", "w") as f:
-    f.write("__version__ = '{}'".format(version_string))
-
 setup(
-    name="response",
+    name="fastlisaresponse",
     author="Michael Katz",
     author_email="mikekatz04@gmail.com",
     ext_modules=extensions,
@@ -243,7 +225,7 @@ setup(
     zip_safe=False,
     long_description=long_description,
     long_description_content_type="text/markdown",
-    version=version_string,
+    version="1.0.2",
     url="https://github.com/mikekatz04/lisa-on-gpu",
     classifiers=[
         "Programming Language :: Python :: 3",
@@ -256,10 +238,3 @@ setup(
     ],
     python_requires=">=3.6",
 )
-
-# remove src files created in this setup (cpp, pyx cpu files for gpu modules)
-for fp in fps_cu_to_cpp:
-    os.remove(fp + ".cpp")
-
-for fp in fps_pyx:
-    os.remove(fp + "_cpu.pyx")
