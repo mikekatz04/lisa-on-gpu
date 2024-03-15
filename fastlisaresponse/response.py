@@ -3,6 +3,8 @@ import numpy as np
 from typing import Optional, List
 import warnings
 from typing import Tuple
+from copy import deepcopy
+
 
 try:
     import cupy as cp
@@ -213,9 +215,10 @@ class pyResponseTDI(object):
 
         assert isinstance(orbits, Orbits)
 
-        if not orbits.configured:
-            orbits.configure(linear_interp_setup=True)
-        self._response_orbits = orbits
+        self._response_orbits = deepcopy(orbits)
+
+        if not self._response_orbits.configured:
+            self._response_orbits.configure(linear_interp_setup=True)
 
     @property
     def tdi_orbits(self) -> Orbits:
@@ -231,7 +234,10 @@ class pyResponseTDI(object):
 
         assert isinstance(orbits, Orbits)
 
-        self._tdi_orbits = orbits
+        self._tdi_orbits = deepcopy(orbits)
+
+        if not self._tdi_orbits.configured:
+            self._tdi_orbits.configure(linear_interp_setup=True)
 
     @property
     def citation(self):
