@@ -56,7 +56,7 @@ class pyResponseTDI(object):
     the response for these orbits numerically. This includes both the projection
     of the gravitational waves onto the LISA constellation arms and combinations \
     of projections into TDI observables. The methods and maths used can be found
-    in # TODO: add url for paper.
+    [here](https://arxiv.org/abs/2204.06633).
 
     This class is also GPU-accelerated, which is very helpful for Bayesian inference
     methods.
@@ -64,12 +64,6 @@ class pyResponseTDI(object):
     Args:
         sampling_frequency (double): The sampling rate in Hz.
         num_pts (int): Number of points to produce for the final output template.
-        orbit_kwargs (dict): Dictionary containing orbital information. The kwargs and defaults
-            are: :code:`orbit_module=None, order=0, max_t_orbits=3.15576e7, orbit_file=None`.
-            :code:`orbit_module` is an orbit module from the LDC package. :code:`max_t_orbits` is
-            the maximum time desired for the orbital information. `orbit_file` is
-            an h5 file of the form used `here <https://gitlab.in2p3.fr/lisa-simulation/orbits>`_.
-            :code:`order` is the order of interpolation used in the orbit modules.
         order (int, optional): Order of Lagrangian interpolation technique. Lower orders
             will be faster. The user must make sure the order is sufficient for the
             waveform being used. (default: 25)
@@ -83,15 +77,15 @@ class pyResponseTDI(object):
             ``'sign'`` is the sign in front of the contribution to the TDI observable. It takes the value of `+1` or `-1`.
             ``type`` is either ``"delay"`` or ``"advance"``. It is optional and defaults to ``"delay"``.
             (default: ``"1st generation"``)
-        tdi_orbit_kwargs (dict, optional): Same as :code:`orbit_kwargs`, but specifically for the TDI
-            portion of the response computation. This allows the user to use two different orbits
-            for the projections and TDI. For example, this can be used to examine the efficacy of
-            frequency domain TDI codes that can handle generic orbits for the projections, but
-            assume equal armlength orbits to reduce and simplify the expression for TDI
-            computations. (default: :code:`None`, this means the orbits for the projections
-            and TDI will be the same and will be built from :code:`orbit_kwargs`)
+        orbits (:class:`Orbits`, optional): Orbits class from LISA Analysis Tools. Works with LISA Orbits 
+            outputs: `lisa-simulation.pages.in2p3.fr/orbits/ <https://lisa-simulation.pages.in2p3.fr/orbits/latest/>`_.
+            (default: :class:`EqualArmlengthOrbits`)
         tdi_chan (str, optional): Which TDI channel combination to return. Choices are :code:`'XYZ'`,
             :code:`AET`, or :code:`AE`. (default: :code:`'XYZ'`)
+        tdi_orbits (:class:`Orbits`, optional): Set if different orbits from projection.
+            Orbits class from LISA Analysis Tools. Works with LISA Orbits 
+            outputs: `lisa-simulation.pages.in2p3.fr/orbits/ <https://lisa-simulation.pages.in2p3.fr/orbits/latest/>`_.
+            (default: :class:`EqualArmlengthOrbits`)
         use_gpu (bool, optional): If True, run code on the GPU. (default: :code:`False`)
 
     Attributes:
@@ -118,20 +112,12 @@ class pyResponseTDI(object):
             interpolation. This is hard coded to 1001.
         num_channels (int): 3.
         num_pts (int): Number of points to produce for the final output template.
-        num_tdi_combinations (int): Number of independent arm computations.
-        num_tdi_delay_comps (int): Number of independent arm computations that require delays.
-        orbits_store (dict): Contains orbital information for the projection and TDI
-            steps.
         order (int): Order of Lagrangian interpolation technique.
         response_gen (func): Projection generator function.
         sampling_frequency (double): The sampling rate in Hz.
         tdi (str or list): TDI setup.
         tdi_buffer (int): The buffer necessary for all information needed at early times
             for the TDI computation. This is set to 200.
-        tdi_chan (str): Which TDI channel combination to return.
-        tdi_delays (xp.ndarray): TDI delays.
-        tdi_gen (func): TDI generating function.
-        tdi_signs (xp.ndarray): Signs applied to the addition of a delayed link. (+1 or -1)
         use_gpu (bool): If True, run on GPU.
         xp (obj): Either Numpy or Cupy.
 

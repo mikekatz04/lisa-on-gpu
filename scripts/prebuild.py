@@ -24,17 +24,24 @@ with open("fastlisaresponse/_version.py", "w") as f:
 import requests
 
 r = requests.get(
-    "https://raw.githubusercontent.com/mikekatz04/LISAanalysistools/dev2/src/Detector.cpp"
+    "https://raw.githubusercontent.com/mikekatz04/LISAanalysistools/main/src/Detector.cpp"
 )
 
 with open("src/Detector.cpp", "wb") as f:
     f.write(r.content)
 
 r = requests.get(
-    "https://raw.githubusercontent.com/mikekatz04/LISAanalysistools/dev2/include/Detector.hpp"
+    "https://raw.githubusercontent.com/mikekatz04/LISAanalysistools/main/include/Detector.hpp"
 )
 
 with open("include/Detector.hpp", "wb") as f:
+    f.write(r.content)
+
+r = requests.get(
+    "https://raw.githubusercontent.com/mikekatz04/LISAanalysistools/main/src/pycppdetector.pyx"
+)
+
+with open("src/pycppdetector.pyx", "wb") as f:
     f.write(r.content)
 # remove src files created in this setup (cpp, pyx cpu files for gpu modules)
 # for fp in fps_cu_to_cpp:
