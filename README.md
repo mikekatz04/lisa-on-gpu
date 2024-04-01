@@ -12,7 +12,7 @@ If you use all or any parts of this code, please cite [arXiv:2204.06633](https:/
 
 Install with pip (CPU only for now):
 ```
-pip install fastemriwaveforms
+pip install fastlisaresponse
 ```
 To import fastlisaresponse:
 
@@ -37,7 +37,7 @@ To install this software for use with NVIDIA GPUs (compute capability >2.0), you
 
 Install with pip (CPU only for now):
 ```
-pip install fastemriwaveforms
+pip install fastlisaresponse
 ```
 
 To install from source:
@@ -47,8 +47,8 @@ To install from source:
 1) Create a virtual environment.
 
 ```
-conda create -n lisa_env -c conda-forge gcc_linux-64 gxx_linux-64 numpy Cython scipy jupyter ipython h5py matplotlib python=3.9
-conda activate few_env
+conda create -n lisa_resp_env -c conda-forge gcc_linux-64 gxx_linux-64 numpy Cython scipy jupyter ipython h5py matplotlib python=3.12
+conda activate lisa_resp_env
 ```
 
     If on MACOSX, substitute `gcc_linux-64` and `gxx_linus-64` with `clang_osx-64` and `clangxx_osx-64`.
@@ -58,21 +58,21 @@ conda activate few_env
 2) Clone the repository.
 
 ```
-git clone https://github.com/BlackHolePerturbationToolkit/FastEMRIWaveforms.git
-cd FastEMRIWaveforms
+git clone https://github.com/mikekatz04/lisa-on-gpu.git
+cd lisa-on-gpu
 ```
 
-3) If using GPUs, use pip to [install cupy](https://docs-cupy.chainer.org/en/stable/install.html). If you have cuda version 9.2, for example:
+3) If using GPUs, use pip to [install cupy](https://docs-cupy.chainer.org/en/stable/install.html). 
 
 ```
-pip install cupy-cuda92
+pip install cupy
 ```
 
 4) Run install. Make sure CUDA is on your PATH.
 
 ```
 python scripts/prebuild.py
-python setup.py install
+pip install .
 ```
 
 ## Running the Tests
