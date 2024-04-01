@@ -555,6 +555,10 @@ it will not remove the points, but set them to zero. This is ideal for PE. (Defa
 the number of points, <code class="docutils literal notranslate"><span class="pre">n</span></code>, from <code class="docutils literal notranslate"><span class="pre">int(T/dt)</span></code> to the <code class="docutils literal notranslate"><span class="pre">n_overide</span></code>. This is used
 if there is an issue matching points between the waveform generator and the response
 model.</p></li>
+<li><p><strong>orbits</strong> (<code class="xref py py-class docutils literal notranslate"><span class="pre">Orbits</span></code>, optional) – <p>Orbits class from LISA Analysis Tools. Works with LISA Orbits
+outputs: <a class="reference external" href="https://lisa-simulation.pages.in2p3.fr/orbits/latest/">lisa-simulation.pages.in2p3.fr/orbits/</a>.
+(default: <code class="xref py py-class docutils literal notranslate"><span class="pre">EqualArmlengthOrbits</span></code>)</p>
+</p></li>
 <li><p><strong>**kwargs</strong> (<em>dict</em><em>, </em><em>optional</em>) – Keyword arguments passed to <a class="reference internal" href="#fastlisaresponse.response.pyResponseTDI" title="fastlisaresponse.response.pyResponseTDI"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyResponseTDI</span></code></a>.</p></li>
 </ul>
 </dd>

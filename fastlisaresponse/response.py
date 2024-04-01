@@ -644,6 +644,9 @@ class ResponseWrapper:
             the number of points, ``n``, from ``int(T/dt)`` to the ``n_overide``. This is used
             if there is an issue matching points between the waveform generator and the response
             model.
+        orbits (:class:`Orbits`, optional): Orbits class from LISA Analysis Tools. Works with LISA Orbits
+            outputs: `lisa-simulation.pages.in2p3.fr/orbits/ <https://lisa-simulation.pages.in2p3.fr/orbits/latest/>`_.
+            (default: :class:`EqualArmlengthOrbits`)
         **kwargs (dict, optional): Keyword arguments passed to :class:`pyResponseTDI`.
 
     """
