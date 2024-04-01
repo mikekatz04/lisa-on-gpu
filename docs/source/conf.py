@@ -37,8 +37,8 @@ sys.path.insert(0, os.path.abspath("/Users/michaelkatz/Research/lisa-on-gpu/"))
 import shutil
 
 shutil.copy(
-    "/Users/mkatz/Research/lisa-on-gpu/examples/fast_LISA_response_tutorial.ipynb",
-    "/Users/mkatz/Research/lisa-on-gpu/docs/source/fast_LISA_response_tutorial.ipynb",
+    "/Users/mlkatz1/Research/lisa-on-gpu/examples/fast_LISA_response_tutorial.ipynb",
+    "/Users/mlkatz1/Research/lisa-on-gpu/docs/source/fast_LISA_response_tutorial.ipynb",
 )
 
 

@@ -1,0 +1,25 @@
+
+[build-system]
+requires = ["setuptools", "wheel", "Cython",  "numpy"]
+build-backend = 'setuptools.build_meta'
+
+[tool.poetry]
+name = "fastlisaresponse"
+version = "1.0.5"
+description = "GPU/CPU TD LISA Response Function"
+license = "Apache"
+classifiers = ["Programming Language :: Python :: 3", "Operating System :: OS Independent"]
+homepage = "https://github.com/mikekatz04/LISAanalysistools"
+authors = ["Michael L. Katz"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "*"
+# astropy = "==5.2.1"
+# corner = "==2.2.1"
+# healpy = "==1.16.2"
+# "ligo.skymap" = "==1.0.4"
+# matplotlib = "==3.6.3"
+# pandas = "==1.5.2"
+# seaborn = "==0.12.2"
+# tables = "==3.8.0"

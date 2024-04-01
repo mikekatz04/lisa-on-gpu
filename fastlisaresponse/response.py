@@ -1,6 +1,10 @@
 from multiprocessing.sharedctypes import Value
 import numpy as np
 from typing import Optional, List
+import warnings
+from typing import Tuple
+from copy import deepcopy
+
 
 try:
     import cupy as cp
@@ -52,7 +56,7 @@ class pyResponseTDI(object):
     the response for these orbits numerically. This includes both the projection
     of the gravitational waves onto the LISA constellation arms and combinations \
     of projections into TDI observables. The methods and maths used can be found
-    in # TODO: add url for paper.
+    [here](https://arxiv.org/abs/2204.06633).
 
     This class is also GPU-accelerated, which is very helpful for Bayesian inference
     methods.
@@ -60,12 +64,6 @@ class pyResponseTDI(object):
     Args:
         sampling_frequency (double): The sampling rate in Hz.
         num_pts (int): Number of points to produce for the final output template.
-        orbit_kwargs (dict): Dictionary containing orbital information. The kwargs and defaults
-            are: :code:`orbit_module=None, order=0, max_t_orbits=3.15576e7, orbit_file=None`.
-            :code:`orbit_module` is an orbit module from the LDC package. :code:`max_t_orbits` is
-            the maximum time desired for the orbital information. `orbit_file` is
-            an h5 file of the form used `here <https://gitlab.in2p3.fr/lisa-simulation/orbits>`_.
-            :code:`order` is the order of interpolation used in the orbit modules.
         order (int, optional): Order of Lagrangian interpolation technique. Lower orders
             will be faster. The user must make sure the order is sufficient for the
             waveform being used. (default: 25)
@@ -79,15 +77,15 @@ class pyResponseTDI(object):
             ``'sign'`` is the sign in front of the contribution to the TDI observable. It takes the value of `+1` or `-1`.
             ``type`` is either ``"delay"`` or ``"advance"``. It is optional and defaults to ``"delay"``.
             (default: ``"1st generation"``)
-        tdi_orbit_kwargs (dict, optional): Same as :code:`orbit_kwargs`, but specifically for the TDI
-            portion of the response computation. This allows the user to use two different orbits
-            for the projections and TDI. For example, this can be used to examine the efficacy of
-            frequency domain TDI codes that can handle generic orbits for the projections, but
-            assume equal armlength orbits to reduce and simplify the expression for TDI
-            computations. (default: :code:`None`, this means the orbits for the projections
-            and TDI will be the same and will be built from :code:`orbit_kwargs`)
+        orbits (:class:`Orbits`, optional): Orbits class from LISA Analysis Tools. Works with LISA Orbits 
+            outputs: `lisa-simulation.pages.in2p3.fr/orbits/ <https://lisa-simulation.pages.in2p3.fr/orbits/latest/>`_.
+            (default: :class:`EqualArmlengthOrbits`)
         tdi_chan (str, optional): Which TDI channel combination to return. Choices are :code:`'XYZ'`,
             :code:`AET`, or :code:`AE`. (default: :code:`'XYZ'`)
+        tdi_orbits (:class:`Orbits`, optional): Set if different orbits from projection.
+            Orbits class from LISA Analysis Tools. Works with LISA Orbits 
+            outputs: `lisa-simulation.pages.in2p3.fr/orbits/ <https://lisa-simulation.pages.in2p3.fr/orbits/latest/>`_.
+            (default: :class:`EqualArmlengthOrbits`)
         use_gpu (bool, optional): If True, run code on the GPU. (default: :code:`False`)
 
     Attributes:
@@ -114,20 +112,12 @@ class pyResponseTDI(object):
             interpolation. This is hard coded to 1001.
         num_channels (int): 3.
         num_pts (int): Number of points to produce for the final output template.
-        num_tdi_combinations (int): Number of independent arm computations.
-        num_tdi_delay_comps (int): Number of independent arm computations that require delays.
-        orbits_store (dict): Contains orbital information for the projection and TDI
-            steps.
         order (int): Order of Lagrangian interpolation technique.
         response_gen (func): Projection generator function.
         sampling_frequency (double): The sampling rate in Hz.
         tdi (str or list): TDI setup.
         tdi_buffer (int): The buffer necessary for all information needed at early times
             for the TDI computation. This is set to 200.
-        tdi_chan (str): Which TDI channel combination to return.
-        tdi_delays (xp.ndarray): TDI delays.
-        tdi_gen (func): TDI generating function.
-        tdi_signs (xp.ndarray): Signs applied to the addition of a delayed link. (+1 or -1)
         use_gpu (bool): If True, run on GPU.
         xp (obj): Either Numpy or Cupy.
 
@@ -182,6 +172,12 @@ class pyResponseTDI(object):
 
         self.tdi_orbits = tdi_orbits
 
+        if self.num_pts * self.dt > self.response_orbits.t_base.max():
+            warnings.warn(
+                "Input number of points is longer in time than available orbital information. Trimming to fit orbital information."
+            )
+            self.num_pts = int(self.response_orbits.t_base.max() / self.dt)
+
         # setup spacecraft links indexes
 
         # setup TDI info
@@ -205,8 +201,10 @@ class pyResponseTDI(object):
 
         assert isinstance(orbits, Orbits)
 
-        orbits.configure(linear_interp_setup=True)
-        self._response_orbits = orbits
+        self._response_orbits = deepcopy(orbits)
+
+        if not self._response_orbits.configured:
+            self._response_orbits.configure(linear_interp_setup=True)
 
     @property
     def tdi_orbits(self) -> Orbits:
@@ -222,7 +220,10 @@ class pyResponseTDI(object):
 
         assert isinstance(orbits, Orbits)
 
-        self._tdi_orbits = orbits
+        self._tdi_orbits = deepcopy(orbits)
+
+        if not self._tdi_orbits.configured:
+            self._tdi_orbits.configure(linear_interp_setup=True)
 
     @property
     def citation(self):
@@ -392,6 +393,21 @@ class pyResponseTDI(object):
         """Projections along the arms"""
         return self.y_gw_flat.reshape(self.nlinks, -1)
 
+    def _data_time_check(
+        self, t_data: np.ndarray, input_in: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        # remove input data that goes beyond orbital information
+        if t_data.max() > self.response_orbits.t.max():
+            warnings.warn(
+                "Input waveform is longer than available orbital information. Trimming to fit orbital information."
+            )
+
+            max_ind = np.where(t_data <= self.response_orbits.t.max())[0][-1]
+
+            t_data = t_data[:max_ind]
+            input_in = input_in[:max_ind]
+        return (t_data, input_in)
+
     def get_projections(self, input_in, lam, beta, t0=10000.0):
         """Compute projections of GW signal on to LISA constellation
 
@@ -413,8 +429,22 @@ class pyResponseTDI(object):
         self.tdi_start_ind = int(t0 / self.dt)
         # get necessary buffer for TDI
         self.check_tdi_buffer = int(100.0 * self.sampling_frequency) + 4 * self.order
+
+        from copy import deepcopy
+
+        tmp_orbits = deepcopy(self.response_orbits.x_base)
         self.projection_buffer = (
-            int(np.max(1e11) * C_inv + np.max(np.abs(9.5))) + 4 * self.order
+            int(
+                (
+                    np.sum(
+                        tmp_orbits.copy() * tmp_orbits.copy(),
+                        axis=-1,
+                    )
+                    ** (1 / 2)
+                ).max()
+                * C_inv
+            )
+            + 4 * self.order
         )
         self.projections_start_ind = self.tdi_start_ind - 2 * self.check_tdi_buffer
 
@@ -428,7 +458,6 @@ class pyResponseTDI(object):
         u = np.zeros(3, dtype=np.float64)
         v = np.zeros(3, dtype=np.float64)
 
-        assert len(input_in) >= self.num_pts
         self.num_total_points = len(input_in)
 
         cosbeta = np.cos(beta)
@@ -448,13 +477,18 @@ class pyResponseTDI(object):
         k[2] = -sinbeta
 
         self.nlinks = 6
-        y_gw = self.xp.zeros((self.nlinks * self.num_pts,), dtype=self.xp.float64)
         k_in = self.xp.asarray(k)
         u_in = self.xp.asarray(u)
         v_in = self.xp.asarray(v)
 
         input_in = self.xp.asarray(input_in)
+
         t_data = self.xp.arange(len(input_in)) * self.dt
+
+        t_data, input_in = self._data_time_check(t_data, input_in)
+
+        assert len(input_in) >= self.num_pts
+        y_gw = self.xp.zeros((self.nlinks * self.num_pts,), dtype=self.xp.float64)
 
         self.response_gen(
             y_gw,
@@ -628,6 +662,7 @@ class ResponseWrapper:
         use_gpu=False,
         remove_garbage=True,
         n_overide=None,
+        orbits: Optional[Orbits] = EqualArmlengthOrbits,
         **kwargs,
     ):
 
@@ -638,6 +673,18 @@ class ResponseWrapper:
         self.dt = dt
         self.t0 = t0
         self.sampling_frequency = 1.0 / dt
+
+        if orbits is None:
+            orbits = EqualArmlengthOrbits()
+
+        assert isinstance(orbits, Orbits)
+
+        if Tobs * YRSID_SI > orbits.t_base.max():
+            warnings.warn(
+                f"Tobs is larger than available orbital information time array. Reducing Tobs to {orbits.t_base.max()}"
+            )
+            Tobs = orbits.t_base.max() / YRSID_SI
+
         if n_overide is not None:
             if not isinstance(n_overide, int):
                 raise ValueError("n_overide must be an integer if not None.")
@@ -654,7 +701,7 @@ class ResponseWrapper:
 
         # initialize response function class
         self.response_model = pyResponseTDI(
-            self.sampling_frequency, self.n, use_gpu=use_gpu, **kwargs
+            self.sampling_frequency, self.n, orbits=orbits, use_gpu=use_gpu, **kwargs
         )
 
         self.use_gpu = use_gpu

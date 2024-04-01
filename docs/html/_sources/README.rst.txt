@@ -11,9 +11,13 @@ further information on these modules. The code can be found on Github
 `here <https://github.com/mikekatz04/lisa-on-gpu>`__. It can be found on
 # TODO fix `Zenodo <https://zenodo.org/record/3981654#.XzS_KRNKjlw>`__.
 
-If you use all or any parts of this code, please cite (TODO: fill in ).
-See the `documentation <https://mikekatz04.github.io/lisa-on-gpu/>`__ to
+If you use all or any parts of this code, please cite
+`arXiv:2204.06633 <https://arxiv.org/abs/2204.06633>`__. See the
+`documentation <https://mikekatz04.github.io/lisa-on-gpu/>`__ to
 properly cite specific modules.
+
+**Warning**: newest version (1.0.5) of code with ``lisatools`` orbits
+needs detailed testing before deployed for a paper.
 
 Getting Started
 ---------------
@@ -139,7 +143,7 @@ We use `SemVer <http://semver.org/>`__ for versioning. For the versions
 available, see the `tags on this
 repository <https://github.com/mikekatz04/lisa-on-gpu/tags>`__.
 
-Current Version: 1.0.2
+Current Version: 1.0.5
 
 Authors
 -------
