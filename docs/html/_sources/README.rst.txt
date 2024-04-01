@@ -9,7 +9,7 @@ Please see the
 `documentation <https://mikekatz04.github.io/lisa-on-gpu/>`__ for
 further information on these modules. The code can be found on Github
 `here <https://github.com/mikekatz04/lisa-on-gpu>`__. It can be found on
-# TODO fix `Zenodo <https://zenodo.org/record/3981654#.XzS_KRNKjlw>`__.
+`Zenodo <https://zenodo.org/record/3981654#.XzS_KRNKjlw>`__.
 
 If you use all or any parts of this code, please cite
 `arXiv:2204.06633 <https://arxiv.org/abs/2204.06633>`__. See the
@@ -22,40 +22,13 @@ needs detailed testing before deployed for a paper.
 Getting Started
 ---------------
 
-Below is a quick set of instructions to get you started with
-``fastlisaresponse``.
-
-0) `Install Anaconda <https://docs.anaconda.com/anaconda/install/>`__ if
-   you do not have it.
-
-1) Create a virtual environment. **Note**: There is no available
-   ``conda`` compiler for Windows. If you want to install for Windows,
-   you will probably need to add libraries and include paths to the
-   ``setup.py`` file.
+Install with pip (CPU only for now):
 
 ::
 
-   conda create -n lisa_env -c conda-forge gcc_linux-64 gxx_linux-64 numpy Cython scipy jupyter ipython h5py matplotlib python=3.9
-   conda activate lisa_env
+   pip install fastemriwaveforms
 
-::
-
-   If on MACOSX, substitute `gcc_linux-64` and `gxx_linus-64` with `clang_osx-64` and `clangxx_osx-64`.
-
-2) Clone the repository.
-
-::
-
-   git clone https://github.com/mikekatz04/lisa-on-gpu.git
-   cd lisa-on-gpu
-
-3) Run install.
-
-::
-
-   python setup.py install
-
-4) To import fastlisaresponse:
+To import fastlisaresponse:
 
 ::
 
@@ -66,6 +39,10 @@ notebook <https://github.com/mikekatz04/lisa-on-gpu/blob/master/examples/fast_LI
 
 Prerequisites
 ~~~~~~~~~~~~~
+
+Now (version 1.0.5) ``fastlisaresponse`` requires the newest version of
+`LISA Analysis Tools <github.com/mikekatz04/LISAanalysistools>`__. You
+can run ``pip install lisaanalysistools``.
 
 To install this software for CPU usage, you need Python >3.4 and NumPy.
 To run the examples, you will also need jupyter and matplotlib. We
@@ -86,6 +63,14 @@ it as the ``CUDAHOME`` environment variable.
 
 Installing
 ~~~~~~~~~~
+
+Install with pip (CPU only for now):
+
+::
+
+   pip install fastemriwaveforms
+
+To install from source:
 
 0) `Install Anaconda <https://docs.anaconda.com/anaconda/install/>`__ if
    you do not have it.
@@ -122,13 +107,18 @@ Installing
 
 ::
 
+   python scripts/prebuild.py
    python setup.py install
 
 Running the Tests
 -----------------
 
-Since the code package in minimal in size, the example notebook should
-be run to verify it is running correctly.
+Run the example notebook or the tests using ``unittest`` from the main
+directory of the code:
+
+::
+
+   python -m unittest discover
 
 Contributing
 ------------
