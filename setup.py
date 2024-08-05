@@ -64,15 +64,9 @@ def locate_cuda():
 
 
 def customize_compiler_for_nvcc(self):
-    """Inject deep into distutils to customize how the dispatch
-    to gcc/nvcc works.
 
-    If you subclass UnixCCompiler, it's not trivial to get your subclass
-    injected in, and still have the right customizations (i.e.
-    distutils.sysconfig.customize_compiler) run on it. So instead of going
-    the OO route, I have this. Note, it's kindof like a wierd functional
-    subclassing going on.
-    """
+    # track all the object files generated with cuda device code
+    self.cuda_object_files = []
 
     # Tell the compiler it can processes .cu
     self.src_extensions.append(".cu")
@@ -81,24 +75,23 @@ def customize_compiler_for_nvcc(self):
     default_compiler_so = self.compiler_so
     super = self._compile
 
-    # Now redefine the _compile method. This gets executed for each
-    # object but distutils doesn't have the ability to change compilers
-    # based on source extension: we add it.
     def _compile(obj, src, ext, cc_args, extra_postargs, pp_opts):
-        if os.path.splitext(src)[1] == ".cu":
-            # use the cuda for .cu files
+        # generate a special object file that will contain linked in
+        # relocatable device code
+        if src == "link.cu":
             self.set_executable("compiler_so", CUDA["nvcc"])
-            # use only a subset of the extra_postargs, which are 1-1
-            # translated from the extra_compile_args in the Extension class
+            postargs = extra_postargs["nvcclink"]
+            cc_args = self.cuda_object_files[1:]
+            src = self.cuda_object_files[0]
+        elif os.path.splitext(src)[1] == ".cu":
+            self.set_executable("compiler_so", CUDA["nvcc"])
             postargs = extra_postargs["nvcc"]
+            self.cuda_object_files.append(obj)
         else:
             postargs = extra_postargs["gcc"]
-
         super(obj, src, ext, cc_args, postargs, pp_opts)
-        # Reset the default compiler_so, which we might have changed for cuda
         self.compiler_so = default_compiler_so
 
-    # Inject our redefined _compile method into the class
     self._compile = _compile
 
 
@@ -128,56 +121,70 @@ except AttributeError:
 # if installing for CUDA, build Cython extensions for gpu modules
 if run_cuda_install:
 
-    gpu_extension = dict(
-        libraries=["cudart", "cublas", "cusparse"],
-        library_dirs=[CUDA["lib64"]],
-        runtime_library_dirs=[CUDA["lib64"]],
-        language="c++",
-        # This syntax is specific to this build system
-        # we're only going to use certain compiler args with nvcc
-        # and not with gcc the implementation of this trick is in
-        # customize_compiler()
-        extra_compile_args={
-            "gcc": ["-std=c++11"],  # '-g'],
-            "nvcc": [
-                "-arch=sm_70",
-                # "-gencode=arch=compute_30,code=sm_30",
-                # "-gencode=arch=compute_50,code=sm_50",
-                # "-gencode=arch=compute_52,code=sm_52",
-                # "-gencode=arch=compute_60,code=sm_60",
-                # "-gencode=arch=compute_61,code=sm_61",
-                "-gencode=arch=compute_70,code=sm_70",
-                #'-gencode=arch=compute_75,code=sm_75',
-                #'-gencode=arch=compute_75,code=compute_75',
-                "-std=c++11",
-                "--default-stream=per-thread",
-                "--ptxas-options=-v",
-                "-c",
-                "--compiler-options",
-                "'-fPIC'",
-                # "-G",
-                # "-g",
-                # "-O0",
-                # "-lineinfo",
-            ],  # for debugging
-        },
-        include_dirs=[
-            numpy_include,
-            CUDA["include"],
-            "include/",
-        ],
-    )
+    # gpu_extension = dict(
+    #     libraries=["cudart", "cublas", "cusparse"],
+    #     library_dirs=[CUDA["lib64"]],
+    #     runtime_library_dirs=[CUDA["lib64"]],
+    #     language="c++",
+    #     # This syntax is specific to this build system
+    #     # we're only going to use certain compiler args with nvcc
+    #     # and not with gcc the implementation of this trick is in
+    #     # customize_compiler()
+    #     extra_compile_args={
+    #         "gcc": ["-std=c++11"],  # '-g'],
+    #         "nvcc": [
+    #             "-arch=sm_70",
+    #             # "-gencode=arch=compute_30,code=sm_30",
+    #             # "-gencode=arch=compute_50,code=sm_50",
+    #             # "-gencode=arch=compute_52,code=sm_52",
+    #             # "-gencode=arch=compute_60,code=sm_60",
+    #             # "-gencode=arch=compute_61,code=sm_61",
+    #             "-gencode=arch=compute_70,code=sm_70",
+    #             #'-gencode=arch=compute_75,code=sm_75',
+    #             #'-gencode=arch=compute_75,code=compute_75',
+    #             "-std=c++11",
+    #             "--default-stream=per-thread",
+    #             "--ptxas-options=-v",
+    #             "-c",
+    #             "--compiler-options",
+    #             "'-fPIC'",
+    #             # "-G",
+    #             # "-g",
+    #             # "-O0",
+    #             # "-lineinfo",
+    #         ],  # for debugging
+    #     },
+    #     include_dirs=[
+    #         numpy_include,
+    #         CUDA["include"],
+    #         "include/",
+    #     ],
+    # )
 
-    response_ext = Extension(
-        "pyresponse",
-        sources=["src/LISAResponse.cu", "src/responselisa.pyx"],
-        **gpu_extension
+    response_ext = (
+        Extension(
+            "pyresponse",
+            sources=["src/LISAResponse.cu", "src/responselisa.pyx", "link.cu"],
+            library_dirs=[CUDA["lib64"]],
+            libraries=["cudart", "cudadevrt"],
+            runtime_library_dirs=[CUDA["lib64"]],
+            extra_compile_args={
+                "gcc": [],
+                "nvcc": ["-arch=sm_80", "-rdc=true", "--compiler-options", "'-fPIC'"],
+                "nvcclink": [
+                    "-arch=sm_80",
+                    "--device-link",
+                    "--compiler-options",
+                    "'-fPIC'",
+                ],
+            },
+            include_dirs=[numpy_include, CUDA["include"], "include"],
+        ),
     )
-
-    # gpu_extensions.append(Extension(extension_name, **temp_dict))
+    #  **gpu_extension
 
 cpu_extension = dict(
-    libraries=["gomp"],
+    libraries=[""],
     language="c++",
     # This syntax is specific to this build system
     # we're only going to use certain compiler args with nvcc
