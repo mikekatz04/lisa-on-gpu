@@ -16,7 +16,7 @@ If you use all or any parts of this code, please cite
 `documentation <https://mikekatz04.github.io/lisa-on-gpu/>`__ to
 properly cite specific modules.
 
-**Warning**: newest version (1.0.5) of code with ``lisatools`` orbits
+**Warning**: newest version (1.0.6) of code with ``lisatools`` orbits
 needs detailed testing before deployed for a paper.
 
 Getting Started
@@ -40,7 +40,7 @@ notebook <https://github.com/mikekatz04/lisa-on-gpu/blob/master/examples/fast_LI
 Prerequisites
 ~~~~~~~~~~~~~
 
-Now (version 1.0.5) ``fastlisaresponse`` requires the newest version of
+Now (version 1.0.6) ``fastlisaresponse`` requires the newest version of
 `LISA Analysis Tools <github.com/mikekatz04/LISAanalysistools>`__. You
 can run ``pip install lisaanalysistools``.
 
@@ -132,7 +132,7 @@ We use `SemVer <http://semver.org/>`__ for versioning. For the versions
 available, see the `tags on this
 repository <https://github.com/mikekatz04/lisa-on-gpu/tags>`__.
 
-Current Version: 1.0.5
+Current Version: 1.0.6
 
 Authors
 -------

@@ -1,11 +1,11 @@
 
 [build-system]
-requires = ["setuptools", "wheel", "Cython",  "numpy"]
+requires = ["setuptools", "wheel", "Cython",  "numpy", "lisaanalysistools"]
 build-backend = 'setuptools.build_meta'
 
 [tool.poetry]
 name = "fastlisaresponse"
-version = "1.0.5"
+version = "1.0.6"
 description = "GPU/CPU TD LISA Response Function"
 license = "Apache"
 classifiers = ["Programming Language :: Python :: 3", "Operating System :: OS Independent"]
