@@ -71,8 +71,9 @@ def get_overlap(sig1, sig2, phase_maximize=False, use_gpu=False):
             np.dot(np.fft.rfft(sig1_i).conj(), np.fft.rfft(sig1_i))
             * np.dot(np.fft.rfft(sig2_i).conj(), np.fft.rfft(sig2_i))
         )
-
         overlap += overlap_i
+
+    overlap /= len(sig1)
 
     if phase_maximize:
         return np.abs(overlap)

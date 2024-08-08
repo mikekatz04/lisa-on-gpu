@@ -5,6 +5,7 @@ import os
 
 path_to_file = os.path.dirname(__file__)
 
+from lisatools.detector import EqualArmlengthOrbits
 from fastlisaresponse import ResponseWrapper
 from fastlisaresponse.utils import get_overlap
 
@@ -78,8 +79,10 @@ class ResponseTest(unittest.TestCase):
         index_lambda = 6
         index_beta = 7
 
+        orbits = EqualArmlengthOrbits(use_gpu=use_gpu)
+        orbits.configure(linear_interp_setup=True)
         tdi_kwargs_esa = dict(
-            orbits=None,
+            orbits=orbits,
             order=order,
             tdi=tdi_gen,
             tdi_chan="AET",
@@ -118,7 +121,6 @@ class ResponseTest(unittest.TestCase):
     def test_tdi_1st_generation(self):
 
         waveform_cpu = self.run_test("1st generation", False)
-
         self.assertTrue(np.all(np.isnan(waveform_cpu) == False))
 
         if gpu_available:
@@ -128,7 +130,7 @@ class ResponseTest(unittest.TestCase):
                 xp.asarray(waveform_gpu),
                 use_gpu=gpu_available,
             )
-            self.assertLess(mm, 1e-10)
+            self.assertLess(np.abs(mm), 1e-10)
 
     def test_tdi_2nd_generation(self):
 
@@ -140,4 +142,4 @@ class ResponseTest(unittest.TestCase):
             mm = 1.0 - get_overlap(
                 xp.asarray(waveform_cpu), waveform_gpu, use_gpu=gpu_available
             )
-            self.assertLess(mm, 1e-10)
+            self.assertLess(np.abs(mm), 1e-10)

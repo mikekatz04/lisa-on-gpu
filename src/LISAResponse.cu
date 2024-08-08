@@ -18,9 +18,9 @@
 #ifdef __CUDACC__
 #define gpuErrchk(ans)                        \
     {                                         \
-        gpuAssert((ans), __FILE__, __LINE__); \
+        gpuAssert2((ans), __FILE__, __LINE__); \
     }
-inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort = true)
+inline void gpuAssert2(cudaError_t code, const char *file, int line, bool abort = true)
 {
     if (code != cudaSuccess)
     {
@@ -421,12 +421,18 @@ void get_tdi_delays(double *delayed_links, double *input_links, int num_inputs, 
 
     dim3 gridDim(num_blocks, num_units * num_channels);
 
+    Orbits *orbits_gpu;
+    gpuErrchk(cudaMalloc(&orbits_gpu, sizeof(Orbits)));
+    gpuErrchk(cudaMemcpy(orbits_gpu, orbits_in, sizeof(Orbits), cudaMemcpyHostToDevice));
+
     // printf("RUNNING: %d\n", i);
     TDI_delay<<<gridDim, NUM_THREADS>>>(delayed_links, input_links, num_inputs, num_delays, t_arr, tdi_base_link, tdi_link_combinations, tdi_signs_in, channels, num_units, num_channels,
-                                        order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind, orbits_in);
+                                        order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind, orbits_gpu);
 
     cudaDeviceSynchronize();
     gpuErrchk(cudaGetLastError());
+    gpuErrchk(cudaFree(orbits_gpu));
+    
 #else
     TDI_delay(delayed_links, input_links, num_inputs, num_delays, t_arr, tdi_base_link, tdi_link_combinations, tdi_signs_in, channels, num_units, num_channels,
               order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind, orbits_in);
@@ -681,6 +687,11 @@ void get_response(double *y_gw, double *t_data, double *k_in, double *u_in, doub
     int num_delays_here = (num_delays - 2 * projections_start_ind);
     int num_blocks = std::ceil((num_delays_here + NUM_THREADS - 1) / NUM_THREADS);
 
+    // copy self to GPU
+    Orbits *orbits_gpu;
+    gpuErrchk(cudaMalloc(&orbits_gpu, sizeof(Orbits)));
+    gpuErrchk(cudaMemcpy(orbits_gpu, orbits, sizeof(Orbits), cudaMemcpyHostToDevice));
+
     dim3 gridDim(num_blocks, 1);
 
     // printf("RUNNING: %d\n", i);
@@ -688,9 +699,11 @@ void get_response(double *y_gw, double *t_data, double *k_in, double *u_in, doub
                                        num_delays,
                                        input_in, num_inputs, order, sampling_frequency, buffer_integer,
                                        A_in, deps, num_A, E_in, projections_start_ind,
-                                       orbits);
+                                       orbits_gpu);
     cudaDeviceSynchronize();
     gpuErrchk(cudaGetLastError());
+
+    gpuErrchk(cudaFree(orbits_gpu));
 #else
 
     // CPU waveform generation

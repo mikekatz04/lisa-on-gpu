@@ -78,7 +78,7 @@ def customize_compiler_for_nvcc(self):
     def _compile(obj, src, ext, cc_args, extra_postargs, pp_opts):
         # generate a special object file that will contain linked in
         # relocatable device code
-        if src == "link.cu":
+        if src == "zzzzzzzzzzzzzzzz.cu":
             self.set_executable("compiler_so", CUDA["nvcc"])
             postargs = extra_postargs["nvcclink"]
             cc_args = self.cuda_object_files[1:]
@@ -117,6 +117,12 @@ except AttributeError:
 
 # lib_gsl_dir = "/opt/local/lib"
 # include_gsl_dir = "/opt/local/include"
+
+# find detector source files from installed distribution. 
+import lisatools
+
+path_to_lisatools = lisatools.__file__.split("__init__.py")[0]
+path_to_lisatools_cutils = path_to_lisatools + "cutils/"
 
 # if installing for CUDA, build Cython extensions for gpu modules
 if run_cuda_install:
@@ -161,15 +167,15 @@ if run_cuda_install:
     #     ],
     # )
 
-    response_ext = (
-        Extension(
+    response_ext = Extension(
             "pyresponse",
-            sources=["src/LISAResponse.cu", "src/responselisa.pyx", "link.cu"],
+            sources=[path_to_lisatools_cutils + "src/Detector.cu", "src/LISAResponse.cu", "src/responselisa.pyx", "zzzzzzzzzzzzzzzz.cu"],
             library_dirs=[CUDA["lib64"]],
+            language="c++",
             libraries=["cudart", "cudadevrt"],
             runtime_library_dirs=[CUDA["lib64"]],
             extra_compile_args={
-                "gcc": [],
+                "gcc": ["-std=c++11"],
                 "nvcc": ["-arch=sm_80", "-rdc=true", "--compiler-options", "'-fPIC'"],
                 "nvcclink": [
                     "-arch=sm_80",
@@ -178,13 +184,11 @@ if run_cuda_install:
                     "'-fPIC'",
                 ],
             },
-            include_dirs=[numpy_include, CUDA["include"], "include"],
-        ),
-    )
-    #  **gpu_extension
+            include_dirs=[numpy_include, CUDA["include"], "include", path_to_lisatools_cutils + "include"],
+        )
 
 cpu_extension = dict(
-    libraries=[""],
+    libraries=[],
     language="c++",
     # This syntax is specific to this build system
     # we're only going to use certain compiler args with nvcc
@@ -193,13 +197,13 @@ cpu_extension = dict(
     extra_compile_args={
         "gcc": ["-std=c++11"],
     },  # '-g'],
-    include_dirs=[numpy_include, "./include"],
+    include_dirs=[numpy_include, "./include", path_to_lisatools_cutils + "include"],
 )
 
 response_cpu_ext = Extension(
     "pyresponse_cpu",
     sources=[
-        "src/Detector.cpp",
+        path_to_lisatools_cutils + "src/Detector.cpp",
         "src/LISAResponse.cpp",
         "src/responselisa_cpu.pyx",
     ],
@@ -207,13 +211,7 @@ response_cpu_ext = Extension(
 )
 
 
-detector_ext = Extension(
-    "fastlisaresponse.cutils.detector",
-    sources=["src/Detector.cpp", "src/pycppdetector.pyx"],
-    **cpu_extension
-)
-
-cpu_extensions = [response_cpu_ext, detector_ext]
+cpu_extensions = [response_cpu_ext]  # , detector_ext]
 
 if run_cuda_install:
     extensions = [response_ext] + cpu_extensions

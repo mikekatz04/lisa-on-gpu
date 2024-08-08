@@ -219,6 +219,7 @@ class pyResponseTDI(object):
             orbits = EqualArmlengthOrbits()
 
         assert isinstance(orbits, Orbits)
+        assert orbits.use_gpu == self.use_gpu
 
         self._tdi_orbits = deepcopy(orbits)
 
