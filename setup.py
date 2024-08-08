@@ -168,7 +168,7 @@ if run_cuda_install:
     # )
 
     response_ext = Extension(
-        "pyresponse",
+        "fastlisaresponse.pyresponse_gpu",
         sources=[
             path_to_lisatools_cutils + "src/Detector.cu",
             "src/LISAResponse.cu",
@@ -211,7 +211,7 @@ cpu_extension = dict(
 )
 
 response_cpu_ext = Extension(
-    "pyresponse_cpu",
+    "fastlisaresponse.pyresponse_cpu",
     sources=[
         path_to_lisatools_cutils + "src/Detector.cpp",
         "src/LISAResponse.cpp",

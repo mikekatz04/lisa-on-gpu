@@ -8,8 +8,8 @@ from copy import deepcopy
 
 try:
     import cupy as cp
-    from pyresponse import get_response_wrap as get_response_wrap_gpu
-    from pyresponse import get_tdi_delays_wrap as get_tdi_delays_wrap_gpu
+    from pyresponse_gpu import get_response_wrap as get_response_wrap_gpu
+    from pyresponse_gpu import get_tdi_delays_wrap as get_tdi_delays_wrap_gpu
 
     gpu = True
 
@@ -153,13 +153,6 @@ class pyResponseTDI(object):
 
         # setup functions for GPU or CPU
         self.use_gpu = use_gpu
-        if use_gpu:
-            self.response_gen = get_response_wrap_gpu
-            self.tdi_gen = get_tdi_delays_wrap_gpu
-
-        else:
-            self.response_gen = get_response_wrap_cpu
-            self.tdi_gen = get_tdi_delays_wrap_cpu
 
         # prepare the interpolation of A and E in the Lagrangian interpolation
         self._fill_A_E()
@@ -182,6 +175,16 @@ class pyResponseTDI(object):
 
         # setup TDI info
         self._init_TDI_delays()
+
+    @property
+    def response_gen(self) -> callable:
+        """CPU/GPU function for generating the projections."""
+        return get_response_wrap_cpu if not self.use_gpu else get_response_wrap_gpu
+
+    @property
+    def tdi_gen(self) -> callable:
+        """CPU/GPU function for generating tdi."""
+        return get_tdi_delays_wrap_cpu if not self.use_gpu else get_tdi_delays_wrap_gpu
 
     @property
     def xp(self) -> object:
