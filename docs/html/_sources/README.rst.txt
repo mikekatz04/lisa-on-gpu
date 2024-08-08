@@ -16,9 +16,6 @@ If you use all or any parts of this code, please cite
 `documentation <https://mikekatz04.github.io/lisa-on-gpu/>`__ to
 properly cite specific modules.
 
-**Warning**: newest version (1.0.6) of code with ``lisatools`` orbits
-needs detailed testing before deployed for a paper.
-
 Getting Started
 ---------------
 
@@ -100,7 +97,7 @@ To install from source:
 
 ::
 
-   pip install cupy
+   pip install cupy-12x
 
 4) Run install. Make sure CUDA is on your PATH.
 
