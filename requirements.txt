@@ -1,0 +1,9 @@
+numpy 
+pandas
+Cython 
+scipy 
+tqdm
+h5py 
+requests 
+matplotlib
+LISAanalysistools
