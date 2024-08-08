@@ -118,7 +118,7 @@ except AttributeError:
 # lib_gsl_dir = "/opt/local/lib"
 # include_gsl_dir = "/opt/local/include"
 
-# find detector source files from installed distribution. 
+# find detector source files from installed distribution.
 import lisatools
 
 path_to_lisatools = lisatools.__file__.split("__init__.py")[0]
@@ -168,24 +168,34 @@ if run_cuda_install:
     # )
 
     response_ext = Extension(
-            "pyresponse",
-            sources=[path_to_lisatools_cutils + "src/Detector.cu", "src/LISAResponse.cu", "src/responselisa.pyx", "zzzzzzzzzzzzzzzz.cu"],
-            library_dirs=[CUDA["lib64"]],
-            language="c++",
-            libraries=["cudart", "cudadevrt"],
-            runtime_library_dirs=[CUDA["lib64"]],
-            extra_compile_args={
-                "gcc": ["-std=c++11"],
-                "nvcc": ["-arch=sm_80", "-rdc=true", "--compiler-options", "'-fPIC'"],
-                "nvcclink": [
-                    "-arch=sm_80",
-                    "--device-link",
-                    "--compiler-options",
-                    "'-fPIC'",
-                ],
-            },
-            include_dirs=[numpy_include, CUDA["include"], "include", path_to_lisatools_cutils + "include"],
-        )
+        "pyresponse",
+        sources=[
+            path_to_lisatools_cutils + "src/Detector.cu",
+            "src/LISAResponse.cu",
+            "src/responselisa.pyx",
+            "zzzzzzzzzzzzzzzz.cu",
+        ],
+        library_dirs=[CUDA["lib64"]],
+        language="c++",
+        libraries=["cudart", "cudadevrt"],
+        runtime_library_dirs=[CUDA["lib64"]],
+        extra_compile_args={
+            "gcc": ["-std=c++11"],
+            "nvcc": ["-arch=sm_80", "-rdc=true", "--compiler-options", "'-fPIC'"],
+            "nvcclink": [
+                "-arch=sm_80",
+                "--device-link",
+                "--compiler-options",
+                "'-fPIC'",
+            ],
+        },
+        include_dirs=[
+            numpy_include,
+            CUDA["include"],
+            "include",
+            path_to_lisatools_cutils + "include",
+        ],
+    )
 
 cpu_extension = dict(
     libraries=[],
