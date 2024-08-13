@@ -16,8 +16,8 @@
 #endif
 
 #ifdef __CUDACC__
-#define gpuErrchk(ans)                        \
-    {                                         \
+#define gpuErrchk(ans)                         \
+    {                                          \
         gpuAssert2((ans), __FILE__, __LINE__); \
     }
 inline void gpuAssert2(cudaError_t code, const char *file, int line, bool abort = true)
@@ -432,7 +432,7 @@ void get_tdi_delays(double *delayed_links, double *input_links, int num_inputs, 
     cudaDeviceSynchronize();
     gpuErrchk(cudaGetLastError());
     gpuErrchk(cudaFree(orbits_gpu));
-    
+
 #else
     TDI_delay(delayed_links, input_links, num_inputs, num_delays, t_arr, tdi_base_link, tdi_link_combinations, tdi_signs_in, channels, num_units, num_channels,
               order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind, orbits_in);
@@ -514,7 +514,8 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
         link_space_craft_0[i] = orbits.sc_r[i];
         link_space_craft_1[i] = orbits.sc_e[i];
         links[i] = orbits.links[i];
-        // if (threadIdx.x == 1) printf("%d %d %d %d\n", link_space_craft_0_in[i],link_space_craft_1_in[i], link_space_craft_1[i], link_space_craft_0[i]);
+        // if (threadIdx.x == 1)
+        // printf("%d %d %d %d\n", orbits.sc_r[i], orbits.sc_e[i], link_space_craft_1[i], link_space_craft_0[i]);
     }
     CUDA_SYNC_THREADS;
     int point_count = order + 1;
