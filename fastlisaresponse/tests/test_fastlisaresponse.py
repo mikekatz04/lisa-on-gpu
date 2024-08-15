@@ -15,7 +15,7 @@ try:
     gpu_available = True
 
 except (ModuleNotFoundError, ImportError) as e:
-    import numpy as xp
+    pass
 
     warnings.warn(
         "CuPy is not installed or a gpu is not available. If trying to run on a gpu, please install CuPy."
@@ -61,8 +61,8 @@ class GBWave:
 
 
 class ResponseTest(unittest.TestCase):
-    def run_test(self, tdi_gen, use_gpu):
 
+    def run_test(self, tdi_gen, use_gpu):
         gb = GBWave(use_gpu=use_gpu)
 
         T = 2.0  # years
@@ -128,8 +128,8 @@ class ResponseTest(unittest.TestCase):
         if gpu_available:
             waveform_gpu = self.run_test("1st generation", True)
             mm = 1.0 - get_overlap(
-                xp.asarray(waveform_cpu),
-                xp.asarray(waveform_gpu),
+                cp.asarray(waveform_cpu),
+                cp.asarray(waveform_gpu),
                 use_gpu=gpu_available,
             )
             self.assertLess(np.abs(mm), 1e-10)
@@ -142,6 +142,6 @@ class ResponseTest(unittest.TestCase):
         if gpu_available:
             waveform_gpu = self.run_test("2nd generation", True)
             mm = 1.0 - get_overlap(
-                xp.asarray(waveform_cpu), waveform_gpu, use_gpu=gpu_available
+                cp.asarray(waveform_cpu), waveform_gpu, use_gpu=gpu_available
             )
             self.assertLess(np.abs(mm), 1e-10)
