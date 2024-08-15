@@ -48,7 +48,7 @@
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="user/main.html">Fast Response Function</a></li>
 <li class="toctree-l1"><a class="reference internal" href="user/main.html#response-function-wrapper">Response Function Wrapper</a></li>
-<li class="toctree-l1"><a class="reference internal" href="user/main.html#utilities">Utilities</a></li>
+<li class="toctree-l1"><a class="reference internal" href="user/main.html#module-fastlisaresponse.utils.utility">Utilities</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tutorial:</span></p>
 <ul>
@@ -109,7 +109,7 @@ properly cite specific modules.</p>
 notebook</a>.</p>
 <section id="prerequisites">
 <h3>Prerequisites<a class="headerlink" href="#prerequisites" title="Link to this heading"></a></h3>
-<p>Now (version 1.0.6) <code class="docutils literal notranslate"><span class="pre">fastlisaresponse</span></code> requires the newest version of
+<p>Now (version 1.0.7) <code class="docutils literal notranslate"><span class="pre">fastlisaresponse</span></code> requires the newest version of
 <a class="reference external" href="github.com/mikekatz04/LISAanalysistools">LISA Analysis Tools</a>. You
 can run <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">lisaanalysistools</span></code>.</p>
 <p>To install this software for CPU usage, you need Python &gt;3.4 and NumPy.
@@ -190,7 +190,7 @@ code of conduct, and the process for submitting pull requests to us.</p>
 <p>We use <a class="reference external" href="http://semver.org/">SemVer</a> for versioning. For the versions
 available, see the <a class="reference external" href="https://github.com/mikekatz04/lisa-on-gpu/tags">tags on this
 repository</a>.</p>
-<p>Current Version: 1.0.6</p>
+<p>Current Version: 1.0.7</p>
 </section>
 <section id="authors">
 <h2>Authors<a class="headerlink" href="#authors" title="Link to this heading"></a></h2>
@@ -222,9 +222,54 @@ computing facility at Northwestern University.</p></li>
 <div class="toctree-wrapper compound">
 <p class="caption" role="heading"><span class="caption-text">Documentation:</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="user/main.html">Fast Response Function</a></li>
-<li class="toctree-l1"><a class="reference internal" href="user/main.html#response-function-wrapper">Response Function Wrapper</a></li>
-<li class="toctree-l1"><a class="reference internal" href="user/main.html#utilities">Utilities</a></li>
+<li class="toctree-l1"><a class="reference internal" href="user/main.html">Fast Response Function</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.A_in"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.A_in</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.buffer_integer"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.buffer_integer</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.channels_no_delays"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.channels_no_delays</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.deps"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.deps</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.dt"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.dt</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.E_in"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.E_in</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.half_order"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.half_order</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.link_inds"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.link_inds</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.link_space_craft_0_in"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.link_space_craft_0_in</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.link_space_craft_1_in"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.link_space_craft_1_in</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.nlinks"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.nlinks</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.num_A"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.num_A</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.num_channels"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.num_channels</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.num_pts"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.num_pts</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.order"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.order</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.sampling_frequency"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.sampling_frequency</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.tdi"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.tdi</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.tdi_buffer"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.tdi_buffer</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.use_gpu"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.use_gpu</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.xp"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.xp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.response_gen"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.response_gen</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.tdi_gen"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.tdi_gen</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.response_orbits"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.response_orbits</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.tdi_orbits"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.tdi_orbits</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.citation"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.citation</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.tdi_combinations"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.tdi_combinations</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.y_gw"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.y_gw</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.get_projections"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.get_projections()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.XYZ"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.XYZ</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.pyResponseTDI.get_tdi_delays"><code class="docutils literal notranslate"><span class="pre">pyResponseTDI.get_tdi_delays()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="user/main.html#response-function-wrapper">Response Function Wrapper</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="user/main.html#fastlisaresponse.response.ResponseWrapper"><code class="docutils literal notranslate"><span class="pre">ResponseWrapper</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.ResponseWrapper.citation"><code class="docutils literal notranslate"><span class="pre">ResponseWrapper.citation</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="user/main.html#fastlisaresponse.response.ResponseWrapper.__call__"><code class="docutils literal notranslate"><span class="pre">ResponseWrapper.__call__()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="user/main.html#module-fastlisaresponse.utils.utility">Utilities</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="user/main.html#fastlisaresponse.utils.utility.get_overlap"><code class="docutils literal notranslate"><span class="pre">get_overlap()</span></code></a></li>
+</ul>
+</li>
 </ul>
 </div>
 <div class="toctree-wrapper compound">

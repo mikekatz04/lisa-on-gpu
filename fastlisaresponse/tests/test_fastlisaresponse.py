@@ -10,7 +10,7 @@ from fastlisaresponse import ResponseWrapper
 from fastlisaresponse.utils import get_overlap
 
 try:
-    import cupy as xp
+    import cupy as cp
 
     gpu_available = True
 
@@ -28,10 +28,12 @@ YRSID_SI = 31558149.763545603
 class GBWave:
     def __init__(self, use_gpu=False):
 
-        if use_gpu:
-            self.xp = xp
-        else:
-            self.xp = np
+        self.use_gpu = use_gpu
+
+    @property
+    def xp(self) -> object:
+        """Numpy or Cupy"""
+        return cp if self.use_gpu else np
 
     def __call__(self, A, f, fdot, iota, phi0, psi, T=1.0, dt=10.0):
 

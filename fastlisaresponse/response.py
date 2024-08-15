@@ -14,7 +14,7 @@ try:
     gpu = True
 
 except (ImportError, ModuleNotFoundError) as e:
-    import numpy as xp
+    pass
 
     gpu = False
 
@@ -113,7 +113,6 @@ class pyResponseTDI(object):
         num_channels (int): 3.
         num_pts (int): Number of points to produce for the final output template.
         order (int): Order of Lagrangian interpolation technique.
-        response_gen (func): Projection generator function.
         sampling_frequency (double): The sampling rate in Hz.
         tdi (str or list): TDI setup.
         tdi_buffer (int): The buffer necessary for all information needed at early times

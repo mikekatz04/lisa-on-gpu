@@ -34,7 +34,7 @@
     "\n",
     "If you use this code, please cite [arXiv:2204.06633](https://arxiv.org/abs/2204.06633) and the code's [Zenodo](https://zenodo.org/record/3981654#.XzS_KRNKjlw). \n",
     "\n",
-    "**Warning**: newest version (1.0.6) of code with `lisatools` orbits needs detailed testing before deployed for a paper."
+    "**Warning**: newest version (1.0.7) of code with `lisatools` orbits needs detailed testing before deployed for a paper."
    ]
   },
   {
