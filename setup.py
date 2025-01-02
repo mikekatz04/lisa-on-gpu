@@ -168,11 +168,11 @@ if run_cuda_install:
     # )
 
     response_ext = Extension(
-        "fastlisaresponse.pyresponse_gpu",
+        "fastlisaresponse.cutils.pyresponse_gpu",
         sources=[
             path_to_lisatools_cutils + "src/Detector.cu",
-            "src/LISAResponse.cu",
-            "src/responselisa.pyx",
+            "fastlisaresponse/cutils/src/LISAResponse.cu",
+            "fastlisaresponse/cutils/src/responselisa.pyx",
             "zzzzzzzzzzzzzzzz.cu",
         ],
         library_dirs=[CUDA["lib64"]],
@@ -192,7 +192,7 @@ if run_cuda_install:
         include_dirs=[
             numpy_include,
             CUDA["include"],
-            "include",
+            "fastlisaresponse/cutils/include",
             path_to_lisatools_cutils + "include",
         ],
     )
@@ -207,15 +207,19 @@ cpu_extension = dict(
     extra_compile_args={
         "gcc": ["-std=c++11"],
     },  # '-g'],
-    include_dirs=[numpy_include, "./include", path_to_lisatools_cutils + "include"],
+    include_dirs=[
+        numpy_include,
+        "./fastlisaresponse/cutils/include",
+        path_to_lisatools_cutils + "include",
+    ],
 )
 
 response_cpu_ext = Extension(
-    "fastlisaresponse.pyresponse_cpu",
+    "fastlisaresponse.cutils.pyresponse_cpu",
     sources=[
         path_to_lisatools_cutils + "src/Detector.cpp",
-        "src/LISAResponse.cpp",
-        "src/responselisa_cpu.pyx",
+        "fastlisaresponse/cutils/src/LISAResponse.cpp",
+        "fastlisaresponse/cutils/src/responselisa_cpu.pyx",
     ],
     **cpu_extension
 )
@@ -238,13 +242,19 @@ setup(
     author_email="mikekatz04@gmail.com",
     ext_modules=extensions,
     # Inject our custom trigger
-    packages=["fastlisaresponse", "fastlisaresponse.utils"],
+    packages=[
+        "fastlisaresponse",
+        "fastlisaresponse.utils",
+        "fastlisaresponse.cutils",
+        "fastlisaresponse.cutils.src",
+        "fastlisaresponse.cutils.include",
+    ],
     cmdclass={"build_ext": custom_build_ext},
     # Since the package has c code, the egg cannot be zipped
     zip_safe=False,
     long_description=long_description,
     long_description_content_type="text/markdown",
-    version="1.0.8",
+    version="1.0.9",
     url="https://github.com/mikekatz04/lisa-on-gpu",
     classifiers=[
         "Programming Language :: Python :: 3",
@@ -256,4 +266,12 @@ setup(
         "Programming Language :: Python :: 3.12",
     ],
     python_requires=">=3.6",
+    package_data={
+        "fastlisaresponse.cutils.src": [
+            "LISAResponse.cu",
+            "LISAResponse.cpp",
+            "responselisa.pyx",
+        ],
+        "fastlisaresponse.cutils.include": ["LISAResponse.hh", "cuda_complex.hpp"],
+    },
 )

@@ -24,7 +24,7 @@ See [examples notebook](https://github.com/mikekatz04/lisa-on-gpu/blob/master/ex
 
 ### Prerequisites
 
-Now (version 1.0.7) `fastlisaresponse` requires the newest version of [LISA Analysis Tools](github.com/mikekatz04/LISAanalysistools). You can run `pip install lisaanalysistools`.
+Now (version 1.0.9) `fastlisaresponse` requires the newest version of [LISA Analysis Tools](github.com/mikekatz04/LISAanalysistools). You can run `pip install lisaanalysistools`.
 
 To install this software for CPU usage, you need Python >3.4 and NumPy. To run the examples, you will also need jupyter and matplotlib. We generally recommend installing everything, including gcc and g++ compilers, in the conda environment as is shown in the examples here. This generally helps avoid compilation and linking issues. If you use your own chosen compiler, you will need to make sure all necessary information is passed to the setup command (see below). You also may need to add information to the `setup.py` file.
 
@@ -89,7 +89,7 @@ Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduc
 
 We use [SemVer](http://semver.org/) for versioning. For the versions available, see the [tags on this repository](https://github.com/mikekatz04/lisa-on-gpu/tags).
 
-Current Version: 1.0.7
+Current Version: 1.0.9
 
 ## Authors
 

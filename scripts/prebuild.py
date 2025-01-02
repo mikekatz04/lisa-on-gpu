@@ -1,7 +1,7 @@
 import shutil
 
-fps_cu_to_cpp = ["src/LISAResponse"]
-fps_pyx = ["src/responselisa"]
+fps_cu_to_cpp = ["fastlisaresponse/cutils/src/LISAResponse"]
+fps_pyx = ["fastlisaresponse/cutils/src/responselisa"]
 
 for fp in fps_cu_to_cpp:
     shutil.copy(fp + ".cu", fp + ".cpp")
