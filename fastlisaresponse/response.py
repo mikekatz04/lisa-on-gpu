@@ -584,7 +584,7 @@ class pyResponseTDI(object):
 
         unit_starts = unit_starts.astype(np.int32)
         unit_lengths = unit_lengths.astype(np.int32)
-        breakpoint()
+
         self.tdi_gen(
             self.delayed_links_flat,
             self.y_gw_flat,

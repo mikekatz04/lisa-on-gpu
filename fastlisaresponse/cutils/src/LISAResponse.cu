@@ -349,8 +349,6 @@ void TDI_delay(double *delayed_links, double *input_links, int num_inputs, int n
                 }
             }
 
-            if ((i == tdi_start_ind + 10))
-                printf("%d %e\n", tdi_start_ind + 10, delay);
             // at i = 0, delay ind should be at TDI_buffer = total_buffer - projection_buffer
 
             // delays are still with respect to projection start
