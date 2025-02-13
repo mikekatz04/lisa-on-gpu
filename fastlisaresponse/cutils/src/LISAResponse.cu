@@ -320,7 +320,6 @@ void TDI_delay(double *delayed_links, double *input_links, int num_inputs, int n
     {
 
         t = t_arr[i];
-        delay = t;
         for (int unit_i = start1; unit_i < num_units; unit_i += increment1)
         {
             int unit_start = unit_starts[unit_i];
@@ -329,7 +328,7 @@ void TDI_delay(double *delayed_links, double *input_links, int num_inputs, int n
             int base_link_index = orbits.get_link_ind(base_link);
             int channel = channels[unit_i];
             int sign = tdi_signs_in[unit_i];
-
+            delay = t;
             for (int sub_i = 0; sub_i < unit_length; sub_i += 1)
             {
                 int combination_index = unit_start + sub_i;
@@ -350,6 +349,8 @@ void TDI_delay(double *delayed_links, double *input_links, int num_inputs, int n
                 }
             }
 
+            if ((i == tdi_start_ind + 10))
+                printf("%d %e\n", tdi_start_ind + 10, delay);
             // at i = 0, delay ind should be at TDI_buffer = total_buffer - projection_buffer
 
             // delays are still with respect to projection start
