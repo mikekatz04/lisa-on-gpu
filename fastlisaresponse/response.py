@@ -341,38 +341,45 @@ class pyResponseTDI(object):
         tdi_base_links = []
         tdi_link_combinations = []
         tdi_signs = []
+        tdi_operation_index = []
         channels = []
 
+        tdi_index = 0
         for permutation_number in range(3):
             for tmp in tdi_combinations:
+                tdi_base_links.append(
+                    self._cyclic_permutation(tmp["link"], permutation_number)
+                )
+                tdi_signs.append(tmp["sign"])
+                channels.append(permutation_number)
                 if len(tmp["links_for_delay"]) == 0:
-                    tdi_base_links.append(
-                        self._cyclic_permutation(tmp["link"], permutation_number)
-                    )
                     tdi_link_combinations.append(-11)
-                    tdi_signs.append(tmp["sign"])
-                    channels.append(permutation_number)
-                    continue
+                    tdi_operation_index.append(tdi_index)
 
-                for link_delay in tmp["links_for_delay"]:
-                    tdi_base_links.append(
-                        self._cyclic_permutation(tmp["link"], permutation_number)
-                    )
-                    tdi_link_combinations.append(
-                        self._cyclic_permutation(link_delay, permutation_number)
-                    )
-                    tdi_signs.append(tmp["sign"])
-                    channels.append(permutation_number)
+                else:
+                    for link_delay in tmp["links_for_delay"]:
 
+                        tdi_link_combinations.append(
+                            self._cyclic_permutation(link_delay, permutation_number)
+                        )
+                        tdi_operation_index.append(tdi_index)
+
+                tdi_index += 1
+
+        self.tdi_operation_index = self.xp.asarray(tdi_operation_index).astype(
+            self.xp.int32
+        )
         self.tdi_base_links = self.xp.asarray(tdi_base_links).astype(self.xp.int32)
         self.tdi_link_combinations = self.xp.asarray(tdi_link_combinations).astype(
             self.xp.int32
         )
         self.tdi_signs = self.xp.asarray(tdi_signs).astype(self.xp.int32)
         self.channels = self.xp.asarray(channels).astype(self.xp.int32)
+        assert len(self.tdi_link_combinations) == len(self.tdi_operation_index)
+
         assert (
             len(self.tdi_base_links)
-            == len(self.tdi_link_combinations)
+            == len(np.unique(self.tdi_operation_index))
             == len(self.tdi_signs)
             == len(self.channels)
         )
@@ -562,17 +569,35 @@ class pyResponseTDI(object):
 
         t_data = self.xp.arange(self.y_gw_length) * self.dt
 
+        num_units = self.tdi_operation_index.max() + 1
+
+        assert np.all(
+            (np.diff(self.tdi_operation_index) == 0)
+            | (np.diff(self.tdi_operation_index) == 1)
+        )
+
+        _, unit_starts, unit_lengths = np.unique(
+            self.tdi_operation_index,
+            return_index=True,
+            return_counts=True,
+        )
+
+        unit_starts = unit_starts.astype(np.int32)
+        unit_lengths = unit_lengths.astype(np.int32)
+        breakpoint()
         self.tdi_gen(
             self.delayed_links_flat,
             self.y_gw_flat,
             self.y_gw_length,
             self.num_pts,
             t_data,
+            unit_starts,
+            unit_lengths,
             self.tdi_base_links,
             self.tdi_link_combinations,
             self.tdi_signs,
             self.channels,
-            len(self.tdi_base_links),  # num_units
+            num_units,
             3,  # num channels
             self.order,
             self.sampling_frequency,

@@ -17,7 +17,7 @@ cdef extern from "LISAResponse.hh":
                   int projections_start_ind,
                   Orbits *orbits);
 
-    void get_tdi_delays(double *delayed_links, double *input_links, int num_inputs, int num_delays, double *t_arr, int *tdi_base_link, int *tdi_link_combinations, int *tdi_signs, int *channels, int num_units, int num_channels,
+    void get_tdi_delays(double *delayed_links, double *input_links, int num_inputs, int num_delays, double *t_arr, int *unit_starts, int *unit_lengths, int *tdi_base_link, int *tdi_link_combinations, int *tdi_signs, int *channels, int num_units, int num_channels,
                     int order, double sampling_frequency, int buffer_integer, double *A_in, double deps, int num_A, double *E_in, int tdi_start_ind, Orbits *orbits);
 
 @pointer_adjust
@@ -47,7 +47,7 @@ def get_response_wrap(y_gw, t_data, k_in, u_in, v_in, dt,
 
 
 @pointer_adjust
-def get_tdi_delays_wrap(delayed_links, y_gw, num_inputs, num_delays, t_arr, tdi_base_link, tdi_link_combinations, tdi_signs, channels, num_units, num_channels,
+def get_tdi_delays_wrap(delayed_links, y_gw, num_inputs, num_delays, t_arr, unit_starts, unit_lengths, tdi_base_link, tdi_link_combinations, tdi_signs, channels, num_units, num_channels,
                order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind, orbits):
 
     cdef size_t delayed_links_in = delayed_links
@@ -55,11 +55,13 @@ def get_tdi_delays_wrap(delayed_links, y_gw, num_inputs, num_delays, t_arr, tdi_
     cdef size_t A_in_in = A_in
     cdef size_t E_in_in = E_in
     cdef size_t t_arr_in = t_arr
+    cdef size_t unit_starts_in = unit_starts
+    cdef size_t unit_lengths_in = unit_lengths
     cdef size_t tdi_base_link_in = tdi_base_link
     cdef size_t tdi_link_combinations_in = tdi_link_combinations
     cdef size_t tdi_signs_in = tdi_signs
     cdef size_t channels_in = channels
     cdef size_t orbits_in = orbits
 
-    get_tdi_delays(<double*> delayed_links_in, <double*> y_gw_in, num_inputs, num_delays, <double*> t_arr_in, <int*> tdi_base_link_in, <int*> tdi_link_combinations_in, <int*> tdi_signs_in, <int*> channels_in, num_units, num_channels,
+    get_tdi_delays(<double*> delayed_links_in, <double*> y_gw_in, num_inputs, num_delays, <double*> t_arr_in, <int *>unit_starts_in, <int *>unit_lengths_in, <int*> tdi_base_link_in, <int*> tdi_link_combinations_in, <int*> tdi_signs_in, <int*> channels_in, num_units, num_channels,
                    order, sampling_frequency, buffer_integer, <double*> A_in_in, deps, num_A, <double*> E_in_in, tdi_start_ind, <Orbits*> orbits_in)
