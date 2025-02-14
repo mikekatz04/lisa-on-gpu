@@ -114,7 +114,7 @@
 </div>
 <p>This tutorial provides information on using <code class="docutils literal notranslate"><span class="pre">fastlisaresponse</span></code>: a generic time-domain LISA response function, including both projection on to constellation arms and TDI combinations. It is also GPU/CPU agnostic. The GPU capability is helpful for use in Bayesian inference algorithms. For more information and a detailed API, please see the <a class="reference external" href="https://mikekatz04.github.io/lisa-on-gpu/">documentation</a>.</p>
 <p>If you use this code, please cite <a class="reference external" href="https://arxiv.org/abs/2204.06633">arXiv:2204.06633</a> and the code’s <a class="reference external" href="https://zenodo.org/record/3981654#.XzS_KRNKjlw">Zenodo</a>.</p>
-<p><strong>Warning</strong>: newest version (1.0.9) of code with <code class="docutils literal notranslate"><span class="pre">lisatools</span></code> orbits needs detailed testing before deployed for a paper.</p>
+<p><strong>Warning</strong>: newest version (1.0.10) of code with <code class="docutils literal notranslate"><span class="pre">lisatools</span></code> orbits needs detailed testing before deployed for a paper.</p>
 <section id="Gravitational-wave-signal">
 <h2>Gravitational wave signal<a class="headerlink" href="#Gravitational-wave-signal" title="Link to this heading"></a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">fastlisaresponse</span></code> takes any time domain signal in the form <span class="math notranslate nohighlight">\(h(t) = h_+ + ih_\times\)</span>. We are going to use a Galactic binary waveform given by</p>
@@ -195,7 +195,7 @@
 <section id="Setup-classes">
 <h3>Setup classes<a class="headerlink" href="#Setup-classes" title="Link to this heading"></a></h3>
 <p>First we will setup everything to properly compute the response function for Galactic binary waveforms.</p>
-<div class="nbinput docutils container">
+<div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[4]:
 </pre></div>
 </div>
@@ -248,15 +248,6 @@
 <span class="n">lam</span> <span class="o">=</span> <span class="mf">5.22979888</span>
 <br/><br/></pre></div>
 </div>
-</div>
-<div class="nboutput nblast docutils container">
-<div class="prompt empty docutils container">
-</div>
-<div class="output_area stderr docutils container">
-<div class="highlight"><pre>
-/Users/mlkatz1/miniconda3/envs/lisa_env/lib/python3.12/site-packages/fastlisaresponse/response.py:683: UserWarning: Tobs is larger than available orbital information time array. Reducing Tobs to 31500000.0
-  warnings.warn(
-</pre></div></div>
 </div>
 </section>
 <section id="Run-generator">
