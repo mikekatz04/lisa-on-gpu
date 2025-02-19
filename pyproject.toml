@@ -5,7 +5,7 @@ build-backend = 'setuptools.build_meta'
 
 [tool.poetry]
 name = "fastlisaresponse"
-version = "1.0.10"
+version = "1.0.11"
 description = "GPU/CPU TD LISA Response Function"
 license = "Apache"
 classifiers = ["Programming Language :: Python :: 3", "Operating System :: OS Independent"]

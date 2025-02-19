@@ -1,25 +1,27 @@
-
-
 <!DOCTYPE html>
 <html class="writer-html5" lang="en" data-content_root="./">
 <head>
-  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Fast LISA Response Tutorial &mdash; fastlisaresponse 0.1.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=80d5e7a1" />
-      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=e59714d7" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=19f00094" />
       <link rel="stylesheet" type="text/css" href="_static/nbsphinx-code-cells.css?v=2aa19091" />
 
   
-      <script src="_static/jquery.js?v=5d32c60e"></script>
-      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
-      <script src="_static/documentation_options.js?v=01f34227"></script>
-      <script src="_static/doctools.js?v=9a2dae69"></script>
-      <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
-      <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-      <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
-      <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <!--[if lt IE 9]>
+    <script src="_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="_static/jquery.js?v=5d32c60e"></script>
+        <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script src="_static/documentation_options.js?v=01f34227"></script>
+        <script src="_static/doctools.js?v=9bcbadda"></script>
+        <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <script src="_static/js/theme.js"></script>
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
@@ -114,7 +116,7 @@
 </div>
 <p>This tutorial provides information on using <code class="docutils literal notranslate"><span class="pre">fastlisaresponse</span></code>: a generic time-domain LISA response function, including both projection on to constellation arms and TDI combinations. It is also GPU/CPU agnostic. The GPU capability is helpful for use in Bayesian inference algorithms. For more information and a detailed API, please see the <a class="reference external" href="https://mikekatz04.github.io/lisa-on-gpu/">documentation</a>.</p>
 <p>If you use this code, please cite <a class="reference external" href="https://arxiv.org/abs/2204.06633">arXiv:2204.06633</a> and the code’s <a class="reference external" href="https://zenodo.org/record/3981654#.XzS_KRNKjlw">Zenodo</a>.</p>
-<p><strong>Warning</strong>: newest version (1.0.10) of code with <code class="docutils literal notranslate"><span class="pre">lisatools</span></code> orbits needs detailed testing before deployed for a paper.</p>
+<p><strong>Warning</strong>: newest version (1.0.9) of code with <code class="docutils literal notranslate"><span class="pre">lisatools</span></code> orbits needs detailed testing before deployed for a paper.</p>
 <section id="Gravitational-wave-signal">
 <h2>Gravitational wave signal<a class="headerlink" href="#Gravitational-wave-signal" title="Link to this heading"></a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">fastlisaresponse</span></code> takes any time domain signal in the form <span class="math notranslate nohighlight">\(h(t) = h_+ + ih_\times\)</span>. We are going to use a Galactic binary waveform given by</p>
@@ -196,7 +198,7 @@
 <h3>Setup classes<a class="headerlink" href="#Setup-classes" title="Link to this heading"></a></h3>
 <p>First we will setup everything to properly compute the response function for Galactic binary waveforms.</p>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[4]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[14]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">use_gpu</span> <span class="o">=</span> <span class="kc">False</span>
@@ -253,7 +255,7 @@
 <section id="Run-generator">
 <h3>Run generator<a class="headerlink" href="#Run-generator" title="Link to this heading"></a></h3>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[5]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[15]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">chans</span> <span class="o">=</span> <span class="n">gb_lisa_esa</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">f</span><span class="p">,</span> <span class="n">fdot</span><span class="p">,</span> <span class="n">iota</span><span class="p">,</span> <span class="n">phi0</span><span class="p">,</span> <span class="n">psi</span><span class="p">,</span> <span class="n">lam</span><span class="p">,</span> <span class="n">beta</span><span class="p">)</span>
@@ -264,7 +266,7 @@
 <section id="Plot-results">
 <h3>Plot results<a class="headerlink" href="#Plot-results" title="Link to this heading"></a></h3>
 <div class="nbinput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[6]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[16]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="o">%</span><span class="k">matplotlib</span> inline

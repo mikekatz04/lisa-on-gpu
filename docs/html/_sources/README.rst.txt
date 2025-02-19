@@ -37,7 +37,7 @@ notebook <https://github.com/mikekatz04/lisa-on-gpu/blob/master/examples/fast_LI
 Prerequisites
 ~~~~~~~~~~~~~
 
-Now (version 1.0.10) ``fastlisaresponse`` requires the newest version of
+Now (version 1.0.11) ``fastlisaresponse`` requires the newest version of
 `LISA Analysis Tools <github.com/mikekatz04/LISAanalysistools>`__. You
 can run ``pip install lisaanalysistools``.
 
@@ -129,7 +129,7 @@ We use `SemVer <http://semver.org/>`__ for versioning. For the versions
 available, see the `tags on this
 repository <https://github.com/mikekatz04/lisa-on-gpu/tags>`__.
 
-Current Version: 1.0.10
+Current Version: 1.0.11
 
 Authors
 -------

@@ -254,7 +254,7 @@ setup(
     zip_safe=False,
     long_description=long_description,
     long_description_content_type="text/markdown",
-    version="1.0.10",
+    version="1.0.11",
     url="https://github.com/mikekatz04/lisa-on-gpu",
     classifiers=[
         "Programming Language :: Python :: 3",

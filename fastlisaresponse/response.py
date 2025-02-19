@@ -569,7 +569,7 @@ class pyResponseTDI(object):
 
         t_data = self.xp.arange(self.y_gw_length) * self.dt
 
-        num_units = self.tdi_operation_index.max() + 1
+        num_units = int(self.tdi_operation_index.max() + 1)
 
         assert np.all(
             (np.diff(self.tdi_operation_index) == 0)
