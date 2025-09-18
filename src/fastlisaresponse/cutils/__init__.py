@@ -42,7 +42,7 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
     @staticmethod
     def cpu_methods_loader() -> FastLISAResponseBackendMethods:
         try:
-            import fastlisaresponse_backend_cpu.utils
+            import fastlisaresponse_backend_cpu.responselisa
             
         except (ModuleNotFoundError, ImportError) as e:
             raise BackendUnavailableException(
@@ -52,8 +52,8 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
         numpy = FastLISAResponseCpuBackend.check_numpy()
 
         return FastLISAResponseBackendMethods(
-            get_response_wrap=fastlisaresponse_backend_cpu.utils.get_response_wrap,
-            get_tdi_delays_wrap=fastlisaresponse_backend_cpu.utils.get_tdi_delays_wrap,
+            get_response_wrap=fastlisaresponse_backend_cpu.responselisa.get_response_wrap,
+            get_tdi_delays_wrap=fastlisaresponse_backend_cpu.responselisa.get_tdi_delays_wrap,
             xp=numpy,
         )
 
@@ -71,7 +71,7 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
     @staticmethod
     def cuda11x_module_loader():
         try:
-            import fastlisaresponse_backend_cuda11x.utils
+            import fastlisaresponse_backend_cuda11x.responselisa
 
         except (ModuleNotFoundError, ImportError) as e:
             raise BackendUnavailableException(
@@ -86,8 +86,8 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
             ) from e
 
         return FastLISAResponseBackendMethods(
-            get_response_wrap=fastlisaresponse_backend_cuda11x.utils.get_response_wrap,
-            get_tdi_delays_wrap=fastlisaresponse_backend_cuda11x.utils.get_tdi_delays_wrap,
+            get_response_wrap=fastlisaresponse_backend_cuda11x.responselisa.get_response_wrap,
+            get_tdi_delays_wrap=fastlisaresponse_backend_cuda11x.responselisa.get_tdi_delays_wrap,
             xp=cupy,
         )
 
@@ -103,7 +103,7 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
     @staticmethod
     def cuda12x_module_loader():
         try:
-            import fastlisaresponse_backend_cuda12x.utils
+            import fastlisaresponse_backend_cuda12x.responselisa
 
         except (ModuleNotFoundError, ImportError) as e:
             raise BackendUnavailableException(
@@ -118,8 +118,8 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
             ) from e
 
         return FastLISAResponseBackendMethods(
-            get_response_wrap=fastlisaresponse_backend_cuda12x.utils.get_response_wrap,
-            get_tdi_delays_wrap=fastlisaresponse_backend_cuda12x.utils.get_tdi_delays_wrap,
+            get_response_wrap=fastlisaresponse_backend_cuda12x.responselisa.get_response_wrap,
+            get_tdi_delays_wrap=fastlisaresponse_backend_cuda12x.responselisa.get_tdi_delays_wrap,
             xp=cupy,
         )
 

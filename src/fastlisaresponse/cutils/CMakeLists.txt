@@ -87,8 +87,26 @@ endfunction()
 # * * * * * * * * * * * * * * * * * * * *
 
 # ----------------
-# --- utils ---
+# --- responselisa ---
 # ----------------
+
+
+# 0. Download lisa analysis tools c files.
+file(
+  DOWNLOAD 
+  https://raw.githubusercontent.com/mikekatz04/LISAanalysistools/refs/heads/main/src/lisatools/cutils/Detector.cu 
+  "./src/fastlisaresponse/cutils/Detector.cu"
+)
+file(
+  DOWNLOAD 
+  https://raw.githubusercontent.com/mikekatz04/LISAanalysistools/refs/heads/main/src/lisatools/cutils/Detector.hpp 
+  "./src/fastlisaresponse/cutils/Detector.hpp"
+)
+file(
+  DOWNLOAD 
+  https://raw.githubusercontent.com/mikekatz04/LISAanalysistools/refs/heads/main/src/lisatools/cutils/global.hpp 
+  "./src/fastlisaresponse/cutils/global.hpp"
+)
 
 # I. Process fastlisaresponse_utils_wrap.pyx into a C++ file
 add_custom_command(
@@ -111,18 +129,32 @@ if(FASTLISA_WITH_CPU)
     DEPENDS "LISAResponse.cu"
     VERBATIM)
 
-  python_add_library(fastlisaresponse_cpu_responselisa MODULE WITH_SOABI responselisa.cxx LISAResponse.cxx)
+  add_custom_command(
+    OUTPUT "Detector.cxx"
+    COMMENT "Copy Detector.cu to Detector.cxx"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/Detector.cu"
+            "${CMAKE_CURRENT_BINARY_DIR}/Detector.cxx"
+    DEPENDS "Detector.cu"
+    VERBATIM)
+
+  python_add_library(fastlisaresponse_cpu_responselisa MODULE WITH_SOABI Detector.cxx responselisa.cxx LISAResponse.cxx)
   apply_cpu_backend_common_options(responselisa)
 
   target_sources(fastlisaresponse_cpu_responselisa PUBLIC FILE_SET HEADERS FILES
-                                         cuda_complex.hpp LISAResponse.hh)
+                                         global.hpp Detector.hpp cuda_complex.hpp LISAResponse.hh)
 endif()
 
 # III. Declare the GPU backend
 if(FASTLISA_WITH_GPU)
-  python_add_library(fastlisaresponse_gpu_responselisa MODULE WITH_SOABI responselisa.cxx LISAResponse.cu)
+  python_add_library(fastlisaresponse_gpu_responselisa MODULE WITH_SOABI Detector.cu responselisa.cxx LISAResponse.cu)
   apply_gpu_backend_common_options(responselisa)
-  target_sources(gbgpu_gpu_responselisa PUBLIC FILE_SET HEADERS FILES
-                                         cuda_complex.hpp LISAResponse.hh)
+  target_sources(fastlisaresponse_gpu_responselisa PUBLIC FILE_SET HEADERS FILES
+                                         global.hpp Detector.hpp cuda_complex.hpp LISAResponse.hh)
 endif()
+
+# IV. Remove downloaded files. 
+file(REMOVE "./src/fastlisaresponse/cutils/Detector.cu")
+file(REMOVE "./src/fastlisaresponse/cutils/Detector.hpp")
+file(REMOVE "./src/fastlisaresponse/cutils/global.hpp")
+
 

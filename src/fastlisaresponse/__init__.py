@@ -46,18 +46,14 @@ Globals().backends_manager.add_backends(add_backends)
 
 from gpubackendtools import get_backend, has_backend, get_first_backend
 
+from .response import pyResponseTDI, ResponseWrapper
 
 __all__ = [
     "__version__",
     "__version_tuple__",
     "_is_editable",
-    # "amplitude",
-    # "cutils",
-    # "files",
-    # "summation",
-    # "trajectory",
-    # "utils",
-    # "waveform",
+    "pyResponseTDI",
+    "ResponseWrapper",
     "get_logger",
     "get_config",
     "get_config_setter",

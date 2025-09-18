@@ -10,7 +10,7 @@
 cmake_minimum_required(VERSION 3.23...3.31)
 
 # ---- Main project definition ----
-project(gbgpu VERSION ${SKBUILD_PROJECT_VERSION} LANGUAGES CXX)
+project(fastlisaresponse VERSION ${SKBUILD_PROJECT_VERSION} LANGUAGES CXX)
 
 # ---- Find required dependencies ----
 find_package(Python COMPONENTS Interpreter Development.Module NumPy REQUIRED)
@@ -55,17 +55,17 @@ set(
 )
 
 # ---- Phony target for project specific properties ----
-add_library(gbgpu INTERFACE)
+add_library(fastlisaresponse INTERFACE)
 
 # ---- Enable building the CPU version of backends by default ----
-set_target_properties(gbgpu PROPERTIES WITH_CPU ON)
+set_target_properties(fastlisaresponse PROPERTIES WITH_CPU ON)
 
 # ---- Test whether the FASTLISA_MARCH option is supported by CXX compiler ----
 include(CheckCXXCompilerFlag)
 set(FASTLISA_MARCH_CXX_OPT "-march=${FASTLISA_MARCH}")
 check_cxx_compiler_flag("${FASTLISA_MARCH_CXX_OPT}" CXX_COMPILER_SUPPORTS_FASTLISA_MARCH)
 if(CXX_COMPILER_SUPPORTS_FASTLISA_MARCH)
-  set_property(TARGET gbgpu PROPERTY CXX_MARCH
+  set_property(TARGET fastlisaresponse PROPERTY CXX_MARCH
     "${FASTLISA_MARCH_CXX_OPT}")
   message(STATUS "The CXX compiler supports option '${FASTLISA_MARCH_CXX_OPT}'.")
 else()
@@ -87,34 +87,34 @@ if(FASTLISA_WITH_GPU STREQUAL "AUTO")
       "Fast LISA Response GPU support was set to AUTO and will be turned ON as CUDA and \
 CUDA Toolkit are available with CUDA version \
 ${CUDAToolkit_VERSION_MAJOR}.")
-    set_target_properties(gbgpu PROPERTIES WITH_GPU ON)
+    set_target_properties(fastlisaresponse PROPERTIES WITH_GPU ON)
   else()
     message(
       STATUS
       "Fast LISA Response GPU support was set to AUTO and will be turned OFF as CUDA and \
 CUDA Toolkit are not found (CMAKE_CUDA_COMPILER:${CMAKE_CUDA_COMPILER} \
 CUDAToolkit_FOUND:${CUDAToolkit_FOUND}).")
-    set_target_properties(gbgpu PROPERTIES WITH_GPU OFF)
+    set_target_properties(fastlisaresponse PROPERTIES WITH_GPU OFF)
   endif()
 elseif(FASTLISA_WITH_GPU STREQUAL "ONLY")
   message(
     STATUS
       "Fast LISA Response GPU support is set to ON and CPU support is set to OFF (use only to \
       build a standalone plugin).")
-  set_target_properties(gbgpu PROPERTIES WITH_GPU ON)
-  set_target_properties(gbgpu PROPERTIES WITH_CPU OFF)
+  set_target_properties(fastlisaresponse PROPERTIES WITH_GPU ON)
+  set_target_properties(fastlisaresponse PROPERTIES WITH_CPU OFF)
 elseif(FASTLISA_WITH_GPU STREQUAL "BARE")
   message(STATUS "Fast LISA Response GPU and CPU support are disabled (use only to build a \
       non-functional pure-python release).")
-  set_target_properties(gbgpu PROPERTIES WITH_GPU OFF)
-  set_target_properties(gbgpu PROPERTIES WITH_CPU OFF)
+  set_target_properties(fastlisaresponse PROPERTIES WITH_GPU OFF)
+  set_target_properties(fastlisaresponse PROPERTIES WITH_CPU OFF)
 else()
   message(STATUS "Fast LISA Response GPU support is set to ${FASTLISA_WITH_GPU}.")
-  set_target_properties(gbgpu PROPERTIES WITH_GPU ${FASTLISA_WITH_GPU})
+  set_target_properties(fastlisaresponse PROPERTIES WITH_GPU ${FASTLISA_WITH_GPU})
 endif()
 
 # ---- Handle GPU support ----
-get_target_property(_FASTLISA_WITH_GPU gbgpu WITH_GPU)
+get_target_property(_FASTLISA_WITH_GPU fastlisaresponse WITH_GPU)
 if(_FASTLISA_WITH_GPU)
   enable_language(CUDA)
   find_package(CUDAToolkit REQUIRED)

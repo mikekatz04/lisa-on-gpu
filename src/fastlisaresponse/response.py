@@ -5,21 +5,6 @@ import warnings
 from typing import Tuple
 from copy import deepcopy
 
-
-try:
-    import cupy as cp
-    from .cutils.pyresponse_gpu import get_response_wrap as get_response_wrap_gpu
-    from .cutils.pyresponse_gpu import get_tdi_delays_wrap as get_tdi_delays_wrap_gpu
-
-    gpu = True
-
-except (ImportError, ModuleNotFoundError) as e:
-    pass
-
-    gpu = False
-
-from .cutils.pyresponse_cpu import get_response_wrap as get_response_wrap_cpu
-from .cutils.pyresponse_cpu import get_tdi_delays_wrap as get_tdi_delays_wrap_cpu
 import time
 import h5py
 
@@ -27,8 +12,11 @@ from scipy.interpolate import CubicSpline
 
 from lisatools.detector import EqualArmlengthOrbits, Orbits
 from lisatools.utils.utility import AET
-from lisatools.utils.pointeradjust import pointer_adjust
 
+from .utils.parallelbase import FastLISAResponseParallelModule
+
+
+# TODO: need to update constants setup
 YRSID_SI = 31558149.763545603
 
 
@@ -48,7 +36,7 @@ factorials = np.array([factorial(i) for i in range(30)])
 C_inv = 3.3356409519815204e-09
 
 
-class pyResponseTDI(object):
+class pyResponseTDI(FastLISAResponseParallelModule):
     """Class container for fast LISA response function generation.
 
     The class computes the generic time-domain response function for LISA.
@@ -86,7 +74,8 @@ class pyResponseTDI(object):
             Orbits class from LISA Analysis Tools. Works with LISA Orbits 
             outputs: `lisa-simulation.pages.in2p3.fr/orbits/ <https://lisa-simulation.pages.in2p3.fr/orbits/latest/>`_.
             (default: :class:`EqualArmlengthOrbits`)
-        use_gpu (bool, optional): If True, run code on the GPU. (default: :code:`False`)
+        force_backend (str, optional): If given, run this class on the requested backend. 
+            Options are ``"cpu"``, ``"cuda11x"``, ``"cuda12x"``. (default: ``None``)
 
     Attributes:
         A_in (xp.ndarray): Array containing y values for linear spline of A
@@ -117,7 +106,6 @@ class pyResponseTDI(object):
         tdi (str or list): TDI setup.
         tdi_buffer (int): The buffer necessary for all information needed at early times
             for the TDI computation. This is set to 200.
-        use_gpu (bool): If True, run on GPU.
         xp (obj): Either Numpy or Cupy.
 
     """
@@ -131,7 +119,7 @@ class pyResponseTDI(object):
         orbits: Optional[Orbits] = EqualArmlengthOrbits,
         tdi_orbits: Optional[Orbits] = None,
         tdi_chan="XYZ",
-        use_gpu=False,
+        force_backend=None,
     ):
 
         # setup all quantities
@@ -150,8 +138,7 @@ class pyResponseTDI(object):
         self.tdi = tdi
         self.tdi_chan = tdi_chan
 
-        # setup functions for GPU or CPU
-        self.use_gpu = use_gpu
+        super().__init__(force_backend=force_backend)
 
         # prepare the interpolation of A and E in the Lagrangian interpolation
         self._fill_A_E()
@@ -178,16 +165,16 @@ class pyResponseTDI(object):
     @property
     def response_gen(self) -> callable:
         """CPU/GPU function for generating the projections."""
-        return get_response_wrap_cpu if not self.use_gpu else get_response_wrap_gpu
+        return self.backend.get_response_wrap
 
     @property
     def tdi_gen(self) -> callable:
         """CPU/GPU function for generating tdi."""
-        return get_tdi_delays_wrap_cpu if not self.use_gpu else get_tdi_delays_wrap_gpu
+        return self.backend.get_tdi_delays_wrap
 
     @property
     def xp(self) -> object:
-        return np if not self.use_gpu else cp
+        return self.backend.xp
 
     @property
     def response_orbits(self) -> Orbits:
@@ -221,7 +208,7 @@ class pyResponseTDI(object):
             orbits = EqualArmlengthOrbits()
 
         assert isinstance(orbits, Orbits)
-        assert orbits.use_gpu == self.use_gpu
+        assert orbits.use_gpu == self.backend.uses_gpu
 
         self._tdi_orbits = deepcopy(orbits)
 
@@ -627,7 +614,7 @@ class pyResponseTDI(object):
             raise ValueError("tdi_chan must be 'XYZ', 'AET' or 'AE'.")
 
 
-class ResponseWrapper:
+class ResponseWrapper(FastLISAResponseParallelModule):
     """Wrapper to produce LISA TDI from TD waveforms
 
     This class takes a waveform generator that produces :math:`h_+ \pm ih_x`.
@@ -664,7 +651,8 @@ class ResponseWrapper:
             coordinate is the ecliptic latitude. If False, thes latitudinal sky
             coordinate is the polar angle. In this case, the code will
             convert it with :math:`\beta=\pi / 2 - \Theta`. (Default: :code:`True`)
-        use_gpu (bool, optional): If True, use GPU. (Default: :code:`False`)
+        force_backend (str, optional): If given, run this class on the requested backend. 
+            Options are ``"cpu"``, ``"cuda11x"``, ``"cuda12x"``. (default: ``None``)
         remove_garbage (bool or str, optional): If True, it removes everything before ``t0``
             and after the end time - ``t0``. If ``str``, it must be ``"zero"``. If ``"zero"``,
             it will not remove the points, but set them to zero. This is ideal for PE. (Default: ``True``)
@@ -690,7 +678,7 @@ class ResponseWrapper:
         flip_hx=False,
         remove_sky_coords=False,
         is_ecliptic_latitude=True,
-        use_gpu=False,
+        force_backend=None,
         remove_garbage=True,
         n_overide=None,
         orbits: Optional[Orbits] = EqualArmlengthOrbits,
@@ -704,6 +692,7 @@ class ResponseWrapper:
         self.dt = dt
         self.t0 = t0
         self.sampling_frequency = 1.0 / dt
+        super().__init__(force_backend=force_backend)
 
         if orbits is None:
             orbits = EqualArmlengthOrbits()
@@ -732,16 +721,14 @@ class ResponseWrapper:
 
         # initialize response function class
         self.response_model = pyResponseTDI(
-            self.sampling_frequency, self.n, orbits=orbits, use_gpu=use_gpu, **kwargs
+            self.sampling_frequency, self.n, orbits=orbits, force_backend=force_backend, **kwargs
         )
-
-        self.use_gpu = use_gpu
 
         self.Tobs = (self.n * self.response_model.dt) / YRSID_SI
 
     @property
     def xp(self) -> object:
-        return np if not self.use_gpu else cp
+        return self.backend.xp
 
     @property
     def citation(self):
