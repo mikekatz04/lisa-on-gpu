@@ -2,6 +2,7 @@
 requires = [
   "Cython",
   "numpy",
+  "astropy",  # TODO: remove astropy?
   "lisaanalysistools>=1.0.17",
   "scikit_build_core",
 ]

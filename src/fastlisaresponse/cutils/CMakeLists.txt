@@ -146,6 +146,7 @@ endif()
 
 # III. Declare the GPU backend
 if(FASTLISA_WITH_GPU)
+  set_target_properties(fastlisaresponse_gpu_responselisa PROPERTIES CUDA_ARCHITECTURES "60;70;75;80;86;90")
   python_add_library(fastlisaresponse_gpu_responselisa MODULE WITH_SOABI Detector.cu responselisa.cxx LISAResponse.cu)
   apply_gpu_backend_common_options(responselisa)
   target_sources(fastlisaresponse_gpu_responselisa PUBLIC FILE_SET HEADERS FILES
