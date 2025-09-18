@@ -56,7 +56,10 @@ function(apply_gpu_backend_common_options libname)
                                               CUDA::cusparse)
   set_property(TARGET ${target_name} PROPERTY CUDA_ARCHITECTURES
                                               ${FASTLISA_CUDA_ARCH})
+  set_property(TARGET ${target_name} PROPERTY CUDA_SEPARABLE_COMPILATION ON)
+  set_property(TARGET ${target_name} PROPERTY POSITION_INDEPENDENT_CODE ON)
   message(STATUS "This is the cuda archs to be run: ${FASTLISA_CUDA_ARCH}")
+  
 endfunction()
 
 function(apply_cpu_backend_common_options libname)
@@ -147,8 +150,12 @@ endif()
 
 # III. Declare the GPU backend
 if(FASTLISA_WITH_GPU)
-  python_add_library(fastlisaresponse_gpu_responselisa MODULE WITH_SOABI Detector.cu responselisa.cxx LISAResponse.cu)
+  add_library(device_function STATIC Detector.cu)
+  target_sources(device_function PUBLIC FILE_SET HEADERS FILES
+                                         global.hpp Detector.hpp cuda_complex.hpp)
+  python_add_library(fastlisaresponse_gpu_responselisa MODULE WITH_SOABI responselisa.cxx LISAResponse.cu)
   apply_gpu_backend_common_options(responselisa)
+  target_link_libraries(fastlisaresponse_gpu_responselisa PUBLIC device_function)
   target_sources(fastlisaresponse_gpu_responselisa PUBLIC FILE_SET HEADERS FILES
                                          global.hpp Detector.hpp cuda_complex.hpp LISAResponse.hh)
 endif()
