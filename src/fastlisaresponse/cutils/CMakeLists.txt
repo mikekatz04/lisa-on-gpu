@@ -153,11 +153,17 @@ if(FASTLISA_WITH_GPU)
   add_library(device_function STATIC Detector.cu)
   target_sources(device_function PUBLIC FILE_SET HEADERS FILES
                                          global.hpp Detector.hpp cuda_complex.hpp)
-  python_add_library(fastlisaresponse_gpu_responselisa MODULE WITH_SOABI responselisa.cxx LISAResponse.cu)
+  add_library(main_function STATIC LISAResponse.cu)
+  target_sources(main_function PUBLIC FILE_SET HEADERS FILES
+                                         global.hpp Detector.hpp cuda_complex.hpp LISAResponse.hh)
+  
+  python_add_library(fastlisaresponse_gpu_responselisa MODULE WITH_SOABI responselisa.cxx)
   apply_gpu_backend_common_options(responselisa)
-  target_link_libraries(fastlisaresponse_gpu_responselisa PUBLIC device_function)
   target_sources(fastlisaresponse_gpu_responselisa PUBLIC FILE_SET HEADERS FILES
                                          global.hpp Detector.hpp cuda_complex.hpp LISAResponse.hh)
+  target_link_libraries(fastlisaresponse_gpu_responselisa PUBLIC device_function main_function CUDA::cudart CUDA::cublas
+                                              CUDA::cusparse)
+  
 endif()
 
 # IV. Remove downloaded files. 
