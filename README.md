@@ -9,7 +9,7 @@ If you use all or any parts of this code, please cite [arXiv:2204.06633](https:/
 
 ## Getting Started
 
-Install with pip (CPU only for now):
+Install with pip:
 ```
 pip install fastlisaresponse
 ```
