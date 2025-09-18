@@ -56,6 +56,7 @@ function(apply_gpu_backend_common_options libname)
                                               CUDA::cusparse)
   set_property(TARGET ${target_name} PROPERTY CUDA_ARCHITECTURES
                                               ${FASTLISA_CUDA_ARCH})
+  message(STATUS "This is the cuda archs to be run: ${FASTLISA_CUDA_ARCH})
 endfunction()
 
 function(apply_cpu_backend_common_options libname)
