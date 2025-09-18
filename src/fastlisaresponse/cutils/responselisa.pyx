@@ -1,7 +1,7 @@
 import numpy as np
 cimport numpy as np
 
-from lisatools.utils.pointeradjust import pointer_adjust
+from gpubackendtools import wrapper
 
 assert sizeof(int) == sizeof(np.int32_t)
 
@@ -20,12 +20,14 @@ cdef extern from "LISAResponse.hh":
     void get_tdi_delays(double *delayed_links, double *input_links, int num_inputs, int num_delays, double *t_arr, int *unit_starts, int *unit_lengths, int *tdi_base_link, int *tdi_link_combinations, int *tdi_signs, int *channels, int num_units, int num_channels,
                     int order, double sampling_frequency, int buffer_integer, double *A_in, double deps, int num_A, double *E_in, int tdi_start_ind, Orbits *orbits);
 
-@pointer_adjust
-def get_response_wrap(y_gw, t_data, k_in, u_in, v_in, dt,
+
+def get_response_wrap(*args, **kwargs):
+
+    (y_gw, t_data, k_in, u_in, v_in, dt,
               num_delays,
               input_in, num_inputs, order, sampling_frequency, buffer_integer,
               A_in, deps, num_A, E_in, projections_start_ind,
-              orbits):
+              orbits), tkwargs = wrapper(*args, **kwargs)
 
     cdef size_t y_gw_in = y_gw
     cdef size_t t_data_in = t_data
@@ -46,9 +48,10 @@ def get_response_wrap(y_gw, t_data, k_in, u_in, v_in, dt,
                 <Orbits*> orbits_in)
 
 
-@pointer_adjust
-def get_tdi_delays_wrap(delayed_links, y_gw, num_inputs, num_delays, t_arr, unit_starts, unit_lengths, tdi_base_link, tdi_link_combinations, tdi_signs, channels, num_units, num_channels,
-               order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind, orbits):
+def get_tdi_delays_wrap(*args, **kwargs):
+
+    (delayed_links, y_gw, num_inputs, num_delays, t_arr, unit_starts, unit_lengths, tdi_base_link, tdi_link_combinations, tdi_signs, channels, num_units, num_channels,
+               order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind, orbits), tkwargs = wrapper(*args, **kwargs)
 
     cdef size_t delayed_links_in = delayed_links
     cdef size_t y_gw_in = y_gw

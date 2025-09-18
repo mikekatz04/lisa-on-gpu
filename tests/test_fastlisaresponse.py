@@ -25,15 +25,13 @@ except (ModuleNotFoundError, ImportError) as e:
 YRSID_SI = 31558149.763545603
 
 
-class GBWave:
-    def __init__(self, use_gpu=False):
-
-        self.use_gpu = use_gpu
+from fastlisaresponse.utils.parallelbase import FastLISAResponseParallelModule
+class GBWave(FastLISAResponseParallelModule):
 
     @property
     def xp(self) -> object:
         """Numpy or Cupy"""
-        return cp if self.use_gpu else np
+        return self.backend.xp
 
     def __call__(self, A, f, fdot, iota, phi0, psi, T=1.0, dt=10.0):
 
@@ -63,7 +61,8 @@ class GBWave:
 class ResponseTest(unittest.TestCase):
 
     def run_test(self, tdi_gen, use_gpu):
-        gb = GBWave(use_gpu=use_gpu)
+        force_backend = "cpu" if not use_gpu else "gpu"
+        gb = GBWave(force_backend=force_backend)
 
         T = 2.0  # years
         t0 = 10000.0  # time at which signal starts (chops off data at start of waveform where information is not correct)
@@ -98,7 +97,7 @@ class ResponseTest(unittest.TestCase):
             index_beta,
             t0=t0,
             flip_hx=False,  # set to True if waveform is h+ - ihx
-            use_gpu=use_gpu,
+            force_backend=force_backend,
             remove_sky_coords=True,  # True if the waveform generator does not take sky coordinates
             is_ecliptic_latitude=True,  # False if using polar angle (theta)
             remove_garbage=True,  # removes the beginning of the signal that has bad information
