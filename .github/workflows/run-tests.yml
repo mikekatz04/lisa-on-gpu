@@ -1,0 +1,50 @@
+name: Run unittests
+
+on:
+  push:
+    branches:
+      - master
+      - dev-installl
+  pull_request:
+    branches:
+      - master
+      - dev-installl
+
+  workflow_dispatch:
+
+jobs:
+  install_and_run_tests:
+    name: Install and run tests
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash -el {0}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["ubuntu-latest", ]
+        python-version: ["3.12", ]
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+      - name: Install python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '${{ matrix.python-version }}'
+      - name: Install package
+        run: |
+          which python
+          python --version
+          which cmake
+          cmake --version
+          python -m pip install -v .
+      - name: Run tests alone without coverage.
+        run: |
+          python -m unittest tests/test*
+      # - name: Install coverage
+      #   run: |
+      #     python -m pip install coverage[toml]
+      # - name: Run module tests & show coverage results
+      #   run: |
+      #     coverage run --source=fastlisaresponse -m unittest discover
+      #     coverage report -m
