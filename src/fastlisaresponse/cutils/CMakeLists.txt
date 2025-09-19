@@ -156,10 +156,13 @@ if(FASTLISA_WITH_GPU)
                                          Detector.cu LISAResponse.cu)
   target_link_libraries(fastlisaresponse_gpu_responselisa PUBLIC CUDA::cudart CUDA::cublas
                                               CUDA::cusparse)
-  set_target_properties(fastlisaresponse_gpu_responselisa PROPERTIES
-                      CUDA_ARCHITECTURES ${FASTLISA_CUDA_ARCH}
-                      CUDA_RESOLVE_DEVICE_SYMBOLS ON # <=================== Magic happens here <|
-                      POSITION_INDEPENDENT_CODE ON)
+  #set_target_properties(fastlisaresponse_gpu_responselisa PROPERTIES
+  #                    CUDA_ARCHITECTURES ${FASTLISA_CUDA_ARCH}
+  #                    CUDA_RESOLVE_DEVICE_SYMBOLS ON # <=================== Magic happens here <|
+  #                    POSITION_INDEPENDENT_CODE ON)
+  set_property(TARGET fastlisaresponse_gpu_responselisa PROPERTY CUDA_ARCHITECTURES ${FASTLISA_CUDA_ARCH})
+  set_property(TARGET fastlisaresponse_gpu_responselisa PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+  set_property(TARGET fastlisaresponse_gpu_responselisa PROPERTY POSITION_INDEPENDENT_CODE ON)
   
   install(TARGETS fastlisaresponse_gpu_responselisa
           LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/python${PYTHON_VERSION_MAJOR}.${PYTHON_VERSION_MINOR}/site-packages/fastlisa)
