@@ -66,6 +66,9 @@ jobs:
         run: |
           python -m pip install '.[doc, testing]' \
             --config-settings=cmake.define.FASTLISA_WITH_GPU=OFF
+      - name: Install astropy
+        run: |
+          python -m pip install astropy
       # - name: Restore the cache
       #   uses: actions/cache/restore@v4
       #   id: restore_cache

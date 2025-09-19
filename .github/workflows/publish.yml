@@ -218,7 +218,7 @@ jobs:
           CIBW_SKIP: pp* *musllinux*
           CIBW_CONFIG_SETTINGS: >
             cmake.define.FASTLISA_WITH_GPU=ONLY
-            cmake.define.FASTLISA_CUDA_ARCH=all
+            cmake.define.FASTLISA_CUDA_ARCH="60;70;75;80;86;90"
           CIBW_BEFORE_ALL: >
             yum install -y devtoolset-11-gcc-c++ &&
             yum-config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel7/x86_64/cuda-rhel7.repo &&

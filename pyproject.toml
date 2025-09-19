@@ -2,6 +2,7 @@
 requires = [
   "Cython",
   "numpy",
+  "astropy",  # TODO: remove astropy?
   "lisaanalysistools>=1.0.17",
   "scikit_build_core",
 ]
@@ -70,17 +71,19 @@ optional-dependencies.doc = [
   "sphinx",
   "sphinx-rtd-theme",
   "sphinx-tippy",
+  "astropy",
 ]
 
 optional-dependencies.sampling = [
   "eryn",
   "fastlisaresponse",
   "lisaanalysistools",
-  "lisatools",
+  "astropy",
 ]
 
 optional-dependencies.testing = [
   "matplotlib",
+  "astropy",
 ]
 
 [tool.setuptools_scm]
