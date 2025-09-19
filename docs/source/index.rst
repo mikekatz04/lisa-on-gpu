@@ -1,5 +1,5 @@
-
-.. include:: README.rst
+.. include:: readme.md
+   :parser: myst_parser.sphinx_
 
 .. toctree::
    :maxdepth: 4
