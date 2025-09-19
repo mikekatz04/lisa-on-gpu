@@ -151,9 +151,17 @@ endif()
 # III. Declare the GPU backend
 if(FASTLISA_WITH_GPU)
   add_library(device_function STATIC Detector.cu)
+  set_property(TARGET device_function PROPERTY CUDA_ARCHITECTURES
+                                              ${FASTLISA_CUDA_ARCH})
+  set_property(TARGET device_function PROPERTY CUDA_SEPARABLE_COMPILATION ON)
+  set_property(TARGET device_function PROPERTY POSITION_INDEPENDENT_CODE ON)
   target_sources(device_function PUBLIC FILE_SET HEADERS FILES
                                          global.hpp Detector.hpp cuda_complex.hpp)
   add_library(main_function STATIC LISAResponse.cu)
+  set_property(TARGET main_function PROPERTY CUDA_ARCHITECTURES
+                                              ${FASTLISA_CUDA_ARCH})
+  set_property(TARGET main_function PROPERTY CUDA_SEPARABLE_COMPILATION ON)
+  set_property(TARGET main_function PROPERTY POSITION_INDEPENDENT_CODE ON)
   target_sources(main_function PUBLIC FILE_SET HEADERS FILES
                                          global.hpp Detector.hpp cuda_complex.hpp LISAResponse.hh)
   
