@@ -222,6 +222,10 @@ class pyResponseTDI(FastLISAResponseParallelModule):
         return """
         # TODO add
         """
+    
+    @classmethod
+    def supported_backends(cls):
+        return ["fastlisaresponse_" + _tmp for _tmp in cls.GPU_RECOMMENDED()]
 
     def _fill_A_E(self):
         """Set up A and E terms inside the Lagrangian interpolant"""
