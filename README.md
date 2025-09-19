@@ -2,7 +2,7 @@
 
 This code base provides a GPU-accelerated version of the generic time-domain LISA response function. The GPU-acceleration allows this code to be used directly in Parameter Estimation.
 
-Please see the [documentation](https://mikekatz04.github.io/lisa-on-gpu/) for further information on these modules. The code can be found on Github [here](https://github.com/mikekatz04/lisa-on-gpu). It can be found on [Zenodo](https://zenodo.org/record/3981654#.XzS_KRNKjlw).
+Please see the [documentation](https://mikekatz04.github.io/lisa-on-gpu/) for further information on these modules. The code can be found on Github [here](https://github.com/mikekatz04/lisa-on-gpu). It can be found on [Zenodo](https://zenodo.org/records/17162632).
 
 If you use all or any parts of this code, please cite [arXiv:2204.06633](https://arxiv.org/abs/2204.06633). See the [documentation](https://mikekatz04.github.io/lisa-on-gpu/) to properly cite specific modules.
 

@@ -66,13 +66,13 @@ class pyResponseTDI(FastLISAResponseParallelModule):
             ``type`` is either ``"delay"`` or ``"advance"``. It is optional and defaults to ``"delay"``.
             (default: ``"1st generation"``)
         orbits (:class:`Orbits`, optional): Orbits class from LISA Analysis Tools. Works with LISA Orbits 
-            outputs: `lisa-simulation.pages.in2p3.fr/orbits/ <https://lisa-simulation.pages.in2p3.fr/orbits/latest/>`_.
+            outputs: ``lisa-simulation.pages.in2p3.fr/orbits/``.
             (default: :class:`EqualArmlengthOrbits`)
         tdi_chan (str, optional): Which TDI channel combination to return. Choices are :code:`'XYZ'`,
             :code:`AET`, or :code:`AE`. (default: :code:`'XYZ'`)
         tdi_orbits (:class:`Orbits`, optional): Set if different orbits from projection.
             Orbits class from LISA Analysis Tools. Works with LISA Orbits 
-            outputs: `lisa-simulation.pages.in2p3.fr/orbits/ <https://lisa-simulation.pages.in2p3.fr/orbits/latest/>`_.
+            outputs: ``lisa-simulation.pages.in2p3.fr/orbits/``.
             (default: :class:`EqualArmlengthOrbits`)
         force_backend (str, optional): If given, run this class on the requested backend. 
             Options are ``"cpu"``, ``"cuda11x"``, ``"cuda12x"``. (default: ``None``)
