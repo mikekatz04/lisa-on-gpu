@@ -71,17 +71,19 @@ optional-dependencies.doc = [
   "sphinx",
   "sphinx-rtd-theme",
   "sphinx-tippy",
+  "astropy",
 ]
 
 optional-dependencies.sampling = [
   "eryn",
   "fastlisaresponse",
   "lisaanalysistools",
-  "lisatools",
+  "astropy",
 ]
 
 optional-dependencies.testing = [
   "matplotlib",
+  "astropy",
 ]
 
 [tool.setuptools_scm]
