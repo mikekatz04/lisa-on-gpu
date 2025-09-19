@@ -156,11 +156,13 @@ if(FASTLISA_WITH_GPU)
   set_property(TARGET device_function PROPERTY POSITION_INDEPENDENT_CODE ON)
   target_sources(device_function PUBLIC FILE_SET HEADERS FILES
                                          global.hpp Detector.hpp cuda_complex.hpp)
-  add_library(main_function STATIC LISAResponse.cu)
+  add_library(main_function SHARED LISAResponse.cu)
   set_property(TARGET main_function PROPERTY CUDA_ARCHITECTURES
                                               ${FASTLISA_CUDA_ARCH})
+  message(STATUS "This is the cuda archs to be run: ${FASTLISA_CUDA_ARCH}")
   set_property(TARGET main_function PROPERTY CUDA_SEPARABLE_COMPILATION ON)
   set_property(TARGET main_function PROPERTY POSITION_INDEPENDENT_CODE ON)
+  target_link_libraries(main_function PUBLIC device_function)
   target_sources(main_function PUBLIC FILE_SET HEADERS FILES
                                          global.hpp Detector.hpp cuda_complex.hpp LISAResponse.hh)
   
