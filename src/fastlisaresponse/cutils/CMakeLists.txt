@@ -56,8 +56,6 @@ function(apply_gpu_backend_common_options libname)
                                               CUDA::cusparse)
   set_property(TARGET ${target_name} PROPERTY CUDA_ARCHITECTURES
                                               ${FASTLISA_CUDA_ARCH})
-  set_property(TARGET ${target_name} PROPERTY CUDA_SEPARABLE_COMPILATION ON)
-  set_property(TARGET ${target_name} PROPERTY POSITION_INDEPENDENT_CODE ON)
   message(STATUS "This is the cuda archs to be run: ${FASTLISA_CUDA_ARCH}")
 endfunction()
 
@@ -149,31 +147,22 @@ endif()
 
 # III. Declare the GPU backend
 if(FASTLISA_WITH_GPU)
-  add_library(device_function STATIC Detector.cu)
-  set_property(TARGET device_function PROPERTY CUDA_ARCHITECTURES
-                                              ${FASTLISA_CUDA_ARCH})
-  set_property(TARGET device_function PROPERTY CUDA_SEPARABLE_COMPILATION ON)
-  set_property(TARGET device_function PROPERTY POSITION_INDEPENDENT_CODE ON)
-  target_sources(device_function PUBLIC FILE_SET HEADERS FILES
-                                         global.hpp Detector.hpp cuda_complex.hpp)
-  message(STATUS " detector This is the cuda archs to be run: ${FASTLISA_CUDA_ARCH}")
-  
-  add_library(main_function STATIC LISAResponse.cu)
-  set_property(TARGET main_function PROPERTY CUDA_ARCHITECTURES
-                                              ${FASTLISA_CUDA_ARCH})
-  set_property(TARGET main_function PROPERTY CUDA_SEPARABLE_COMPILATION ON)
-  set_property(TARGET main_function PROPERTY POSITION_INDEPENDENT_CODE ON)
-  target_link_libraries(main_function PUBLIC device_function)
-  target_sources(main_function PUBLIC FILE_SET HEADERS FILES
-                                         global.hpp Detector.hpp cuda_complex.hpp LISAResponse.hh)
+  message(STATUS "This is the cuda archs to be run: ${FASTLISA_CUDA_ARCH}")
   
   python_add_library(fastlisaresponse_gpu_responselisa MODULE WITH_SOABI responselisa.cxx)
   apply_gpu_backend_common_options(responselisa)
   target_sources(fastlisaresponse_gpu_responselisa PUBLIC FILE_SET HEADERS FILES
-                                         global.hpp Detector.hpp cuda_complex.hpp LISAResponse.hh)
-  target_link_libraries(fastlisaresponse_gpu_responselisa PUBLIC device_function main_function CUDA::cudart CUDA::cublas
+                                         global.hpp Detector.hpp cuda_complex.hpp LISAResponse.hh
+                                         Detector.cu LISAResponse.cu)
+  target_link_libraries(fastlisaresponse_gpu_responselisa PUBLIC CUDA::cudart CUDA::cublas
                                               CUDA::cusparse)
+  set_target_properties(fastlisaresponse_gpu_responselisa PROPERTIES
+                      CUDA_ARCHITECTURES ${FASTLISA_CUDA_ARCH}
+                      CUDA_RESOLVE_DEVICE_SYMBOLS ON # <=================== Magic happens here <|
+                      POSITION_INDEPENDENT_CODE ON)
   
+  install(TARGETS fastlisaresponse_gpu_responselisa
+          LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/python${PYTHON_VERSION_MAJOR}.${PYTHON_VERSION_MINOR}/site-packages/fastlisa)
 endif()
 
 # IV. Remove downloaded files. 
