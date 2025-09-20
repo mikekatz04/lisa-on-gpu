@@ -741,6 +741,10 @@ class ResponseWrapper(FastLISAResponseParallelModule):
         return """
         # TODO add
         """
+    
+    @classmethod
+    def supported_backends(cls):
+        return ["fastlisaresponse_" + _tmp for _tmp in cls.GPU_RECOMMENDED()]
 
     def __call__(self, *args, **kwargs):
         """Run the waveform and response generation
