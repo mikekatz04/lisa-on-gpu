@@ -165,6 +165,7 @@ if(FASTLISA_WITH_GPU)
   set_property(TARGET fastlisaresponse_gpu_responselisa PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
   set_property(TARGET fastlisaresponse_gpu_responselisa PROPERTY POSITION_INDEPENDENT_CODE ON)
   message(STATUS "CHECK: ${CMAKE_INSTALL_LIBDIR}/python${PYTHON_VERSION_MAJOR}.${PYTHON_VERSION_MINOR}/site-packages/fastlisaresponse")
+
   install(TARGETS fastlisaresponse_gpu_responselisa
           LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/python${PYTHON_VERSION_MAJOR}.${PYTHON_VERSION_MINOR}/site-packages/fastlisaresponse)
 endif()
