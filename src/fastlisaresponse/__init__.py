@@ -44,9 +44,39 @@ add_backends = {
 Globals().backends_manager.add_backends(add_backends)
 
 
-from gpubackendtools import get_backend, has_backend, get_first_backend
+
+from gpubackendtools import get_backend as _get_backend
+from gpubackendtools import has_backend as _has_backend
+from gpubackendtools import get_first_backend as _get_first_backend
+from gpubackendtools.gpubackendtools import Backend
+
+
+def get_backend(backend: str) -> Backend:
+    __doc__ = _get_backend.__doc__
+    if "fastlisaresponse_" not in backend:
+        return _get_backend("fastlisaresponse_" + backend)
+    else:
+        return _get_backend(backend)
+
+
+def has_backend(backend: str) -> Backend:
+    __doc__ = _has_backend.__doc__
+    if "fastlisaresponse_" not in backend:
+        return _has_backend("fastlisaresponse_" + backend)
+    else:
+        return _has_backend(backend)
+
+        
+def get_first_backend(backend: str) -> Backend:
+    __doc__ = _get_first_backend.__doc__
+    if "fastlisaresponse_" not in backend:
+        return _get_first_backend("fastlisaresponse_" + backend)
+    else:
+        return _get_first_backend(backend)
+
 
 from .response import pyResponseTDI, ResponseWrapper
+
 
 __all__ = [
     "__version__",

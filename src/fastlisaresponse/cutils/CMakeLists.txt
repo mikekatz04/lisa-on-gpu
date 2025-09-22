@@ -149,11 +149,11 @@ endif()
 if(FASTLISA_WITH_GPU)
   message(STATUS "This is the cuda archs to be run: ${FASTLISA_CUDA_ARCH}")
   
-  python_add_library(fastlisaresponse_gpu_responselisa MODULE WITH_SOABI responselisa.cxx)
+  python_add_library(fastlisaresponse_gpu_responselisa MODULE WITH_SOABI responselisa.cxx Detector.cu LISAResponse.cu)
   apply_gpu_backend_common_options(responselisa)
   target_sources(fastlisaresponse_gpu_responselisa PUBLIC FILE_SET HEADERS FILES
                                          global.hpp Detector.hpp cuda_complex.hpp LISAResponse.hh
-                                         Detector.cu LISAResponse.cu)
+                                         )
   target_link_libraries(fastlisaresponse_gpu_responselisa PUBLIC CUDA::cudart CUDA::cublas
                                               CUDA::cusparse)
   #set_target_properties(fastlisaresponse_gpu_responselisa PROPERTIES
@@ -161,11 +161,12 @@ if(FASTLISA_WITH_GPU)
   #                    CUDA_RESOLVE_DEVICE_SYMBOLS ON # <=================== Magic happens here <|
   #                    POSITION_INDEPENDENT_CODE ON)
   set_property(TARGET fastlisaresponse_gpu_responselisa PROPERTY CUDA_ARCHITECTURES ${FASTLISA_CUDA_ARCH})
+  set_property(TARGET fastlisaresponse_gpu_responselisa PROPERTY CUDA_SEPARABLE_COMPILATION ON)
   set_property(TARGET fastlisaresponse_gpu_responselisa PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
   set_property(TARGET fastlisaresponse_gpu_responselisa PROPERTY POSITION_INDEPENDENT_CODE ON)
-  
+  message(STATUS "CHECK: ${CMAKE_INSTALL_LIBDIR}/python${PYTHON_VERSION_MAJOR}.${PYTHON_VERSION_MINOR}/site-packages/fastlisaresponse")
   install(TARGETS fastlisaresponse_gpu_responselisa
-          LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/python${PYTHON_VERSION_MAJOR}.${PYTHON_VERSION_MINOR}/site-packages/fastlisa)
+          LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/python${PYTHON_VERSION_MAJOR}.${PYTHON_VERSION_MINOR}/site-packages/fastlisaresponse)
 endif()
 
 # IV. Remove downloaded files. 
