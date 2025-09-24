@@ -208,7 +208,7 @@ class pyResponseTDI(FastLISAResponseParallelModule):
             orbits = EqualArmlengthOrbits()
 
         assert isinstance(orbits, Orbits)
-        assert orbits.use_gpu == self.backend.uses_gpu
+        assert orbits.backend.name.split("_")[-1] == self.backend.name.split("_")[-1]
 
         self._tdi_orbits = deepcopy(orbits)
 
