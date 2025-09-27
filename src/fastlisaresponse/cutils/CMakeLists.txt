@@ -93,21 +93,21 @@ endfunction()
 
 
 # 0. Download lisa analysis tools c files.
-file(
-  DOWNLOAD 
-  https://raw.githubusercontent.com/mikekatz04/LISAanalysistools/refs/heads/main/src/lisatools/cutils/Detector.cu 
-  "./src/fastlisaresponse/cutils/Detector.cu"
-)
-file(
-  DOWNLOAD 
-  https://raw.githubusercontent.com/mikekatz04/LISAanalysistools/refs/heads/main/src/lisatools/cutils/Detector.hpp 
-  "./src/fastlisaresponse/cutils/Detector.hpp"
-)
-file(
-  DOWNLOAD 
-  https://raw.githubusercontent.com/mikekatz04/LISAanalysistools/refs/heads/main/src/lisatools/cutils/global.hpp 
-  "./src/fastlisaresponse/cutils/global.hpp"
-)
+# file(
+#   DOWNLOAD 
+#   https://raw.githubusercontent.com/mikekatz04/LISAanalysistools/refs/heads/main/src/lisatools/cutils/Detector.cu 
+#   "./src/fastlisaresponse/cutils/Detector.cu"
+# )
+# file(
+#   DOWNLOAD 
+#   https://raw.githubusercontent.com/mikekatz04/LISAanalysistools/refs/heads/main/src/lisatools/cutils/Detector.hpp 
+#   "./src/fastlisaresponse/cutils/Detector.hpp"
+# )
+# file(
+#   DOWNLOAD 
+#   https://raw.githubusercontent.com/mikekatz04/LISAanalysistools/refs/heads/main/src/lisatools/cutils/global.hpp 
+#   "./src/fastlisaresponse/cutils/global.hpp"
+# )
 
 # I. Process fastlisaresponse_utils_wrap.pyx into a C++ file
 add_custom_command(
@@ -168,6 +168,39 @@ if(FASTLISA_WITH_GPU)
 
   install(TARGETS fastlisaresponse_gpu_responselisa
           LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/python${PYTHON_VERSION_MAJOR}.${PYTHON_VERSION_MINOR}/site-packages/fastlisaresponse)
+endif()
+
+#####################
+## tdi on the fly  ##
+#####################
+
+# I. Process fastlisaresponse_utils_wrap.pyx into a C++ file
+add_custom_command(
+  OUTPUT "lisatdionthefly.cxx"
+  COMMENT "Cythonize lisatdionthefly.pyx into lisatdionthefly.cxx"
+  COMMAND
+    Python::Interpreter -m cython "${CMAKE_CURRENT_SOURCE_DIR}/lisatdionthefly.pyx"
+    --output-file "${CMAKE_CURRENT_BINARY_DIR}/lisatdionthefly.cxx" -3 -+ --module-name
+    "tdionthefly" -I "${CMAKE_CURRENT_SOURCE_DIR}"
+  DEPENDS "lisatdionthefly.pyx"
+  VERBATIM)
+
+
+# II. Declare the CPU backend
+if(FASTLISA_WITH_CPU)
+  add_custom_command(
+    OUTPUT "TDIonTheFly.cxx"
+    COMMENT "Copy TDIonTheFly.cu to TDIonTheFly.cxx"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/TDIonTheFly.cu"
+            "${CMAKE_CURRENT_BINARY_DIR}/TDIonTheFly.cxx"
+    DEPENDS "TDIonTheFly.cu"
+    VERBATIM)
+
+  python_add_library(fastlisaresponse_cpu_tdionthefly MODULE WITH_SOABI Detector.cxx lisatdionthefly.cxx TDIonTheFly.cxx)
+  apply_cpu_backend_common_options(tdionthefly)
+
+  target_sources(fastlisaresponse_cpu_tdionthefly PUBLIC FILE_SET HEADERS FILES
+                                         global.hpp Detector.hpp cuda_complex.hpp LISAResponse.hh TDIonTheFly.hh)
 endif()
 
 # IV. Remove downloaded files. 
