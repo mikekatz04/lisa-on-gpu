@@ -26,9 +26,15 @@ YRSID_SI = 31558149.763545603
 
 
 from fastlisaresponse.utils.parallelbase import FastLISAResponseParallelModule
+from fastlisaresponse_backend_cpu import tdionthefly
+from scipy.interpolate import CubicSpline as CubicSpline_scipy
+
+CUBIC_SPLINE_LINEAR_SPACING = 1
+CUBIC_SPLINE_LOG10_SPACING = 2
+
 
 class TDIonTheFlyTest(unittest.TestCase):
-    def test_tdi(self):
+    def test_gb_tdi(self):
         force_backend = "cpu" if not gpu_available else "gpu"
         
         T = 2.0 * YRSID_SI # years
@@ -52,7 +58,7 @@ class TDIonTheFlyTest(unittest.TestCase):
         beta = 0.9805742971871619
         lam = 5.22979888
 
-        gb_tdi_on_fly = fastlisaresponse_backend_cpu.tdionthefly.pyGBTDIonTheFly(orbits.ptr, T)
+        gb_tdi_on_fly = tdionthefly.pyGBTDIonTheFly(orbits.ptr, T)
 
         N = 1024
 
@@ -90,6 +96,66 @@ class TDIonTheFlyTest(unittest.TestCase):
             params, t_arr,
             N
         )
+
+    def test_td_spline_tdi(self):
+
+        _Tobs = YRSID_SI
+        dt = 10000.0
+        N = int(_Tobs / dt)
+        t_arr = np.arange(N) * dt
         
-        # TODO: GET FREQUENCIES !!!!!
+        phi_of_t = 2 * np.pi * 1e-3 * t_arr
+
+        phase_scipy_spl = CubicSpline_scipy(t_arr, phi_of_t)
+
+        phase_c1 = phase_scipy_spl.c[2, :].copy()
+        phase_c2 = phase_scipy_spl.c[1, :].copy()
+        phase_c3 = phase_scipy_spl.c[0, :].copy()
+
+        from gpubackendtools import wrapper
+        (_t_arr, _phi_of_t, _phase_c1, _phase_c2, _phase_c3), twkargs = wrapper(t_arr, phi_of_t, phase_c1, phase_c2, phase_c3)
+        phase_spl = tdionthefly.pyCubicSplineWrap(_t_arr, _phi_of_t, _phase_c1, _phase_c2, _phase_c3, dt, N, CUBIC_SPLINE_LINEAR_SPACING)
+        
+        amp_of_t = np.ones_like(t_arr)
+        amp_scipy_spl = CubicSpline_scipy(t_arr, amp_of_t)
+
+        amp_c1 = amp_scipy_spl.c[2, :].copy()
+        amp_c2 = amp_scipy_spl.c[1, :].copy()
+        amp_c3 = amp_scipy_spl.c[0, :].copy()
+
+        (_t_arr, _amp_of_t, _amp_c1, _amp_c2, _amp_c3), twkargs = wrapper(t_arr, amp_of_t, amp_c1, amp_c2, amp_c3)
+        amp_spl = tdionthefly.pyCubicSplineWrap(_t_arr, _amp_of_t, _amp_c1, _amp_c2, _amp_c3, dt, N, CUBIC_SPLINE_LINEAR_SPACING)
+
+        orbits = EqualArmlengthOrbits()
+        orbits.configure(linear_interp_setup=True)
+        (_orbits, _amp_spl, _phase_spl), twkargs = wrapper(orbits, amp_spl, phase_spl)
+
+        td_spline_tdi = tdionthefly.pyTDSplineTDIWaveform(_orbits, _amp_spl, _phase_spl)
+        
+        inc = 0.2
+        psi = 0.8
+        lam = 4.0923421
+        beta = -0.234091341
+        params = np.array([inc, psi, lam, beta])
+
+        buffer = td_spline_tdi.get_buffer_size(N)
+        _size_of_double = 8
+        num_points = int(buffer / _size_of_double)
+
+        buffer = np.zeros(num_points)
+        Xamp = np.zeros(N)
+        Xphase = np.zeros(N)
+        Yamp = np.zeros(N)
+        Yphase = np.zeros(N)
+        Zamp = np.zeros(N)
+        Zphase = np.zeros(N)
+
+        td_spline_tdi.run_wave_tdi(
+            buffer, buffer.shape[0] * _size_of_double,
+            Xamp, Xphase,
+            Yamp, Yphase,
+            Zamp, Zphase,
+            params, t_arr,
+            N
+        )
         breakpoint()

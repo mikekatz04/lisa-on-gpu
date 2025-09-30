@@ -183,6 +183,7 @@ void LISATDIonTheFly::LISA_polarization_tensor(double costh, double phi, double 
 CUDA_CALLABLE_MEMBER
 void LISATDIonTheFly::get_tdi_n(double *X, double *Xf, double *Y, double *Yf, double *Z, double *Zf, double *params, double t, int m, int N, double costh, double phi, double cosi, double psi)
 {
+    printf("bef: inside: %d \n", m);
     /*   Indicies    */
     int i,j;
 
@@ -228,7 +229,7 @@ void LISATDIonTheFly::get_tdi_n(double *X, double *Xf, double *Y, double *Yf, do
     for(i=0; i<3; i++)
     {   
         link = orbits->get_link_from_arr(i);
-        printf("need TO CHECK THIS. Probably wrong link order?.");
+        // printf("need TO CHECK THIS. Probably wrong link order?.\n");
 
         n[i] = orbits->get_normal_unit_vec(t, link); 
         L[i] = orbits->get_light_travel_time(t, link);
@@ -290,19 +291,27 @@ void LISATDIonTheFly::get_tdi_n(double *X, double *Xf, double *Y, double *Yf, do
         Acp[i] = 0.5 * dcross[i] / (1.0 + kdotn[i]);
         Acm[i] = 0.5 * dcross[i] / (1.0 - kdotn[i]);
     }
-
+    printf("af2: inside: %d \n", m);
+    
     get_t_tdi(&t_tdi[0], &kdotr[0], &L[0], t, 0, 1, 2, m);
     get_amp_and_phase(&t_tdi[0], &amp_tdi[0], &phase_tdi[0], &params[0], 8);
+    printf("af33: inside: %d \n", m);
     get_tdi_sub(X, Xf, m, N, 0, 1, 2, &t_tdi[0], &amp_tdi[0], &phase_tdi[0], Aplus, Across, cos2psi, sin2psi, &App[0], &Apm[0], &Acp[0], &Acm[0], &kdotr[0], &L[0]);
 
+    printf("af44: inside: %d \n", m);
+    
     get_t_tdi(&t_tdi[0], &kdotr[0], &L[0], t, 1, 2, 0, m);
     get_amp_and_phase(&t_tdi[0], &amp_tdi[0], &phase_tdi[0], &params[0], 8);
     get_tdi_sub(Y, Yf, m, N, 1, 2, 0, &t_tdi[0], &amp_tdi[0], &phase_tdi[0], Aplus, Across, cos2psi, sin2psi, &App[0], &Apm[0], &Acp[0], &Acm[0], &kdotr[0], &L[0]);
 
+    printf("af4: inside: %d \n", m);
+    
     get_t_tdi(&t_tdi[0], &kdotr[0], &L[0], t, 2, 0, 1, m);
     get_amp_and_phase(&t_tdi[0], &amp_tdi[0], &phase_tdi[0], &params[0], 8);
     get_tdi_sub(Z, Zf, m, N, 2, 0, 1, &t_tdi[0], &amp_tdi[0], &phase_tdi[0], Aplus, Across, cos2psi, sin2psi, &App[0], &Apm[0], &Acp[0], &Acm[0], &kdotr[0], &L[0]);
 
+    printf("af: inside: %d \n", m);
+    
 }
 
 
@@ -550,3 +559,125 @@ void GBTDIonTheFly::dealloc()
 {
     return;
 }
+
+#define CUBIC_SPLINE_LINEAR_SPACING 1
+#define CUBIC_SPLINE_LOG10_SPACING 2
+
+CUDA_CALLABLE_MEMBER
+int CubicSpline::get_window(double x_new)
+{
+    int window = 0;
+    if (spline_type == CUBIC_SPLINE_LINEAR_SPACING)
+    {
+        window = int(x_new / dx);
+    }
+    else if (spline_type == CUBIC_SPLINE_LOG10_SPACING)
+    {
+        window = int(log10(x_new) / dx);
+    }
+    else
+    {
+#ifdef __CUDACC__
+        printf("BAD cubic spline type.");
+#else
+        throw std::invalid_argument("BAD cubic spline type.");
+#endif // __CUDACC__
+    }
+
+    if ((window < 0) || (window >= N))
+    {
+#ifdef __CUDACC__
+        printf("Outside spline. Using edge value.");
+        if (window < 0) window = 0;
+        if (window >= N) window = N - 1;
+#else
+        throw std::invalid_argument("Outside spline.");
+#endif // __CUDACC__
+    }
+}
+
+CUDA_CALLABLE_MEMBER
+CubicSplineSegment CubicSpline::get_cublic_spline_segment(double x_new)
+{
+    int window = get_window(x_new); 
+    CubicSplineSegment segment(x0[window], y0[window], c1[window], c2[window], c3[window], spline_type);
+    return segment;
+}
+
+
+CUDA_CALLABLE_MEMBER
+double CubicSpline::eval_single(double x_new)
+{
+    CubicSplineSegment segment = get_cublic_spline_segment(x_new);
+    return segment.eval(x_new);
+}
+
+
+CUDA_CALLABLE_MEMBER
+void CubicSpline::eval(double *y_new, double *x_new, int N)
+{
+
+    for (int i = 0; i < N; i += 1)
+    {
+        y_new[i] = eval_single(x_new[i]);
+    }
+}
+
+
+CUDA_CALLABLE_MEMBER
+TDSplineTDIWaveform::TDSplineTDIWaveform(Orbits *orbits_, CubicSpline *amp_spline_, CubicSpline *phase_spline_): LISATDIonTheFly(orbits_)
+{
+    phase_spline = phase_spline_;
+    amp_spline = amp_spline_;
+}
+
+CUDA_CALLABLE_MEMBER
+void TDSplineTDIWaveform::get_amp_and_phase(double *t, double *amp, double *phase, double *params, int N)
+{
+    for (int i = 0; i < N; i += 1)
+    {
+        printf("bef: t, amp, phase: %d %e, %e, %e\n", i, t[i], amp[i], phase[i]);
+        amp[i] = amp_spline->eval_single(t[i]);
+        phase[i] = phase_spline->eval_single(t[i]);
+        printf("af: t, amp, phase: %d %e, %e, %e\n", i, t[i], amp[i], phase[i]);
+    }
+}
+
+
+CUDA_CALLABLE_MEMBER
+void TDSplineTDIWaveform::run_wave_tdi(void *buffer, int buffer_size, double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double *params, double *t_arr, int N)
+{
+    // printf("CHECK\n");
+    double beta = params[3];
+    double costh = cos(M_PI / 2.0 - beta);
+    
+    double lam = params[2];
+    double phi = lam;
+
+    double inc = params[0];
+    double cosi = cos(inc);
+
+    double psi = params[1];
+    // printf("CHECK1\n");
+    
+     if (buffer_size < get_td_spline_buffer_size(N)) printf("Bad buffer!!!!!");
+
+    // TODO: CHECK THIS!!
+    double *phi_ref = (double *)buffer;
+    get_phase_ref(t_arr, phi_ref, params, N);
+ 
+    void *next_buffer = (void *)&phi_ref[N];
+    int next_buffer_size = 8 * N * sizeof(double);
+    get_tdi_amp_phase(next_buffer, next_buffer_size, Xamp, Xphase, Yamp, Yphase, Zamp, Zphase, params, t_arr, N, costh, phi, cosi, psi, phi_ref);
+}
+
+CUDA_CALLABLE_MEMBER
+void TDSplineTDIWaveform::get_phase_ref(double *t, double *phase, double *params, int N)
+{
+    for (int i = 0; i < N; i += 1)
+    {
+        phase[i] = phase_spline->eval_single(t[i]);
+    }
+}
+
+
