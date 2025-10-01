@@ -178,4 +178,26 @@ class TDSplineTDIWaveform : public LISATDIonTheFly{
     void dealloc(){};
 };
 
+
+class FDSplineTDIWaveform : public LISATDIonTheFly{
+    public:
+        CubicSpline *amp_spline;
+        CubicSpline *freq_spline;
+
+    CUDA_CALLABLE_MEMBER
+    FDSplineTDIWaveform(Orbits *orbits_, CubicSpline *amp_spline_, CubicSpline *freq_spline_);
+    CUDA_CALLABLE_MEMBER
+    ~FDSplineTDIWaveform(){};
+    CUDA_CALLABLE_MEMBER
+    void get_amp_and_phase(double *t, double *amp, double *phase, double *params, int N);
+    CUDA_CALLABLE_MEMBER
+    void run_wave_tdi(void *buffer, int buffer_size, double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double *params, double *t_arr, int N);
+    CUDA_CALLABLE_MEMBER
+    int get_td_spline_buffer_size(int N){return N * sizeof(double) + get_tdi_buffer_size(N);};
+    CUDA_CALLABLE_MEMBER
+    void get_phase_ref(double *t, double *phase, double *params, int N);
+    CUDA_CALLABLE_MEMBER
+    void dealloc(){};
+};
+
 #endif // __TDI_ON_THE_FLY_HH__

@@ -96,7 +96,6 @@ class TDIonTheFlyTest(unittest.TestCase):
             params, t_arr,
             N
         )
-        breakpoint()
 
     def test_td_spline_tdi(self):
 
@@ -106,16 +105,41 @@ class TDIonTheFlyTest(unittest.TestCase):
         t_arr = np.arange(N) * dt
         
         phi_of_t = 2 * np.pi * 1e-3 * t_arr
-
+        amp_of_t = np.ones_like(t_arr)
+        
         phase_scipy_spl = CubicSpline_scipy(t_arr, phi_of_t)
+        amp_scipy_spl = CubicSpline_scipy(t_arr, amp_of_t)
 
-        phase_c1 = phase_scipy_spl.c[2, :].copy()
-        phase_c2 = phase_scipy_spl.c[1, :].copy()
-        phase_c3 = phase_scipy_spl.c[0, :].copy()
+        from fastlisaresponse.tdionfly import TDTDIonTheFly
+
+        sampling_frequency = 0.1
+        td_spline_tdi = TDTDIonTheFly(t_arr, amp_scipy_spl, phase_scipy_spl, sampling_frequency)
+        
+        inc = 0.2
+        psi = 0.8
+        lam = 4.0923421
+        beta = -0.234091341
+
+        output_info_td = td_spline_tdi(inc, psi, lam, beta)  
+            
+    def test_fd_spline_tdi(self):
+
+        _Tobs = YRSID_SI
+        dt = 10000.0
+        N = int(_Tobs / dt)
+        t_arr = np.arange(N) * dt
+        
+        f_of_t = 1e-3 + 1e-12 * t_arr
+
+        freq_scipy_spl = CubicSpline_scipy(t_arr, f_of_t)
+
+        freq_c1 = freq_scipy_spl.c[2, :].copy()
+        freq_c2 = freq_scipy_spl.c[1, :].copy()
+        freq_c3 = freq_scipy_spl.c[0, :].copy()
 
         from gpubackendtools import wrapper
-        (_t_arr, _phi_of_t, _phase_c1, _phase_c2, _phase_c3), twkargs = wrapper(t_arr, phi_of_t, phase_c1, phase_c2, phase_c3)
-        phase_spl = tdionthefly.pyCubicSplineWrap(_t_arr, _phi_of_t, _phase_c1, _phase_c2, _phase_c3, dt, N, CUBIC_SPLINE_LINEAR_SPACING)
+        (_t_arr, _phi_of_t, _freq_c1, _freq_c2, _freq_c3), twkargs = wrapper(t_arr, f_of_t, freq_c1, freq_c2, freq_c3)
+        freq_spl = tdionthefly.pyCubicSplineWrap(_t_arr, _phi_of_t, _freq_c1, _freq_c2, _freq_c3, dt, N, CUBIC_SPLINE_LINEAR_SPACING)
         
         amp_of_t = np.ones_like(t_arr)
         amp_scipy_spl = CubicSpline_scipy(t_arr, amp_of_t)
@@ -129,9 +153,9 @@ class TDIonTheFlyTest(unittest.TestCase):
 
         orbits = EqualArmlengthOrbits()
         orbits.configure(linear_interp_setup=True)
-        (_orbits, _amp_spl, _phase_spl), twkargs = wrapper(orbits, amp_spl, phase_spl)
+        (_orbits, _amp_spl, _freq_spl), twkargs = wrapper(orbits, amp_spl, freq_spl)
 
-        td_spline_tdi = tdionthefly.pyTDSplineTDIWaveform(_orbits, _amp_spl, _phase_spl)
+        fd_spline_tdi = tdionthefly.pyFDSplineTDIWaveform(_orbits, _amp_spl, _freq_spl)
         
         inc = 0.2
         psi = 0.8
@@ -139,7 +163,7 @@ class TDIonTheFlyTest(unittest.TestCase):
         beta = -0.234091341
         params = np.array([inc, psi, lam, beta])
 
-        buffer = td_spline_tdi.get_buffer_size(N)
+        buffer = fd_spline_tdi.get_buffer_size(N)
         _size_of_double = 8
         num_points = int(buffer / _size_of_double)
 
@@ -151,7 +175,7 @@ class TDIonTheFlyTest(unittest.TestCase):
         Zamp = np.zeros(N)
         Zphase = np.zeros(N)
 
-        td_spline_tdi.run_wave_tdi(
+        fd_spline_tdi.run_wave_tdi(
             buffer, buffer.shape[0] * _size_of_double,
             Xamp, Xphase,
             Yamp, Yphase,
@@ -159,4 +183,4 @@ class TDIonTheFlyTest(unittest.TestCase):
             params, t_arr,
             N
         )
-        breakpoint()
+

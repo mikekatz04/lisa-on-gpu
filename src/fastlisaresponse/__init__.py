@@ -29,7 +29,6 @@ except (ModuleNotFoundError, ImportError):
     _is_editable = False
 
 from . import cutils, utils
-from .cutils import KNOWN_BACKENDS
 
 from gpubackendtools import Globals
 from .cutils import FastLISAResponseCpuBackend, FastLISAResponseCuda11xBackend, FastLISAResponseCuda12xBackend

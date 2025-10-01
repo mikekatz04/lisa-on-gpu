@@ -681,3 +681,67 @@ void TDSplineTDIWaveform::get_phase_ref(double *t, double *phase, double *params
 }
 
 
+
+CUDA_CALLABLE_MEMBER
+FDSplineTDIWaveform::FDSplineTDIWaveform(Orbits *orbits_, CubicSpline *amp_spline_, CubicSpline *freq_spline_): LISATDIonTheFly(orbits_)
+{
+    freq_spline = freq_spline_;
+    amp_spline = amp_spline_;
+}
+
+CUDA_CALLABLE_MEMBER
+void FDSplineTDIWaveform::get_amp_and_phase(double *t, double *amp, double *phase, double *params, int N)
+{
+    double f = 0.0;
+    double t_i = 0.0;
+    for (int i = 0; i < N; i += 1)
+    {
+        t_i = t[i];
+        f = freq_spline->eval_single(t_i);
+        printf("bef: t, amp, phase: %d %e, %e, %e\n", i, t_i, amp[i], phase[i]);
+        amp[i] = amp_spline->eval_single(t_i);
+        phase[i] = 2. * M_PI * f * t_i;
+        printf("af: t, amp, phase: %d %e, %e, %e\n", i, t_i, amp[i], phase[i]);
+    }
+}
+
+
+CUDA_CALLABLE_MEMBER
+void FDSplineTDIWaveform::run_wave_tdi(void *buffer, int buffer_size, double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double *params, double *t_arr, int N)
+{
+    // printf("CHECK\n");
+    double beta = params[3];
+    double costh = cos(M_PI / 2.0 - beta);
+    
+    double lam = params[2];
+    double phi = lam;
+
+    double inc = params[0];
+    double cosi = cos(inc);
+
+    double psi = params[1];
+    // printf("CHECK1\n");
+    
+     if (buffer_size < get_td_spline_buffer_size(N)) printf("Bad buffer!!!!!");
+
+    // TODO: CHECK THIS!!
+    double *phi_ref = (double *)buffer;
+    get_phase_ref(t_arr, phi_ref, params, N);
+ 
+    void *next_buffer = (void *)&phi_ref[N];
+    int next_buffer_size = 8 * N * sizeof(double);
+    get_tdi_amp_phase(next_buffer, next_buffer_size, Xamp, Xphase, Yamp, Yphase, Zamp, Zphase, params, t_arr, N, costh, phi, cosi, psi, phi_ref);
+}
+
+CUDA_CALLABLE_MEMBER
+void FDSplineTDIWaveform::get_phase_ref(double *t, double *phase, double *params, int N)
+{
+    double f = 0.0;
+    double t_i = 0.0;
+    for (int i = 0; i < N; i += 1)
+    {
+        t_i = t[i];
+        f = freq_spline->eval_single(t_i);
+        phase[i] = 2. * M_PI * f * t_i;
+    }
+}
