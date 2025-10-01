@@ -120,6 +120,7 @@ class TDIonTheFlyTest(unittest.TestCase):
         lam = 4.0923421
         beta = -0.234091341
 
+        # TODO: inclination appearing here? what about for emris (or precession)
         output_info_td = td_spline_tdi(inc, psi, lam, beta)  
             
     def test_fd_spline_tdi(self):
