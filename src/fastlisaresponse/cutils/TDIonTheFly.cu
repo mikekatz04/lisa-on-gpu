@@ -62,9 +62,9 @@ void LISATDIonTheFly::get_tdi_sub(double *M, double *Mf, int n, int N, int a, in
     // }
 
     // first index
-    t = tarray[n];
-    amp = amp_tdi_vals[n];
-    phase = phase_tdi_vals[n];
+    t = tarray[0];
+    amp = amp_tdi_vals[0];
+    phase = phase_tdi_vals[0];
     
     //  if(freq_spline) phase = 2 * M_PI*f*t; /* mbh */
     hplus_and_hcross(t, phase, amp, Aplus, Across, cos2psi, sin2psi, &hp, &hc, &hpf, &hcf);
@@ -73,9 +73,9 @@ void LISATDIonTheFly::get_tdi_sub(double *M, double *Mf, int n, int N, int a, in
     Mf[n] += hpf*Apm[b]+hcf*Acm[b];
     Mf[n] -= hpf*App[c]+hcf*Acp[c];
     
-    t = tarray[n];
-    amp = amp_tdi_vals[n];
-    phase = phase_tdi_vals[n];
+    t = tarray[1];
+    amp = amp_tdi_vals[1];
+    phase = phase_tdi_vals[1];
     // if(freq_spline) phase = 2 * M_PI*f*t; /* mbh */
     hplus_and_hcross(t, phase, amp, Aplus, Across, cos2psi, sin2psi, &hp, &hc, &hpf, &hcf);
     M[n] -= hp*Apm[c]+hc*Acm[c];
@@ -83,9 +83,9 @@ void LISATDIonTheFly::get_tdi_sub(double *M, double *Mf, int n, int N, int a, in
     Mf[n] -= hpf*Apm[c]+hcf*Acm[c];
     Mf[n] += hpf*App[c]+hcf*Acp[c];
     
-    t = tarray[n];
-    amp = amp_tdi_vals[n];
-    phase = phase_tdi_vals[n];
+    t = tarray[2];
+    amp = amp_tdi_vals[2];
+    phase = phase_tdi_vals[2];
     // if(freq_spline) phase = 2 * M_PI*f*t; /* mbh */
     hplus_and_hcross(t, phase, amp, Aplus, Across, cos2psi, sin2psi, &hp, &hc, &hpf, &hcf);
     M[n] += hp*App[b]+hc*Acp[b];
@@ -93,9 +93,9 @@ void LISATDIonTheFly::get_tdi_sub(double *M, double *Mf, int n, int N, int a, in
     Mf[n] += hpf*App[b]+hcf*Acp[b];
     Mf[n] -= hpf*Apm[b]+hcf*Acm[b];
     
-    t = tarray[n];
-    amp = amp_tdi_vals[n];
-    phase = phase_tdi_vals[n];
+    t = tarray[3];
+    amp = amp_tdi_vals[3];
+    phase = phase_tdi_vals[3];
     // if(freq_spline) phase = 2 * M_PI*f*t; /* mbh */
     hplus_and_hcross(t, phase, amp, Aplus, Across, cos2psi, sin2psi, &hp, &hc, &hpf, &hcf);
     M[n] -= hp*Apm[b]+hc*Acm[b];
@@ -103,9 +103,9 @@ void LISATDIonTheFly::get_tdi_sub(double *M, double *Mf, int n, int N, int a, in
     Mf[n] -= hpf*Apm[b]+hcf*Acm[b];
     Mf[n] += hpf*Apm[c]+hcf*Acm[c];
     
-    t = tarray[n];
-    amp = amp_tdi_vals[n];
-    phase = phase_tdi_vals[n];
+    t = tarray[4];
+    amp = amp_tdi_vals[4];
+    phase = phase_tdi_vals[4];
     // if(freq_spline) phase = 2 * M_PI*f*t; /* mbh */
     hplus_and_hcross(t, phase, amp, Aplus, Across, cos2psi, sin2psi, &hp, &hc, &hpf, &hcf);
     M[n] += hp*App[c]+hc*Acp[c];
@@ -113,9 +113,9 @@ void LISATDIonTheFly::get_tdi_sub(double *M, double *Mf, int n, int N, int a, in
     Mf[n] += hpf*App[c]+hcf*Acp[c];
     Mf[n] -= hpf*App[b]+hcf*Acp[b];
     
-    t = tarray[n];
-    amp = amp_tdi_vals[n];
-    phase = phase_tdi_vals[n];
+    t = tarray[5];
+    amp = amp_tdi_vals[5];
+    phase = phase_tdi_vals[5];
     // if(freq_spline) phase = 2 * M_PI*f*t; /* mbh */
     hplus_and_hcross(t, phase, amp, Aplus, Across, cos2psi, sin2psi, &hp, &hc, &hpf, &hcf);
     M[n] -= hp*App[b]+hc*Acp[b];
@@ -123,9 +123,9 @@ void LISATDIonTheFly::get_tdi_sub(double *M, double *Mf, int n, int N, int a, in
     Mf[n] -= hpf*App[b]+hcf*Acp[b];
     Mf[n] += hpf*Apm[b]+hcf*Acm[b];
     
-    t = tarray[n];
-    amp = amp_tdi_vals[n];
-    phase = phase_tdi_vals[n];
+    t = tarray[6];
+    amp = amp_tdi_vals[6];
+    phase = phase_tdi_vals[6];
     // if(freq_spline) phase = 2 * M_PI*f*t; /* mbh */
     hplus_and_hcross(t, phase, amp, Aplus, Across, cos2psi, sin2psi, &hp, &hc, &hpf, &hcf);
     M[n] += hp*Apm[c]+hc*Acm[c];
@@ -133,9 +133,9 @@ void LISATDIonTheFly::get_tdi_sub(double *M, double *Mf, int n, int N, int a, in
     Mf[n] += hpf*Apm[c]+hcf*Acm[c];
     Mf[n] -= hpf*App[c]+hcf*Acp[c];
     
-    t = tarray[n];
-    amp = amp_tdi_vals[n];
-    phase = phase_tdi_vals[n];
+    t = tarray[7];
+    amp = amp_tdi_vals[7];
+    phase = phase_tdi_vals[7];
     // if(freq_spline) phase = 2 * M_PI*f*t; /* mbh */
     hplus_and_hcross(t, phase, amp, Aplus, Across, cos2psi, sin2psi, &hp, &hc, &hpf, &hcf);
     M[n] -= hp*Apm[c]+hc*Acm[c];

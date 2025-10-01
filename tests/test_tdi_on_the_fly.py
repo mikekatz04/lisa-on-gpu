@@ -96,6 +96,7 @@ class TDIonTheFlyTest(unittest.TestCase):
             params, t_arr,
             N
         )
+        breakpoint()
 
     def test_td_spline_tdi(self):
 
