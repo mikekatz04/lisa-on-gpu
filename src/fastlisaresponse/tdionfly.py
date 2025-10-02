@@ -330,12 +330,17 @@ class TDTDIonTheFly(TDIonTheFly):
         
         if isinstance(amp, np.ndarray):
             assert isinstance(phase, np.ndarray) and isinstance(t, np.ndarray)
+            self.spline_length = len(phase)
 
         elif isinstance(amp, cp.ndarray):
             assert isinstance(phase, cp.ndarray) and isinstance(t, cp.ndarray)
+            self.spline_length = len(phase)
 
         elif isinstance(amp, CubicSpline_scipy):
             assert isinstance(phase, CubicSpline_scipy)
+
+            self.spline_length = phase.c.shape[-1] + 1
+
             phase_y = phase.c[3, :].copy()
             phase_c1 = phase.c[2, :].copy()
             phase_c2 = phase.c[1, :].copy()
@@ -349,11 +354,12 @@ class TDTDIonTheFly(TDIonTheFly):
             # convert to pointers
             targs, twkargs = wrapper(t, phase_y, phase_c1, phase_c2, phase_c3, amp_y, amp_c1, amp_c2, amp_c3)
             (_t, _phase_y, _phase_c1, _phase_c2, _phase_c3, _amp_y, _amp_c1, _amp_c2, _amp_c3) = targs
-            phase = self.backend.pyCubicSplineWrap(_t, _phase_y, _phase_c1, _phase_c2, _phase_c3, self.dt, self.N, CUBIC_SPLINE_LINEAR_SPACING)
-            amp = self.backend.pyCubicSplineWrap(_t, _amp_y, _amp_c1, _amp_c2, _amp_c3, self.dt, self.N, CUBIC_SPLINE_LINEAR_SPACING)
+            phase = self.backend.pyCubicSplineWrap(_t, _phase_y, _phase_c1, _phase_c2, _phase_c3, self.dt, self.spline_length, CUBIC_SPLINE_LINEAR_SPACING)
+            amp = self.backend.pyCubicSplineWrap(_t, _amp_y, _amp_c1, _amp_c2, _amp_c3, self.dt, self.spline_length, CUBIC_SPLINE_LINEAR_SPACING)
 
         elif isinstance(amp, CubicSpline):
             assert isinstance(phase, CubicSpline)
+            raise NotImplementedError
 
         else:
             raise ValueError("# TODO: fix this.")
@@ -462,12 +468,15 @@ class FDTDIonTheFly(TDIonTheFly):
         # TODO: spacing?
         if isinstance(amp, np.ndarray):
             assert isinstance(freq, np.ndarray) and isinstance(t, np.ndarray)
+            self.spline_length = len(freq)
 
         elif isinstance(amp, cp.ndarray):
             assert isinstance(freq, cp.ndarray) and isinstance(t, cp.ndarray)
+            self.spline_length = len(freq)
 
         elif isinstance(amp, CubicSpline_scipy):
             assert isinstance(freq, CubicSpline_scipy)
+            self.spline_length = freq.c.shape[-1] + 1
             freq_y = freq.c[3, :].copy()
             freq_c1 = freq.c[2, :].copy()
             freq_c2 = freq.c[1, :].copy()
@@ -481,12 +490,13 @@ class FDTDIonTheFly(TDIonTheFly):
             # convert to pointers
             targs, twkargs = wrapper(t, freq_y, freq_c1, freq_c2, freq_c3, amp_y, amp_c1, amp_c2, amp_c3)
             (_t, _freq_y, _freq_c1, _freq_c2, _freq_c3, _amp_y, _amp_c1, _amp_c2, _amp_c3) = targs
-            freq = self.backend.pyCubicSplineWrap(_t, _freq_y, _freq_c1, _freq_c2, _freq_c3, self.dt, self.N, self.spline_type)
-            amp = self.backend.pyCubicSplineWrap(_t, _amp_y, _amp_c1, _amp_c2, _amp_c3, self.dt, self.N, self.spline_type)
+            freq = self.backend.pyCubicSplineWrap(_t, _freq_y, _freq_c1, _freq_c2, _freq_c3, self.dt, self.spline_length, self.spline_type)
+            amp = self.backend.pyCubicSplineWrap(_t, _amp_y, _amp_c1, _amp_c2, _amp_c3, self.dt, self.spline_length, self.spline_type)
 
         elif isinstance(amp, CubicSpline):
             assert isinstance(freq, CubicSpline)
-
+            self.spline_length = freq.length
+            
         else:
             raise ValueError("# TODO: fix this.")
         

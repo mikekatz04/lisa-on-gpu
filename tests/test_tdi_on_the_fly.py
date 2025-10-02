@@ -60,10 +60,10 @@ class TDIonTheFlyTest(unittest.TestCase):
 
         gb_tdi_on_fly = tdionthefly.pyGBTDIonTheFly(orbits.ptr, T)
 
-        N = 1024
-
         t_arr = np.linspace(0.0, T, 1024, endpoint=False)
+        t_tdi_in = t_arr[1:-1]
 
+        N = len(t_tdi_in)
         buffer = gb_tdi_on_fly.get_buffer_size(N)
         _size_of_double = 8
         num_points = int(buffer / _size_of_double)
@@ -88,7 +88,7 @@ class TDIonTheFlyTest(unittest.TestCase):
         params[7] = lam
         params[8] = beta
 
-        t_tdi_in = t_arr[1:-1]
+        
         gb_tdi_on_fly.run_wave_tdi(
             buffer, buffer.shape[0] * _size_of_double,
             Xamp, Xphase,
@@ -104,6 +104,8 @@ class TDIonTheFlyTest(unittest.TestCase):
         dt = 10000.0
         N = int(_Tobs / dt)
         t_arr = np.arange(N) * dt
+        t_tdi_in = t_arr[1:-1]
+        N = len(t_tdi_in)
         
         phi_of_t = 2 * np.pi * 1e-3 * t_arr
         amp_of_t = np.ones_like(t_arr)
@@ -114,7 +116,7 @@ class TDIonTheFlyTest(unittest.TestCase):
         from fastlisaresponse.tdionfly import TDTDIonTheFly
 
         sampling_frequency = 0.1
-        td_spline_tdi = TDTDIonTheFly(t_arr, amp_scipy_spl, phase_scipy_spl, sampling_frequency)
+        td_spline_tdi = TDTDIonTheFly(t_tdi_in, amp_scipy_spl, phase_scipy_spl, sampling_frequency)
         
         inc = 0.2
         psi = 0.8
@@ -130,7 +132,8 @@ class TDIonTheFlyTest(unittest.TestCase):
         dt = 10000.0
         N = int(_Tobs / dt)
         t_arr = np.arange(N) * dt
-        
+        t_tdi_in = t_arr[1:-1]
+        N = len(t_tdi_in)
         f_of_t = 1e-3 + 1e-12 * t_arr
         amp_of_t = np.ones_like(t_arr)
         
@@ -141,7 +144,7 @@ class TDIonTheFlyTest(unittest.TestCase):
         from fastlisaresponse.tdionfly import FDTDIonTheFly
 
         sampling_frequency = 0.1
-        fd_spline_tdi = FDTDIonTheFly(t_arr, amp_scipy_spl, freq_scipy_spl, sampling_frequency)
+        fd_spline_tdi = FDTDIonTheFly(t_tdi_in, amp_scipy_spl, freq_scipy_spl, sampling_frequency)
         
         inc = 0.2
         psi = 0.8
