@@ -17,7 +17,8 @@ from scipy.interpolate import CubicSpline as CubicSpline_scipy
 
 from lisatools.detector import EqualArmlengthOrbits, Orbits
 from lisatools.utils.utility import AET
-
+from gpubackendtools import wrapper
+            
 from .utils.parallelbase import FastLISAResponseParallelModule
 
 
@@ -264,6 +265,17 @@ class TDIonTheFly(FastLISAResponseParallelModule):
 
         return int(out)
     
+    @property
+    def t_tdi_eval(self) -> np.ndarray:
+        """Get tdi values to avoid edge issues.
+        
+        # TODO: make this better and check this.
+
+        # This should be avoidable in FD?
+        
+        """
+        return self.t_arr[1:-1]
+    
     def __call__(self, inc, psi, lam, beta, return_spline: bool =False):
         
         params = np.array([inc, psi, lam, beta])
@@ -279,23 +291,22 @@ class TDIonTheFly(FastLISAResponseParallelModule):
         Yphase = np.zeros(self.N)
         Zamp = np.zeros(self.N)
         Zphase = np.zeros(self.N)
-
+        
         self.wave_gen.run_wave_tdi(
             buffer, buffer.shape[0] * _size_of_double,
             Xamp, Xphase,
             Yamp, Yphase,
             Zamp, Zphase,
-            params, self.t_arr,
+            params, self.t_tdi_eval,
             self.N
         )
 
-        if return_spline:
-            raise NotImplementedError
-        return (self.t_arr, Xamp, Xphase, Yamp, Yphase, Zamp, Zphase)
+        return TDTDIOutput(self.t_arr, Xamp, Xphase, Yamp, Yphase, Zamp, Zphase, fill_splines=return_spline)
 
 
 CUBIC_SPLINE_LINEAR_SPACING = 1
 CUBIC_SPLINE_LOG10_SPACING = 2
+CUBIC_SPLINE_GENERAL_SPACING = 3
 
 class TDTDIonTheFly(TDIonTheFly):
     def __init__(self, 
@@ -336,9 +347,7 @@ class TDTDIonTheFly(TDIonTheFly):
             amp_c3 = amp.c[0, :].copy()
 
             # convert to pointers
-            from gpubackendtools import wrapper
-            args = (t, phase_y, phase_c1, phase_c2, phase_c3, amp_y, amp_c1, amp_c2, amp_c3)
-            targs, twkargs = wrapper(*args)
+            targs, twkargs = wrapper(t, phase_y, phase_c1, phase_c2, phase_c3, amp_y, amp_c1, amp_c2, amp_c3)
             (_t, _phase_y, _phase_c1, _phase_c2, _phase_c3, _amp_y, _amp_c1, _amp_c2, _amp_c3) = targs
             phase = self.backend.pyCubicSplineWrap(_t, _phase_y, _phase_c1, _phase_c2, _phase_c3, self.dt, self.N, CUBIC_SPLINE_LINEAR_SPACING)
             amp = self.backend.pyCubicSplineWrap(_t, _amp_y, _amp_c1, _amp_c2, _amp_c3, self.dt, self.N, CUBIC_SPLINE_LINEAR_SPACING)
@@ -355,26 +364,102 @@ class TDTDIonTheFly(TDIonTheFly):
         self.wave_gen = self.backend.pyTDSplineTDIWaveform(self.orbits.ptr, self.amp.ptr, self.phase.ptr)
 
 
+class TDTDIOutput(FastLISAResponseParallelModule):
+    def __init__(self, t, Xamp, Xphase, Yamp, Yphase, Zamp, Zphase, fill_splines=True, **kwargs):
+        self.Xamp, self.Xphase, self.Yamp, self.Yphase, self.Zamp, self.Zphase = Xamp, Xphase, Yamp, Yphase, Zamp, Zphase
+        self.t = t
+        super().__init__(**kwargs)
+        self.fill_splines = fill_splines
+        if fill_splines:
+            self._splines = {}
+            for name in ["Xamp", "Xphase", "Yamp", "Yphase", "Zamp", "Zphase"]:
+                self._splines[name] = self.build_spline(self.t, getattr(self, name))
+            
+    def _get_spl(self, key: str) -> CubicSpline:
+        assert self.fill_splines
+        return self._splines[key]
+    
+    @property
+    def Xamp_spl(self) -> CubicSpline:
+        return self._get_spl("Xamp")
+    @property
+    def Xphase_spl(self) -> CubicSpline:
+        return self._get_spl("Xphase")
+    
+    @property
+    def Yamp_spl(self) -> CubicSpline:
+        return self._get_spl("Yamp")
+    @property
+    def Yphase_spl(self) -> CubicSpline:
+        return self._get_spl("Yphase")
+    
+    @property
+    def Zamp_spl(self) -> CubicSpline:
+        return self._get_spl("Zamp")
+    @property
+    def Zphase_spl(self) -> CubicSpline:
+        return self._get_spl("Zphase")
+    
+    def build_spline(self, x, y) -> CubicSpline:
+        _spl_scipy = CubicSpline_scipy(x, y)
+        c1 = _spl_scipy.c[2, :]
+        c2 = _spl_scipy.c[1, :]
+        c3 = _spl_scipy.c[0, :]
+        targs, twkargs = wrapper(x, y, c1, c2, c3)
+        (_x, _y, _c1, _c2, _c3) = targs
+
+        dx_all = np.diff(x)
+        # TODO: fix this input setup
+        dx = dx_all[0]
+        _spl = self.backend.pyCubicSplineWrap(_x, _y, _c1, _c2, _c3, dx, y.shape[0], CUBIC_SPLINE_LINEAR_SPACING)
+        return _spl
+    
+    @classmethod
+    def supported_backends(cls) -> list:
+        return ["fastlisaresponse_" + _tmp for _tmp in cls.GPU_RECOMMENDED()]
+
+    @property
+    def Aamp(self):
+        raise NotImplementedError
+    @property
+    def Aphase(self):
+        raise NotImplementedError
+    @property
+    def Eamp(self):
+        raise NotImplementedError
+    @property
+    def Ephase(self):
+        raise NotImplementedError
+    @property
+    def Tamp(self):
+        raise NotImplementedError
+    @property
+    def Tphase(self):
+        raise NotImplementedError
+
+
+# TODO: make it log spaced in frequency?
+
 class FDTDIonTheFly(TDIonTheFly):
     def __init__(self, 
         t: np.ndarray,
         amp: np.ndarray | CubicSpline_scipy | CubicSpline,
         freq: np.ndarray | CubicSpline_scipy | CubicSpline,
-        *args, **kwargs
+        *args, 
+        spline_type: int = CUBIC_SPLINE_GENERAL_SPACING,
+        **kwargs
     ): 
         super().__init__(*args, **kwargs)
 
         self.t_arr = t
         self.freq_input = freq
         self.amp_input = amp
+        self.spline_type = spline_type
 
         self.dt = t[1] - t[0]
         self.N = t.shape[0]
 
         # TODO: spacing?
-        if not np.allclose(np.diff(t), np.full_like(t[:-1], self.dt)):
-            raise NotImplementedError("Currently t needs to be evenly spaced.")
-        
         if isinstance(amp, np.ndarray):
             assert isinstance(freq, np.ndarray) and isinstance(t, np.ndarray)
 
@@ -394,12 +479,10 @@ class FDTDIonTheFly(TDIonTheFly):
             amp_c3 = freq.c[0, :].copy()
 
             # convert to pointers
-            from gpubackendtools import wrapper
-            args = (t, freq_y, freq_c1, freq_c2, freq_c3, amp_y, amp_c1, amp_c2, amp_c3)
-            targs, twkargs = wrapper(*args)
+            targs, twkargs = wrapper(t, freq_y, freq_c1, freq_c2, freq_c3, amp_y, amp_c1, amp_c2, amp_c3)
             (_t, _freq_y, _freq_c1, _freq_c2, _freq_c3, _amp_y, _amp_c1, _amp_c2, _amp_c3) = targs
-            freq = self.backend.pyCubicSplineWrap(_t, _freq_y, _freq_c1, _freq_c2, _freq_c3, self.dt, self.N, CUBIC_SPLINE_LINEAR_SPACING)
-            amp = self.backend.pyCubicSplineWrap(_t, _amp_y, _amp_c1, _amp_c2, _amp_c3, self.dt, self.N, CUBIC_SPLINE_LINEAR_SPACING)
+            freq = self.backend.pyCubicSplineWrap(_t, _freq_y, _freq_c1, _freq_c2, _freq_c3, self.dt, self.N, self.spline_type)
+            amp = self.backend.pyCubicSplineWrap(_t, _amp_y, _amp_c1, _amp_c2, _amp_c3, self.dt, self.N, self.spline_type)
 
         elif isinstance(amp, CubicSpline):
             assert isinstance(freq, CubicSpline)
@@ -411,3 +494,13 @@ class FDTDIonTheFly(TDIonTheFly):
         self.freq = freq
 
         self.wave_gen = self.backend.pyFDSplineTDIWaveform(self.orbits.ptr, self.amp.ptr, self.freq.ptr)
+
+    @property
+    def spline_type(self) -> int:
+        return self._spline_type
+    
+    @spline_type.setter
+    def spline_type(self, spline_type: int):
+        assert isinstance(spline_type, int)
+        assert spline_type in [CUBIC_SPLINE_LINEAR_SPACING, CUBIC_SPLINE_LOG10_SPACING, CUBIC_SPLINE_GENERAL_SPACING]
+        self._spline_type = spline_type

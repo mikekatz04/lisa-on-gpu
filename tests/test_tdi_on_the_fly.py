@@ -88,12 +88,13 @@ class TDIonTheFlyTest(unittest.TestCase):
         params[7] = lam
         params[8] = beta
 
+        t_tdi_in = t_arr[1:-1]
         gb_tdi_on_fly.run_wave_tdi(
             buffer, buffer.shape[0] * _size_of_double,
             Xamp, Xphase,
             Yamp, Yphase,
             Zamp, Zphase,
-            params, t_arr,
+            params, t_tdi_in,
             N
         )
 
@@ -121,7 +122,7 @@ class TDIonTheFlyTest(unittest.TestCase):
         beta = -0.234091341
 
         # TODO: inclination appearing here? what about for emris (or precession)
-        output_info_td = td_spline_tdi(inc, psi, lam, beta)  
+        output_info_td = td_spline_tdi(inc, psi, lam, beta, return_spline=True)  
             
     def test_fd_spline_tdi(self):
 
@@ -147,4 +148,4 @@ class TDIonTheFlyTest(unittest.TestCase):
         lam = 4.0923421
         beta = -0.234091341
 
-        output_info_fd = fd_spline_tdi(inc, psi, lam, beta) 
+        output_info_fd = fd_spline_tdi(inc, psi, lam, beta, return_spline=True) 

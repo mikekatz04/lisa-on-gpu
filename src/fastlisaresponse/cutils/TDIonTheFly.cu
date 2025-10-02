@@ -1,7 +1,7 @@
 #include "TDIonTheFly.hh"
 #include "Detector.hpp"
 #include "LISAResponse.hh"
-
+#include <string>
 
 // TODO: GET RID OF THIS ??!!!
 double C_SI = 299792458.;
@@ -183,7 +183,7 @@ void LISATDIonTheFly::LISA_polarization_tensor(double costh, double phi, double 
 CUDA_CALLABLE_MEMBER
 void LISATDIonTheFly::get_tdi_n(double *X, double *Xf, double *Y, double *Yf, double *Z, double *Zf, double *params, double t, int m, int N, double costh, double phi, double cosi, double psi)
 {
-    printf("bef: inside: %d \n", m);
+    // printf("bef: inside: %d \n", m);
     /*   Indicies    */
     int i,j;
 
@@ -291,26 +291,26 @@ void LISATDIonTheFly::get_tdi_n(double *X, double *Xf, double *Y, double *Yf, do
         Acp[i] = 0.5 * dcross[i] / (1.0 + kdotn[i]);
         Acm[i] = 0.5 * dcross[i] / (1.0 - kdotn[i]);
     }
-    printf("af2: inside: %d \n", m);
+    // printf("af2: inside: %d \n", m);
     
     get_t_tdi(&t_tdi[0], &kdotr[0], &L[0], t, 0, 1, 2, m);
     get_amp_and_phase(&t_tdi[0], &amp_tdi[0], &phase_tdi[0], &params[0], 8);
-    printf("af33: inside: %d \n", m);
+    // printf("af33: inside: %d \n", m);
     get_tdi_sub(X, Xf, m, N, 0, 1, 2, &t_tdi[0], &amp_tdi[0], &phase_tdi[0], Aplus, Across, cos2psi, sin2psi, &App[0], &Apm[0], &Acp[0], &Acm[0], &kdotr[0], &L[0]);
 
-    printf("af44: inside: %d \n", m);
+    // printf("af44: inside: %d \n", m);
     
     get_t_tdi(&t_tdi[0], &kdotr[0], &L[0], t, 1, 2, 0, m);
     get_amp_and_phase(&t_tdi[0], &amp_tdi[0], &phase_tdi[0], &params[0], 8);
     get_tdi_sub(Y, Yf, m, N, 1, 2, 0, &t_tdi[0], &amp_tdi[0], &phase_tdi[0], Aplus, Across, cos2psi, sin2psi, &App[0], &Apm[0], &Acp[0], &Acm[0], &kdotr[0], &L[0]);
 
-    printf("af4: inside: %d \n", m);
+    // printf("af4: inside: %d \n", m);
     
     get_t_tdi(&t_tdi[0], &kdotr[0], &L[0], t, 2, 0, 1, m);
     get_amp_and_phase(&t_tdi[0], &amp_tdi[0], &phase_tdi[0], &params[0], 8);
     get_tdi_sub(Z, Zf, m, N, 2, 0, 1, &t_tdi[0], &amp_tdi[0], &phase_tdi[0], Aplus, Across, cos2psi, sin2psi, &App[0], &Apm[0], &Acp[0], &Acm[0], &kdotr[0], &L[0]);
 
-    printf("af: inside: %d \n", m);
+    // printf("af: inside: %d \n", m);
     
 }
 
@@ -562,11 +562,13 @@ void GBTDIonTheFly::dealloc()
 
 #define CUBIC_SPLINE_LINEAR_SPACING 1
 #define CUBIC_SPLINE_LOG10_SPACING 2
+#define CUBIC_SPLINE_GENERAL_SPACING 3 
 
 CUDA_CALLABLE_MEMBER
 int CubicSpline::get_window(double x_new)
 {
     int window = 0;
+    // TODO: switch statement
     if (spline_type == CUBIC_SPLINE_LINEAR_SPACING)
     {
         window = int(x_new / dx);
@@ -574,6 +576,10 @@ int CubicSpline::get_window(double x_new)
     else if (spline_type == CUBIC_SPLINE_LOG10_SPACING)
     {
         window = int(log10(x_new) / dx);
+    }
+    else if (spline_type == CUBIC_SPLINE_GENERAL_SPACING)
+    {
+        window = binary_search(x0, 0, N, x_new);
     }
     else
     {
@@ -591,7 +597,8 @@ int CubicSpline::get_window(double x_new)
         if (window < 0) window = 0;
         if (window >= N) window = N - 1;
 #else
-        throw std::invalid_argument("Outside spline.");
+        std::string error_str = "Outside spline." + std::to_string(window) + " " + std::to_string(N) + " " + std::to_string(x_new) + " " + std::to_string(x0[N-1]); 
+        throw std::invalid_argument(error_str);
 #endif // __CUDACC__
     }
 }
@@ -622,6 +629,50 @@ void CubicSpline::eval(double *y_new, double *x_new, int N)
         y_new[i] = eval_single(x_new[i]);
     }
 }
+
+CUDA_CALLABLE_MEMBER
+int CubicSpline::even_sampled_search(double *array, int nmin, int nmax, double x) {
+    // TODO: adjust this. At specialized gpu array searching. 
+    double dx = array[1] - array[0];
+    return (int)floor(x/dx);
+}
+
+// Recursive binary search function.
+// Return nearest smaller neighbor of x in array[nmin,nmax] is present,
+// otherwise -1
+CUDA_CALLABLE_MEMBER
+int CubicSpline::binary_search(double *array, int nmin, int nmax, double x)
+{
+    // catch if x exactly matches array[nmin]
+    if(x==array[nmin]) return nmin;
+    
+    int next;
+    if(nmax>nmin)
+    {
+        int mid = nmin + (nmax - nmin) / 2;
+        
+        //find next unique element of array
+        next = mid;
+        while(array[mid]==array[next]) next++;
+        
+        // If the element is present at the middle
+        // itself
+        if (x > array[mid] && x < array[next])
+            return mid;
+        
+        // the element is in the lower half
+        if (array[mid] >= x)
+            return binary_search(array, nmin, mid, x);
+        
+        // the element is in upper half
+        return binary_search(array, next, nmax, x);
+    }
+    
+    // We reach here when element is not
+    // present in array
+    return -1;
+}
+
 
 
 CUDA_CALLABLE_MEMBER
@@ -699,7 +750,7 @@ void FDSplineTDIWaveform::get_amp_and_phase(double *t, double *amp, double *phas
         t_i = t[i];
         f = freq_spline->eval_single(t_i);
         printf("bef: t, amp, phase: %d %e, %e, %e\n", i, t_i, amp[i], phase[i]);
-        amp[i] = amp_spline->eval_single(t_i);
+        amp[i] = 1.0;  // for frequency, we just use 1. amp_spline->eval_single(t_i);
         phase[i] = 2. * M_PI * f * t_i;
         printf("af: t, amp, phase: %d %e, %e, %e\n", i, t_i, amp[i], phase[i]);
     }

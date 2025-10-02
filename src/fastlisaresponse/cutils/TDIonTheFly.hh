@@ -155,6 +155,10 @@ public:
     void eval(double *y_new, double *x_new, int N);
     CUDA_CALLABLE_MEMBER
     void dealloc(){};
+    CUDA_CALLABLE_MEMBER
+    int binary_search(double *array, int nmin, int nmax, double x);
+    CUDA_CALLABLE_MEMBER
+    int even_sampled_search(double *array, int nmin, int nmax, double x);
 };
 
 class TDSplineTDIWaveform : public LISATDIonTheFly{
