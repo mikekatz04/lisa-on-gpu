@@ -14,6 +14,7 @@ except (ImportError, ModuleNotFoundError) as e:
     import numpy as cp
 
 from scipy.interpolate import CubicSpline as CubicSpline_scipy
+from gpubackendtools.interpolate import CubicSplineInterpolant
 
 from lisatools.detector import EqualArmlengthOrbits, Orbits
 from lisatools.utils.utility import AET
@@ -76,6 +77,8 @@ class TDIonTheFly(FastLISAResponseParallelModule):
     def __init__(
         self,
         sampling_frequency,
+        num_sub,
+        n_params,
         tdi="1st generation",
         orbits: Optional[Orbits] = EqualArmlengthOrbits,
         tdi_chan="XYZ",
@@ -85,11 +88,12 @@ class TDIonTheFly(FastLISAResponseParallelModule):
         # setup all quantities
         self.sampling_frequency = sampling_frequency
         self.dt = 1 / sampling_frequency
-        
+        self.n_params = n_params
+        self.num_sub = num_sub
+
         # setup TDI information
         self.tdi = tdi
         self.tdi_chan = tdi_chan
-
         super().__init__(force_backend=force_backend)
 
         # setup orbits
@@ -265,40 +269,32 @@ class TDIonTheFly(FastLISAResponseParallelModule):
 
         return int(out)
     
-    @property
-    def t_tdi_eval(self) -> np.ndarray:
-        """Get tdi values to avoid edge issues.
-        
-        # TODO: make this better and check this.
-
-        # This should be avoidable in FD?
-        
-        """
-        return self.t_arr[1:-1]
-    
     def __call__(self, inc, psi, lam, beta, return_spline: bool =False):
         
-        params = np.array([inc, psi, lam, beta])
+
+        params = np.array([inc, psi, lam, beta]).T.flatten().copy()
+        
+        assert len(params) == 4 * self.num_sub
 
         buffer = self.wave_gen.get_buffer_size(self.N)
         _size_of_double = 8
         num_points = int(buffer / _size_of_double)
 
         buffer = np.zeros(num_points)
-        Xamp = np.zeros(self.N)
-        Xphase = np.zeros(self.N)
-        Yamp = np.zeros(self.N)
-        Yphase = np.zeros(self.N)
-        Zamp = np.zeros(self.N)
-        Zphase = np.zeros(self.N)
+        Xamp = np.zeros((self.N * self.num_sub))
+        Xphase = np.zeros((self.N * self.num_sub))
+        Yamp = np.zeros((self.N * self.num_sub))
+        Yphase = np.zeros((self.N * self.num_sub))
+        Zamp = np.zeros((self.N * self.num_sub))
+        Zphase = np.zeros((self.N * self.num_sub))
         
         self.wave_gen.run_wave_tdi(
             buffer, buffer.shape[0] * _size_of_double,
             Xamp, Xphase,
             Yamp, Yphase,
             Zamp, Zphase,
-            params, self.t_tdi_eval,
-            self.N
+            params, self.t_arr.flatten().copy(),
+            self.N, self.num_sub, self.n_params
         )
 
         return TDTDIOutput(self.t_arr, Xamp, Xphase, Yamp, Yphase, Zamp, Zphase, fill_splines=return_spline)
@@ -313,27 +309,28 @@ class TDTDIonTheFly(TDIonTheFly):
         t: np.ndarray,
         amp: np.ndarray | CubicSpline_scipy | CubicSpline,
         phase: np.ndarray | CubicSpline_scipy | CubicSpline,
-        *args, **kwargs
+        *args, 
+        t_input: Optional[np.ndarray] = None, 
+        **kwargs
     ): 
         super().__init__(*args, **kwargs)
 
-        self.t_arr = t
+        self.t_arr = self.xp.atleast_2d(self.xp.asarray(t))
         self.phase_input = phase
         self.amp_input = amp
 
-        self.dt = t[1] - t[0]
-        self.N = t.shape[0]
+        self.dt = self.t_arr[1] - self.t_arr[0]
+        self.N = self.t_arr.shape[1]
 
-        # TODO: spacing?
-        if not np.allclose(np.diff(t), np.full_like(t[:-1], self.dt)):
-            raise NotImplementedError("Currently t needs to be evenly spaced.")
-        
         if isinstance(amp, np.ndarray):
             assert isinstance(phase, np.ndarray) and isinstance(t, np.ndarray)
+            assert t_input is not None and isinstance(t_input, np.ndarray)
             self.spline_length = len(phase)
+
 
         elif isinstance(amp, cp.ndarray):
             assert isinstance(phase, cp.ndarray) and isinstance(t, cp.ndarray)
+            assert t_input is not None and isinstance(t_input, cp.ndarray)
             self.spline_length = len(phase)
 
         elif isinstance(amp, CubicSpline_scipy):
@@ -354,8 +351,8 @@ class TDTDIonTheFly(TDIonTheFly):
             # convert to pointers
             targs, twkargs = wrapper(t, phase_y, phase_c1, phase_c2, phase_c3, amp_y, amp_c1, amp_c2, amp_c3)
             (_t, _phase_y, _phase_c1, _phase_c2, _phase_c3, _amp_y, _amp_c1, _amp_c2, _amp_c3) = targs
-            phase = self.backend.pyCubicSplineWrap(_t, _phase_y, _phase_c1, _phase_c2, _phase_c3, self.dt, self.spline_length, CUBIC_SPLINE_LINEAR_SPACING)
-            amp = self.backend.pyCubicSplineWrap(_t, _amp_y, _amp_c1, _amp_c2, _amp_c3, self.dt, self.spline_length, CUBIC_SPLINE_LINEAR_SPACING)
+            phase = self.backend.pyCubicSplineWrap(_t, _phase_y, _phase_c1, _phase_c2, _phase_c3, self.num_sub, self.n_params, self.spline_length, CUBIC_SPLINE_LINEAR_SPACING)
+            amp = self.backend.pyCubicSplineWrap(_t, _amp_y, _amp_c1, _amp_c2, _amp_c3, self.num_sub, self.n_params, self.spline_length, CUBIC_SPLINE_LINEAR_SPACING)
 
         elif isinstance(amp, CubicSpline):
             assert isinstance(phase, CubicSpline)
@@ -449,30 +446,36 @@ class TDTDIOutput(FastLISAResponseParallelModule):
 class FDTDIonTheFly(TDIonTheFly):
     def __init__(self, 
         t: np.ndarray,
-        amp: np.ndarray | CubicSpline_scipy | CubicSpline,
-        freq: np.ndarray | CubicSpline_scipy | CubicSpline,
+        amp: np.ndarray | CubicSpline_scipy | CubicSplineInterpolant,
+        freq: np.ndarray | CubicSpline_scipy | CubicSplineInterpolant,
         *args, 
         spline_type: int = CUBIC_SPLINE_GENERAL_SPACING,
+        force_backend: str = None,
         **kwargs
     ): 
-        super().__init__(*args, **kwargs)
-
-        self.t_arr = t
+        super().__init__(*args, force_backend=force_backend, **kwargs)
+        
+        self.t_arr  = self.xp.atleast_2d(t)
         self.freq_input = freq
         self.amp_input = amp
         self.spline_type = spline_type
 
-        self.dt = t[1] - t[0]
-        self.N = t.shape[0]
+        self.N = self.t_arr.shape[-1]
 
+        assert self.num_sub == int(np.prod(self.t_arr.shape[:-1]))
+        
         # TODO: spacing?
         if isinstance(amp, np.ndarray):
-            assert isinstance(freq, np.ndarray) and isinstance(t, np.ndarray)
+            assert isinstance(freq, np.ndarray) and isinstance(self.t_arr, np.ndarray)
             self.spline_length = len(freq)
+            amp = CubicSplineInterpolant(self.t_arr, amp, force_backend=force_backend)
+            freq = CubicSplineInterpolant(self.t_arr, freq, force_backend=force_backend)
 
         elif isinstance(amp, cp.ndarray):
-            assert isinstance(freq, cp.ndarray) and isinstance(t, cp.ndarray)
+            assert isinstance(freq, cp.ndarray) and isinstance(self.t_arr, cp.ndarray)
             self.spline_length = len(freq)
+            amp = CubicSplineInterpolant(self.t_arr, amp, force_backend=force_backend)
+            freq = CubicSplineInterpolant(self.t_arr, freq, force_backend=force_backend)
 
         elif isinstance(amp, CubicSpline_scipy):
             assert isinstance(freq, CubicSpline_scipy)
@@ -488,13 +491,13 @@ class FDTDIonTheFly(TDIonTheFly):
             amp_c3 = freq.c[0, :].copy()
 
             # convert to pointers
-            targs, twkargs = wrapper(t, freq_y, freq_c1, freq_c2, freq_c3, amp_y, amp_c1, amp_c2, amp_c3)
+            targs, twkargs = wrapper(self.t_arr, freq_y, freq_c1, freq_c2, freq_c3, amp_y, amp_c1, amp_c2, amp_c3)
             (_t, _freq_y, _freq_c1, _freq_c2, _freq_c3, _amp_y, _amp_c1, _amp_c2, _amp_c3) = targs
             freq = self.backend.pyCubicSplineWrap(_t, _freq_y, _freq_c1, _freq_c2, _freq_c3, self.dt, self.spline_length, self.spline_type)
             amp = self.backend.pyCubicSplineWrap(_t, _amp_y, _amp_c1, _amp_c2, _amp_c3, self.dt, self.spline_length, self.spline_type)
 
-        elif isinstance(amp, CubicSpline):
-            assert isinstance(freq, CubicSpline)
+        elif isinstance(amp, CubicSplineInterpolant):
+            assert isinstance(freq, CubicSplineInterpolant)
             self.spline_length = freq.length
             
         else:
@@ -502,8 +505,8 @@ class FDTDIonTheFly(TDIonTheFly):
         
         self.amp = amp
         self.freq = freq
-
-        self.wave_gen = self.backend.pyFDSplineTDIWaveform(self.orbits.ptr, self.amp.ptr, self.freq.ptr)
+        
+        self.wave_gen = self.backend.pyFDSplineTDIWaveform(self.orbits.ptr, self.amp.cpp_class.ptr, self.freq.cpp_class.ptr)
 
     @property
     def spline_type(self) -> int:
