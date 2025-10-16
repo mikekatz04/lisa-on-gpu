@@ -12,7 +12,17 @@ cdef extern from "Detector.hpp":
     ctypedef void* Orbits 'Orbits'
 
 cdef extern from "Interpolate.hh":
-    ctypedef void* CubicSpline 'CubicSpline'
+    cdef cppclass CubicSplineWrap "CubicSpline":
+        CubicSplineWrap(double *x0_, double *y0_, double *c1_, double *c2_, double *c3_, double ninterps_, int length_, int spline_type_) except+
+        void eval(double *y_new, double *x_new, int* spline_index, int N) except+
+        double eval_single(double x_new, int spline_index) except+
+        void dealloc() except+
+        double get_x0_val(int spline_index, int index) except+
+        double get_y0_val(int spline_index, int index) except+
+        double get_c1_val(int spline_index, int index) except+
+        double get_c2_val(int spline_index, int index) except+
+        double get_c3_val(int spline_index, int index) except+
+        int spline_type
 
 cdef extern from "LISAResponse.hh":
     ctypedef void* cmplx 'cmplx'
@@ -25,16 +35,18 @@ cdef extern from "TDIonTheFly.hh":
         int get_gb_buffer_size(int N) except+
 
     cdef cppclass TDSplineTDIWaveformWrap "TDSplineTDIWaveform":
-        TDSplineTDIWaveformWrap(Orbits *orbits_, CubicSpline *amp_spline_, CubicSpline *phase_spline_) except+
+        TDSplineTDIWaveformWrap(Orbits *orbits_, CubicSplineWrap *amp_spline_, CubicSplineWrap *phase_spline_) except+
         void run_wave_tdi(void *buffer, int buffer_size, double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double *params, double *t_arr, int N, int num_sub, int n_params) except+
         int get_td_spline_buffer_size(int N) except+
         void dealloc() except+
+        void check_x() except+ 
 
     cdef cppclass FDSplineTDIWaveformWrap "FDSplineTDIWaveform":
-        FDSplineTDIWaveformWrap(Orbits *orbits_, CubicSpline *amp_spline_, CubicSpline *phase_spline_) except+
+        FDSplineTDIWaveformWrap(Orbits *orbits_, CubicSplineWrap *amp_spline_, CubicSplineWrap *phase_spline_) except+
         void run_wave_tdi(void *buffer, int buffer_size, double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double *params, double *t_arr, int N, int num_sub, int n_params) except+
         int get_td_spline_buffer_size(int N) except+
         void dealloc() except+
+        
 
 
 cdef class pyGBTDIonTheFly:
@@ -113,12 +125,15 @@ cdef class pyTDSplineTDIWaveform:
         cdef size_t amp_spline_in = amp_spline_ptr
         cdef size_t phase_spline_in = phase_spline_ptr
         
-        self.g = new TDSplineTDIWaveformWrap(<Orbits*>orbits_in, <CubicSpline*>amp_spline_in, <CubicSpline*>phase_spline_in)
+        self.g = new TDSplineTDIWaveformWrap(<Orbits*>orbits_in, <CubicSplineWrap*>amp_spline_in, <CubicSplineWrap*>phase_spline_in)
 
     def __dealloc__(self):
         self.g.dealloc()
         if self.g:
             del self.g
+
+    def check_x(self):
+        self.g.check_x()
 
     def __reduce__(self):
         return (rebuild_td_spline, (self.orbits_ptr, self.amp_spline_ptr, self.phase_spline_ptr))
@@ -172,7 +187,7 @@ cdef class pyFDSplineTDIWaveform:
         cdef size_t amp_spline_in = amp_spline_ptr
         cdef size_t freq_spline_in = freq_spline_ptr
         
-        self.g = new FDSplineTDIWaveformWrap(<Orbits*>orbits_in, <CubicSpline*>amp_spline_in, <CubicSpline*>freq_spline_in)
+        self.g = new FDSplineTDIWaveformWrap(<Orbits*>orbits_in, <CubicSplineWrap*>amp_spline_in, <CubicSplineWrap*>freq_spline_in)
 
     def __dealloc__(self):
         self.g.dealloc()

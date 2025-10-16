@@ -22,6 +22,7 @@ LISATDIonTheFly::~LISATDIonTheFly()
 CUDA_CALLABLE_MEMBER
 void LISATDIonTheFly::get_t_tdi(double *t_out, double *kr, double *Larm, double t, int a, int b, int c, int n)
 {
+  
     t_out[0] = t - kr[a] - 2.0 * Larm[c] - 2.0 * Larm[b];
     t_out[1] = t- kr[b] - Larm[c] - 2.0 * Larm[b];
     t_out[2] = t - kr[c]-Larm[b]-2.0*Larm[c];
@@ -30,6 +31,9 @@ void LISATDIonTheFly::get_t_tdi(double *t_out, double *kr, double *Larm, double 
     t_out[5] = t - kr[c]- Larm[b];
     t_out[6] = t - kr[b]- Larm[c];
     t_out[7] = t - kr[a];
+
+    // for (int i = 0; i < 8; i += 1) printf("CHECKCHECK: %d %e, %e\n", i, t, t_out[i]);
+      
 }
 
 CUDA_CALLABLE_MEMBER
@@ -374,18 +378,25 @@ void LISATDIonTheFly::unwrap_phase(int N, double *phase)
     double u, v, q;
     int i;
     
+    // std::cout << "start phase[0]: " << phase[0] << std::endl;
     v = phase[0];
     for(i=0; i<N ;i++)
     {
         u = phase[i];
+
+        // std::cout << "bef u: " << u << " v: " << v << " phase[i]: " << phase[i] << std::endl;
         q = rint(fabs(u-v)/(2. * M_PI));
         if(q > 0.0)
         {
            if(v > u) u += q*2. * M_PI;
            else      u -= q*2. * M_PI;
         }
+
         v = u;
         phase[i] = u;
+
+        // std::cout << "aft u: " << u << " v: " << v << " q: " << q << " phase[i]: " << phase[i] << std::endl;
+        
     }
 }
 
@@ -583,6 +594,20 @@ TDSplineTDIWaveform::TDSplineTDIWaveform(Orbits *orbits_, CubicSpline *amp_splin
 {
     phase_spline = phase_spline_;
     amp_spline = amp_spline_;
+    // printf("spline type init : %d %d\n", amp_spline->spline_type, phase_spline->spline_type);        
+    // check_x();
+}
+
+CUDA_CALLABLE_MEMBER
+void TDSplineTDIWaveform::check_x()
+{
+    for (int j = 0; j < amp_spline->ninterps; j += 1)
+    {
+        for (int i = 0; i < amp_spline->length; i += 1)
+        {
+            printf("%d %d %e %e\n", j, i, amp_spline->x0[j * amp_spline->length + i], phase_spline->x0[j * amp_spline->length + i]);
+        }
+    }
 }
 
 CUDA_CALLABLE_MEMBER
@@ -590,10 +615,10 @@ void TDSplineTDIWaveform::get_amp_and_phase(double *t, double *amp, double *phas
 {
     for (int i = 0; i < N; i += 1)
     {
-        //printf("bef: t, amp, phase: %d %e, %e, %e\n", i, t[i], amp[i], phase[i]);
+        // printf("bef: t, amp, phase: %d %e\n", i, t[i]);
         amp[i] = amp_spline->eval_single(t[i], spline_i);
         phase[i] = phase_spline->eval_single(t[i], spline_i);
-        //printf("af: t, amp, phase: %d %e, %e, %e\n", i, t[i], amp[i], phase[i]);
+        // printf("af: t, amp, phase: %d %e, %e, %e\n", i, t[i], amp[i], phase[i]);
     }
 }
 
@@ -617,7 +642,7 @@ void TDSplineTDIWaveform::run_wave_tdi(void *buffer, int buffer_size, double *Xa
         double *params_here = &params[bin_i * n_params];
         double *t_here = &t_arr[bin_i * N];
         if (buffer_size < get_td_spline_buffer_size(N)) printf("Bad buffer!!!!!");
-
+        // printf("spline type: %d %d\n", amp_spline->spline_type, phase_spline->spline_type);
         // TODO: CHECK THIS!!
         double *phi_ref = (double *)buffer;
         get_phase_ref(t_here, phi_ref, params_here, N, bin_i);
@@ -635,7 +660,9 @@ void TDSplineTDIWaveform::get_phase_ref(double *t, double *phase, double *params
 {
     for (int i = 0; i < N; i += 1)
     {
+        // printf("bef1: t: %d %e\n", i, t[i]);
         phase[i] = phase_spline->eval_single(t[i], spline_i);
+        // printf("af1: t, phase: %d %e, %e\n", i, t[i], phase[i]);
     }
 }
 

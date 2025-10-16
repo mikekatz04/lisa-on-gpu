@@ -94,6 +94,8 @@ class TDSplineTDIWaveform : public LISATDIonTheFly{
     void get_phase_ref(double *t, double *phase, double *params, int N, int spline_i);
     CUDA_CALLABLE_MEMBER
     void dealloc(){};
+    CUDA_CALLABLE_MEMBER
+    void check_x();
 };
 
 

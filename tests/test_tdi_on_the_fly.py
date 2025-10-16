@@ -118,12 +118,13 @@ class TDIonTheFlyTest(unittest.TestCase):
         from fastlisaresponse.tdionfly import TDTDIonTheFly
         
         sampling_frequency = 0.1
-        td_spline_tdi = TDTDIonTheFly(t_tdi_in, amp_of_t, phi_of_t, sampling_frequency)
+
+        td_spline_tdi = TDTDIonTheFly(t_tdi_in, amp_of_t, phi_of_t, sampling_frequency, num_bin, 4, t_input=t_arr)
         
-        inc = 0.2
-        psi = 0.8
-        lam = 4.0923421
-        beta = -0.234091341
+        inc = np.full(num_bin, 0.2)
+        psi = np.full(num_bin, 0.8)
+        lam = np.full(num_bin, 4.0923421)
+        beta = np.full(num_bin, -0.234091341)
 
         # TODO: inclination appearing here? what about for emris (or precession)
         output_info_td = td_spline_tdi(inc, psi, lam, beta, return_spline=True)  
@@ -137,20 +138,23 @@ class TDIonTheFlyTest(unittest.TestCase):
         t_tdi_in = t_arr[1:-1]
         N = len(t_tdi_in)
         f_of_t = 1e-3 + 1e-12 * t_arr
-        amp_of_t = np.ones_like(t_arr)
+
+        num_bin = 5
         
-        freq_scipy_spl = CubicSpline_scipy(t_arr, f_of_t)
-        amp_scipy_spl = CubicSpline_scipy(t_arr, amp_of_t)
+        f_of_t = np.tile(1e-3 + 1e-12 * t_arr, (num_bin, 1))
+        amp_of_t = np.tile(np.ones_like(t_arr), (num_bin, 1))
+
         # TODO: how does amp spline play in for FD
 
         from fastlisaresponse.tdionfly import FDTDIonTheFly
-
-        sampling_frequency = 0.1
-        fd_spline_tdi = FDTDIonTheFly(t_tdi_in, amp_scipy_spl, freq_scipy_spl, sampling_frequency)
+  
         
-        inc = 0.2
-        psi = 0.8
-        lam = 4.0923421
-        beta = -0.234091341
+        sampling_frequency = 0.1
+        fd_spline_tdi = FDTDIonTheFly(t_tdi_in, amp_of_t, f_of_t, sampling_frequency, num_bin, 4, t_input=t_arr)
+        
+        inc = np.full(num_bin, 0.2)
+        psi = np.full(num_bin, 0.8)
+        lam = np.full(num_bin, 4.0923421)
+        beta = np.full(num_bin, -0.234091341)
 
         output_info_fd = fd_spline_tdi(inc, psi, lam, beta, return_spline=True) 

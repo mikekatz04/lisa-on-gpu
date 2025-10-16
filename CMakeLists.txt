@@ -52,6 +52,63 @@ set(
           CMAKE_CUDA_ARCHITECTURES)."
 )
 
+
+# FASTLISA_LAPACKE_DETECT_WITH sets the tool used to try to detect LAPACKE locally.
+# Possible values are:
+#
+# * AUTO: attempts PKGCONFIG and, in case of failure, CMAKE
+# * CMAKE: use CMake find_package() mechanism (try to find
+#   'lapacke-config.cmake' in CMAKE_PREFIX_PATH or in standard system locations)
+# * PKGCONFIG: use pkgconfig (which must be installed), try to find 'lapacke.pc'
+#   and its dependencies in standard system locations or in PKG_CONFIG_PATH
+# * DISABLE (or any other value): disable detection of local lapacke
+#   installation
+set(FASTLISA_LAPACKE_DETECT_WITH "AUTO" CACHE STRING "Tool used to locate LAPACKE.")
+set_property(CACHE FASTLISA_LAPACKE_DETECT_WITH PROPERTY STRINGS "AUTO" "CMAKE"
+                                                    "PKGCONFIG" "DISABLE")
+set_property(GLOBAL APPEND PROPERTY FASTLISA_OPTION_NAMES FASTLISA_LAPACKE_DETECT_WITH)
+
+# FASTLISA_LAPACKE_FETCH controls whether LAPACKE sources will be downloaded and
+# compiled with fast LISA response backends. Possible values are:
+#
+# * AUTO: will try to locate LAPACKE locally and, in case of failure, will
+#   enable the fetch mechanism
+# * ON: will always fetch LAPACKE sources and compile them, even if already
+#   present locally
+# * OFF: will disable LAPACKE fetching mechanism
+set(FASTLISA_LAPACKE_FETCH "AUTO" CACHE STRING
+                                   "Whether to download and compile LAPACK(E)")
+set_property(CACHE FASTLISA_LAPACKE_FETCH PROPERTY STRINGS "AUTO" "ON" "OFF")
+set_property(GLOBAL APPEND PROPERTY FASTLISA_OPTION_NAMES FASTLISA_LAPACKE_FETCH)
+
+# In CMakeLists.txt
+# TODO: Generalize!!!
+# if(NOT CMAKE_Fortran_COMPILER)
+#     set(CMAKE_Fortran_COMPILER "/opt/homebrew/bin/gfortran" CACHE FILEPATH "Fortran compiler" FORCE)
+# endif()
+
+# FASTLISA_LAPACKE_EXTRA_LIBS sets extra libraries that must be linked when linking
+# LAPACKE. For example, if importing the CPU backend fails and complains about
+# missing "gfortran" symbols, set FASTLISA_LAPACKE_EXTRA_LIBS=gfortran. Note that if
+# this option is unset, it will be automatically set to "gfortran" if that
+# library in linkable.
+include(CheckLinkerFlag)
+check_linker_flag(CXX "-lgfortran" GFORTRAN_AVAILABLE)
+if(GFORTRAN_AVAILABLE)
+  message(STATUS "gfortran available.")
+  set(DEFAULT_EXTRA_LIBS "gfortran")
+else()
+  set(DEFAULT_EXTRA_LIBS "")
+  message(STATUS "gfortran NOT available.")
+endif()
+set(FASTLISA_LAPACKE_EXTRA_LIBS "${DEFAULT_EXTRA_LIBS}"
+    CACHE STRING "Extra libs to link to when\
+linking against LAPACKE.")
+set_property(GLOBAL APPEND PROPERTY FASTLISA_OPTION_NAMES FASTLISA_LAPACKE_EXTRA_LIBS)
+unset(GFORTRAN_AVAILABLE)
+unset(DEFAULT_EXTRA_LIBS)
+
+
 set(
   FASTLISA_MARCH "native"
   CACHE STRING "Value of the -march compiler option if supported by compiler"
