@@ -288,7 +288,7 @@ class TDIonTheFly(FastLISAResponseParallelModule):
         Yphase = np.zeros((self.N * self.num_sub))
         Zamp = np.zeros((self.N * self.num_sub))
         Zphase = np.zeros((self.N * self.num_sub))
-        
+
         assert int(np.prod(self.t_arr.shape)) == self.N * self.num_sub
 
         self.wave_gen.run_wave_tdi(
@@ -503,15 +503,15 @@ class FDTDIonTheFly(TDIonTheFly):
             freq = self.xp.atleast_2d(self.xp.asarray(freq))
         
             # TODO: improve when gbt is fixed up
-            _amp = CubicSplineInterpolant(t_input, amp, force_backend=self.backend.name.split("_")[-1])
-            _freq = CubicSplineInterpolant(t_input, freq, force_backend=self.backend.name.split("_")[-1])
+            _amp = CubicSplineInterpolant(t_input.copy(), amp, force_backend=self.backend.name.split("_")[-1])
+            _freq = CubicSplineInterpolant(t_input.copy(), freq, force_backend=self.backend.name.split("_")[-1])
 
             amp = _amp.cpp_class
             freq = _freq.cpp_class
 
         elif isinstance(amp, CubicSpline_scipy):
             assert isinstance(freq, CubicSpline_scipy)
-
+            raise NotImplementedError
             self.spline_length = freq.c.shape[-1] + 1
 
             freq_y = freq.c[3, :].copy()
@@ -533,9 +533,8 @@ class FDTDIonTheFly(TDIonTheFly):
             freq = self.backend.pyCubicSplineWrap(_t, _freq_y, _freq_c1, _freq_c2, _freq_c3, self.num_sub, self.n_params, self.spline_length, CUBIC_SPLINE_LINEAR_SPACING)
             amp = self.backend.pyCubicSplineWrap(_t, _amp_y, _amp_c1, _amp_c2, _amp_c3, self.num_sub, self.n_params, self.spline_length, CUBIC_SPLINE_LINEAR_SPACING)
 
-        elif isinstance(amp, CubicSpline):
-            assert isinstance(freq, CubicSpline)
-            raise NotImplementedError
+        elif isinstance(amp, CubicSplineInterpolant):
+            assert isinstance(freq, CubicSplineInterpolant)
 
         else:
             raise ValueError("# TODO: fix this.")
@@ -552,8 +551,11 @@ class FDTDIonTheFly(TDIonTheFly):
         self.amp = amp
         self.freq = freq
 
-        self.wave_gen = self.backend.pyTDSplineTDIWaveform(self.orbits.ptr, self.amp.ptr, self.freq.ptr)
-
+    @property
+    def wave_gen(self) -> callable:
+        self._wave_gen = self.backend.pyFDSplineTDIWaveform(self.orbits.ptr, self.amp.cpp_class.ptr, self.freq.cpp_class.ptr)
+        return self._wave_gen
+    
     @property
     def spline_type(self) -> int:
         return self._spline_type
