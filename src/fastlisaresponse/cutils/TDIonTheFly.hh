@@ -25,27 +25,29 @@ class LISATDIonTheFly{
         CUDA_CALLABLE_MEMBER 
         ~LISATDIonTheFly();
         CUDA_CALLABLE_MEMBER
-        void get_tdi(double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double t, int N, double costh, double phi, double cosi, double psi, int bin_i);
-        CUDA_CALLABLE_MEMBER
         void LISA_polarization_tensor(double costh, double phi, double *eplus, double *ecross, double *k);
         CUDA_CALLABLE_MEMBER
-        void get_tdi_amp_phase(void *buffer, int buffer_size, double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double *params, double *t_arr, int N, double costh, double phi, double cosi, double psi, double *phi_ref, int bin_i);
+        void get_tdi(cmplx *X, cmplx *Y, cmplx *Z, double* phi_ref, double *params, double *t_arr, int N, double costh, double phi, double cosi, double psi, int bin_i);
         CUDA_CALLABLE_MEMBER
         virtual void get_amp_and_phase(double *t, double *amp, double *phase, double *params, int N, int bin_i);
         CUDA_CALLABLE_MEMBER
-        void get_tdi_sub(double *M, double *Mf, int n, int N, int a, int b, int c, double* tarray, double *amp_tdi_vals, double *phase_tdi_vals, double Aplus, double Across, double cos2psi, double sin2psi, double *App, double *Apm, double *Acp, double *Acm, double *kr, double *Larm);
+        void get_tdi_sub(cmplx *M, int n, int N, int a, int b, int c, double* tarray, double *amp_tdi_vals, double *phase_tdi_vals, double Aplus, double Across, double cos2psi, double sin2psi, double *App, double *Apm, double *Acp, double *Acm, double *kr, double *Larm);
         CUDA_CALLABLE_MEMBER
-        void get_tdi_n(double *X, double *Xf, double *Y, double *Yf, double *Z, double *Zf, double *params, double t, int m, int N, double costh, double phi, double cosi, double psi, int bin_i);
+        void get_tdi_n(cmplx *X, cmplx *Y, cmplx *Z, double* phi_ref, double *params, double t, int m, int N, double costh, double phi, double cosi, double psi, int bin_i);
         CUDA_CALLABLE_MEMBER
         void get_t_tdi(double *t_out, double *kr, double *Larm, double t, int a, int b, int c, int n);
         CUDA_CALLABLE_MEMBER
-        void get_tdi_Xf(double *X, double *Xf, double *Y, double *Yf, double *Z, double *Zf, double *params, double *t_arr, int N, double costh, double phi, double cosi, double psi, int bin_i);
+        void get_tdi_Xf(cmplx *X, cmplx *Y, cmplx *Z, double* phi_ref, double *params, double *t_arr, int N, double costh, double phi, double cosi, double psi, int bin_i);
         CUDA_CALLABLE_MEMBER
         void extract_amplitude_and_phase(double *flip, double *pjump, int Ns, double *As, double *Dphi, double *M, double *Mf, double *phiR);
         CUDA_CALLABLE_MEMBER
         int get_tdi_buffer_size(int N);
         CUDA_CALLABLE_MEMBER
         void unwrap_phase(int N, double *phase);
+        CUDA_CALLABLE_MEMBER
+        void new_extract_phase(cmplx *M, double *phiR, int N, double *t_arr);
+        CUDA_CALLABLE_MEMBER
+        virtual void get_phase_ref(double *t, double *phase, double *params, int N, int bin_i);
 };
 
 class GBTDIonTheFly : public LISATDIonTheFly {
@@ -65,7 +67,7 @@ class GBTDIonTheFly : public LISATDIonTheFly {
         CUDA_CALLABLE_MEMBER
         int get_gb_buffer_size(int N);
         CUDA_CALLABLE_MEMBER
-        void run_wave_tdi(void *buffer, int buffer_size, double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double *params, double *t_arr, int N, int num_sub, int n_params);
+        void run_wave_tdi(cmplx *X, cmplx *Y, cmplx *Z, double *phi_ref, double *params, double *t_arr, int N, int num_sub, int n_params);
         CUDA_CALLABLE_MEMBER
         void dealloc();
         CUDA_CALLABLE_MEMBER
@@ -87,7 +89,7 @@ class TDSplineTDIWaveform : public LISATDIonTheFly{
     CUDA_CALLABLE_MEMBER
     void get_amp_and_phase(double *t, double *amp, double *phase, double *params, int N, int spline_i);
     CUDA_CALLABLE_MEMBER
-    void run_wave_tdi(void *buffer, int buffer_size, double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double *params, double *t_arr, int N, int num_sub, int n_params);
+    void run_wave_tdi(cmplx *X, cmplx *Y, cmplx *Z, double *phi_ref, double *params, double *t_arr, int N, int num_sub, int n_params);
     CUDA_CALLABLE_MEMBER
     int get_td_spline_buffer_size(int N){return N * sizeof(double) + get_tdi_buffer_size(N);};
     CUDA_CALLABLE_MEMBER
@@ -111,7 +113,7 @@ class FDSplineTDIWaveform : public LISATDIonTheFly{
     CUDA_CALLABLE_MEMBER
     void get_amp_and_phase(double *t, double *amp, double *phase, double *params, int N, int spline_i);
     CUDA_CALLABLE_MEMBER
-    void run_wave_tdi(void *buffer, int buffer_size, double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double *params, double *t_arr, int N, int num_sub, int n_params);
+    void run_wave_tdi(cmplx *X, cmplx *Y, cmplx *Z, double *phi_ref, double *params, double *t_arr, int N, int num_sub, int n_params);
     CUDA_CALLABLE_MEMBER
     int get_td_spline_buffer_size(int N){return N * sizeof(double) + get_tdi_buffer_size(N);};
     CUDA_CALLABLE_MEMBER

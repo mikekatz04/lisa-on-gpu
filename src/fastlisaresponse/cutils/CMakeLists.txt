@@ -502,7 +502,7 @@ if(FASTLISA_WITH_CPU)
   # Now, link against ${FASTLISA_LAPACKE_LIBS} to link against liblapacke.so and
   # include lapacke.h
   target_link_libraries(fastlisaresponse_cpu_tdionthefly LINK_PUBLIC ${FASTLISA_LAPACKE_LIBS}
-                        ${FASTLISA_LAPACKE_EXTRA_LIBS} -lgfortran)
+                        ${FASTLISA_LAPACKE_EXTRA_LIBS})
 
 endif()
 

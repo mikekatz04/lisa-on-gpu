@@ -79,7 +79,7 @@ class TDIonTheFly(FastLISAResponseParallelModule):
         self,
         sampling_frequency,
         num_sub,
-        n_params,
+        n_params=4,
         tdi="1st generation",
         orbits: Optional[Orbits] = EqualArmlengthOrbits,
         tdi_chan="XYZ",
@@ -277,37 +277,24 @@ class TDIonTheFly(FastLISAResponseParallelModule):
 
         assert len(params) == 4 * self.num_sub
 
-        buffer = self.wave_gen.get_buffer_size(self.N)
-        _size_of_double = 8
-        num_points = int(buffer / _size_of_double)
-
-        buffer = np.zeros(num_points)
-        Xamp = np.zeros((self.N * self.num_sub))
-        Xphase = np.zeros((self.N * self.num_sub))
-        Yamp = np.zeros((self.N * self.num_sub))
-        Yphase = np.zeros((self.N * self.num_sub))
-        Zamp = np.zeros((self.N * self.num_sub))
-        Zphase = np.zeros((self.N * self.num_sub))
-
+        X = np.zeros((self.N * self.num_sub), dtype=complex)
+        Y = np.zeros((self.N * self.num_sub), dtype=complex)
+        Z = np.zeros((self.N * self.num_sub), dtype=complex)
+        phase_ref = np.zeros((self.N * self.num_sub), dtype=float)
         assert int(np.prod(self.t_arr.shape)) == self.N * self.num_sub
 
         self.wave_gen.run_wave_tdi(
-            buffer, buffer.shape[0] * _size_of_double,
-            Xamp, Xphase,
-            Yamp, Yphase,
-            Zamp, Zphase,
+            X, Y, Z, phase_ref,
             params, self.t_arr.flatten().copy(),
             self.N, self.num_sub, self.n_params
         )
             
         return TDTDIOutput(
             self.t_arr, 
-            Xamp.reshape(self.t_arr.shape), 
-            Xphase.reshape(self.t_arr.shape), 
-            Yamp.reshape(self.t_arr.shape), 
-            Yphase.reshape(self.t_arr.shape), 
-            Zamp.reshape(self.t_arr.shape), 
-            Zphase.reshape(self.t_arr.shape), 
+            X.reshape(self.t_arr.shape), 
+            Y.reshape(self.t_arr.shape), 
+            Z.reshape(self.t_arr.shape), 
+            phase_ref.reshape(self.t_arr.shape),
             fill_splines=return_spline,
         )
 
@@ -404,40 +391,40 @@ class TDTDIonTheFly(TDIonTheFly):
     
 
 class TDTDIOutput(FastLISAResponseParallelModule):
-    def __init__(self, t, Xamp, Xphase, Yamp, Yphase, Zamp, Zphase, fill_splines=True, **kwargs):
-        self.Xamp, self.Xphase, self.Yamp, self.Yphase, self.Zamp, self.Zphase = Xamp, Xphase, Yamp, Yphase, Zamp, Zphase
+    def __init__(self, t, X, Y, Z, phase_ref, fill_splines=True, **kwargs):
+        self.X, self.Y, self.Z = X, Y, Z
+        self.phase_ref = phase_ref
         self.t = t
         super().__init__(**kwargs)
         self.fill_splines = fill_splines
         if fill_splines:
             self._splines = {}
-            for name in ["Xamp", "Xphase", "Yamp", "Yphase", "Zamp", "Zphase"]:
-                self._splines[name] = self.build_spline(self.t, getattr(self, name))
-            
+            for name in ["X", "Y", "Z"]:
+                self._splines[name + "_re"] = self.build_spline(self.t, getattr(self, name).real)
+                self._splines[name + "_im"] = self.build_spline(self.t, getattr(self, name).imag)
+            self._splines["phase_ref"] = self.build_spline(self.t, self.phase_ref)
+
     def _get_spl(self, key: str) -> CubicSpline:
         assert self.fill_splines
-        return self._splines[key]
+        if key != "phase_ref":
+            return (self._splines[key + "_re"], self._splines[key + "_im"])
+        else:
+            return self._splines["phase_ref"]
+        
+    @property
+    def X_spl(self) -> CubicSpline:
+        return self._get_spl("X")
+    @property
+    def Y_spl(self) -> CubicSpline:
+        return self._get_spl("Y")
     
     @property
-    def Xamp_spl(self) -> CubicSpline:
-        return self._get_spl("Xamp")
-    @property
-    def Xphase_spl(self) -> CubicSpline:
-        return self._get_spl("Xphase")
+    def Z_spl(self) -> CubicSpline:
+        return self._get_spl("Z")
     
     @property
-    def Yamp_spl(self) -> CubicSpline:
-        return self._get_spl("Yamp")
-    @property
-    def Yphase_spl(self) -> CubicSpline:
-        return self._get_spl("Yphase")
-    
-    @property
-    def Zamp_spl(self) -> CubicSpline:
-        return self._get_spl("Zamp")
-    @property
-    def Zphase_spl(self) -> CubicSpline:
-        return self._get_spl("Zphase")
+    def phase_ref_spl(self) -> CubicSpline:
+        return self._get_spl("phase_ref")
     
     def build_spline(self, x, y, **kwargs) -> CubicSplineInterpolant:
         return CubicSplineInterpolant(x, y, **kwargs)
@@ -479,7 +466,7 @@ class FDTDIonTheFly(TDIonTheFly):
         force_backend: str = None,
         **kwargs
     ): 
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, force_backend=force_backend, **kwargs)
 
         self.freq_input = freq
         self.amp_input = amp
@@ -501,13 +488,11 @@ class FDTDIonTheFly(TDIonTheFly):
 
             amp = self.xp.atleast_2d(self.xp.asarray(amp))
             freq = self.xp.atleast_2d(self.xp.asarray(freq))
-        
-            # TODO: improve when gbt is fixed up
-            _amp = CubicSplineInterpolant(t_input.copy(), amp, force_backend=self.backend.name.split("_")[-1])
-            _freq = CubicSplineInterpolant(t_input.copy(), freq, force_backend=self.backend.name.split("_")[-1])
 
-            amp = _amp.cpp_class
-            freq = _freq.cpp_class
+            # TODO: improve when gbt is fixed up
+            amp = CubicSplineInterpolant(t_input.copy(), amp, force_backend=self.backend.name.split("_")[-1])
+            freq = CubicSplineInterpolant(t_input.copy(), freq, force_backend=self.backend.name.split("_")[-1])
+            
 
         elif isinstance(amp, CubicSpline_scipy):
             assert isinstance(freq, CubicSpline_scipy)
@@ -535,6 +520,7 @@ class FDTDIonTheFly(TDIonTheFly):
 
         elif isinstance(amp, CubicSplineInterpolant):
             assert isinstance(freq, CubicSplineInterpolant)
+            # f = freq.y, t = freq.x
 
         else:
             raise ValueError("# TODO: fix this.")

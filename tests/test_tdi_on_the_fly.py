@@ -47,22 +47,24 @@ class TDIonTheFlyTest(unittest.TestCase):
         orbits.configure(linear_interp_setup=True)
 
         # define GB parameters
-        A = 1.084702251e-22
-        f = 2.35962078e-3
-        fdot = 1.47197271e-17
-        fddot = 0.0
-        iota = 1.11820901
-        phi0 = 4.91128699
-        psi = 2.3290324
-
-        beta = 0.9805742971871619
-        lam = 5.22979888
+        f = 6.000000000000e-03
+        costh = 2.000000000000e-01
+        beta = np.pi / 2 - np.arccos(costh)
+        phi = 1.000000000000e+00
+        lam = phi
+        A = 1.510465911233e-21
+        cosi = -3.000000000000e-01
+        iota = np.arccos(cosi)
+        psi = 8.000000000000e-01
+        phi0 = 1.200000000000e+00
+        fdot = 1.590872976087e-15
 
         gb_tdi_on_fly = tdionthefly.pyGBTDIonTheFly(orbits.ptr, T)
 
-        t_arr = np.linspace(0.0, T, 1024, endpoint=False)
+        t_arr = np.linspace(0.0, T, 4096, endpoint=False)
         t_tdi_in = t_arr[1:-1]
-
+        # t_tdi_in = np.array([0.000000000000e+00, 1.588751515152e+07])
+        
         N = len(t_tdi_in)
         buffer = gb_tdi_on_fly.get_buffer_size(N)
         _size_of_double = 8
@@ -70,15 +72,12 @@ class TDIonTheFlyTest(unittest.TestCase):
         num_bin = 3
 
         buffer = np.zeros(num_points)
-        Xamp = np.zeros((num_bin, N))  # TODO: flatten?
-        Xphase = np.zeros((num_bin, N))
-        Yamp = np.zeros((num_bin, N))
-        Yphase = np.zeros((num_bin, N))
-        Zamp = np.zeros((num_bin, N))
-        Zphase = np.zeros((num_bin, N))
-
+        X = np.zeros((num_bin, N), dtype=complex)  # TODO: flatten?
+        Y = np.zeros((num_bin, N), dtype=complex)
+        Z = np.zeros((num_bin, N), dtype=complex)
+        
         params = np.zeros((num_bin, 9))
-
+        fddot = 0.0
         params[:, 0] = A
         params[:, 1] = f
         params[:, 2] = fdot
@@ -93,15 +92,19 @@ class TDIonTheFlyTest(unittest.TestCase):
 
         n_params = 9
         num_sub = num_bin
+        
         _t_tdi_in = np.tile(t_tdi_in, (num_bin, 1)).flatten().copy()
+        t_tdi_tmp = np.tile(t_tdi_in, (num_bin, 1))
+
+        phase_ref = np.zeros_like(X, dtype=float)
+        time_sc = np.zeros_like(phase_ref)
+
         gb_tdi_on_fly.run_wave_tdi(
-            buffer, buffer.shape[0] * _size_of_double,
-            Xamp, Xphase,
-            Yamp, Yphase,
-            Zamp, Zphase,
+            X, Y, Z, phase_ref,
             _params, _t_tdi_in,
             N, num_sub, n_params
         )
+        breakpoint()
 
     def test_td_spline_tdi(self):
 
@@ -119,7 +122,7 @@ class TDIonTheFlyTest(unittest.TestCase):
         
         sampling_frequency = 0.1
 
-        td_spline_tdi = TDTDIonTheFly(t_tdi_in, amp_of_t, phi_of_t, sampling_frequency, num_bin, 4, t_input=t_arr)
+        td_spline_tdi = TDTDIonTheFly(t_tdi_in, amp_of_t, phi_of_t, sampling_frequency, num_bin, t_input=t_arr)
         
         inc = np.full(num_bin, 0.2)
         psi = np.full(num_bin, 0.8)
@@ -150,7 +153,7 @@ class TDIonTheFlyTest(unittest.TestCase):
   
         
         sampling_frequency = 0.1
-        fd_spline_tdi = FDTDIonTheFly(t_tdi_in, amp_of_t, f_of_t, sampling_frequency, num_bin, 4, t_input=t_arr)
+        fd_spline_tdi = FDTDIonTheFly(t_tdi_in, amp_of_t, f_of_t, sampling_frequency, num_bin, t_input=t_arr)
         
         inc = np.full(num_bin, 0.2)
         psi = np.full(num_bin, 0.8)
