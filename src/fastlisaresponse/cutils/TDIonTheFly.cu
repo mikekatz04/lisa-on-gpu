@@ -3,6 +3,7 @@
 #include "LISAResponse.hh"
 #include "Interpolate.hh"
 #include <string>
+#include <unistd.h>
 
 // TODO: GET RID OF THIS ??!!!
 double C_SI = 299792458.;
@@ -334,7 +335,7 @@ void LISATDIonTheFly::get_tdi_n(cmplx *X, cmplx *Y, cmplx *Z, double* phi_ref, d
     // printf("af33: inside: %d \n", m);
     get_tdi_sub(X, m, N, 0, 1, 2, &t_tdi[0], &amp_tdi[0], &phase_tdi[0], Aplus, Across, cos2psi, sin2psi, &App[0], &Apm[0], &Acp[0], &Acm[0], &kdotr[0], &L[0]);
 
-    printf("af44: inside: %d %.12e %.12e %.12e \n", m, X[m].real(), X[m].imag(), phi_ref[m]);
+    // printf("af44: inside: %d %.12e %.12e %.12e \n", m, X[m].real(), X[m].imag(), phi_ref[m]);
     
     get_t_tdi(&t_tdi[0], &kdotr[0], &L[0], t, 1, 2, 0, m);
     get_amp_and_phase(&t_tdi[0], &amp_tdi[0], &phase_tdi[0], &params[0], 8, bin_i);
@@ -346,7 +347,7 @@ void LISATDIonTheFly::get_tdi_n(cmplx *X, cmplx *Y, cmplx *Z, double* phi_ref, d
     get_amp_and_phase(&t_tdi[0], &amp_tdi[0], &phase_tdi[0], &params[0], 8, bin_i);
     get_tdi_sub(Z, m, N, 2, 0, 1, &t_tdi[0], &amp_tdi[0], &phase_tdi[0], Aplus, Across, cos2psi, sin2psi, &App[0], &Apm[0], &Acp[0], &Acm[0], &kdotr[0], &L[0]);
 
-    // printf("af: inside: %d \n", m);
+    // printf("af66: inside: %d \n", m);
     
 }
 
@@ -355,12 +356,46 @@ CUDA_CALLABLE_MEMBER
 void LISATDIonTheFly::get_tdi(cmplx *X, cmplx *Y, cmplx *Z, double* phi_ref, double *params, double *t_arr, int N, double costh, double phi, double cosi, double psi, int bin_i)
 {   
     get_tdi_Xf(X, Y, Z, phi_ref, params, t_arr, N, costh, phi, cosi, psi, bin_i);
+
+    double flip[N];
+    double pjump[N];
+    double Xamp[N];
+    double Xphase[N];
+    double M[N];
+    double Mf[N];
+
+    for (int i = 0; i < N; i += 1)
+    {
+        flip[i] = 0.0;
+        pjump[i] = 0.0;
+        M[i] = X[i].real();
+        Mf[i] = X[i].imag();
+        Xamp[i] = abs(X[i]);
+        Xphase[i] = -atan2(Mf[i],M[i]);
+    }
+
+    FILE *fp1 = fopen("check_phase_before_extract.txt", "w");
+    for (int n = 0; n < N; n += 1)
+    {
+        fprintf(fp1, "%.12e, %.12e, %.12e, %.12e, %.12e, %.12e\n", t_arr[n], Xamp[n], Xphase[n], M[n], Mf[n], phi_ref[n]);
+        fflush(fp1);
+    }
+    fclose(fp1);
+
+    extract_amplitude_and_phase(&flip[0], &pjump[0], N, &Xamp[0], &Xphase[0], &M[0], &Mf[0], &phi_ref[0]);
+    unwrap_phase(N, &Xphase[0]);
+
+    FILE *fp = fopen("temp_check_amp_phase2.txt", "w");
+    for (int n = 0; n < N; n += 1)
+    {
+        fprintf(fp, "%.12e, %.12e, %.12e, %.12e\n", t_arr[n], Xamp[n], Xphase[n], phi_ref[n]);
+        fflush(fp);
+    }
+    fclose(fp);
+
     new_extract_phase(X, phi_ref, N, t_arr);
     new_extract_phase(Y, phi_ref, N, t_arr);
     new_extract_phase(Z, phi_ref, N, t_arr);
-
-    // extract_amplitude_and_phase(flip, pjump, N, Xamp, Xphase, X, Xf, phi_ref);
-    // unwrap_phase(N, Xphase);
 
     // extract_amplitude_and_phase(flip, pjump, N, Yamp, Yphase, Y, Yf, phi_ref);
     // unwrap_phase(N, Yphase);
@@ -479,8 +514,12 @@ void LISATDIonTheFly::extract_amplitude_and_phase(double *flip, double *pjump, i
     for(i=0; i<Ns ;i++)
     {
         As[i] = flip[i]*As[i];
+        // printf("HUH: %e %e\n", flip[i], As[i]);
         v = remainder(phiR[i], 2 * M_PI);
         Dphi[i] = -atan2(Mf[i],M[i])+pjump[i]-v;
+        // if ((i > 11670))
+        //     printf("INIT: %d %e %e %e %e %e %e\n", i, -atan2(Mf[i],M[i]), flip[i], pjump[i], As[i], Dphi[i], v);
+    
     }
     
 }
@@ -503,7 +542,7 @@ void LISATDIonTheFly::new_extract_phase(cmplx *M, double *phiR, int N, double *t
 
     for (int n = start; n < N; n += incr)
     {
-        // TODO: take conj to match N/T
+        // TODO: do we want to do this. We take conj to match N/T
         M[n] = gcmplx::conj(M[n]);
         // fprintf(fp, "%.12e, %.12e, %.12e, %.12e\n", t_arr[n], M[n].real(), M[n].imag(), phiR[n]);
         M[n] *= gcmplx::exp(-I * phiR[n]);
