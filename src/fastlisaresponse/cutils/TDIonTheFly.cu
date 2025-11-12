@@ -52,7 +52,7 @@ static void hplus_and_hcross(double t, double phase, double amp,  double Aplus, 
 
 
 CUDA_CALLABLE_MEMBER
-void LISATDIonTheFly::get_tdi_sub(cmplx *M, int n, int N, int a, int b, int c, double* tarray, double *amp_tdi_vals, double *phase_tdi_vals, double Aplus, double Across, double cos2psi, double sin2psi, double *App, double *Apm, double *Acp, double *Acm, double *kr, double *Larm)
+void LISATDIonTheFly::get_tdi_sub(cmplx *M, int n, int N, int a, int b, int c, double t_orig, double* tarray, double *amp_tdi_vals, double *phase_tdi_vals, double Aplus, double Across, double cos2psi, double sin2psi, double *App, double *Apm, double *Acp, double *Acm, double *kr, double *Larm)
 {
     double t, f, amp, phase;
     double hp, hc, hpf, hcf;
@@ -73,6 +73,8 @@ void LISATDIonTheFly::get_tdi_sub(cmplx *M, int n, int N, int a, int b, int c, d
     
     //  if(freq_spline) phase = 2 * M_PI*f*t; /* mbh */
     hplus_and_hcross(t, phase, amp, Aplus, Across, cos2psi, sin2psi, &hp, &hc, &hpf, &hcf);
+    printf("%d %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e \n", n, t_orig, t, hp, hc, hpf, hcf, phase, Aplus, Across, cos2psi, sin2psi);
+              
     // M[n] += hp*Apm[b]+hc*Acm[b];
     // M[n] -= hp*App[c]+hc*Acp[c];
     // Mf[n] += hpf*Apm[b]+hcf*Acm[b];
@@ -167,6 +169,9 @@ void LISATDIonTheFly::get_tdi_sub(cmplx *M, int n, int N, int a, int b, int c, d
     // Mf[n] += hpf*App[b]+hcf*Acp[b];  
     M[n] -= (hp*Apm[c]+hc*Acm[c]) + I * (hpf*Apm[c]+hcf*Acm[c]);
     M[n] += (hp*App[b]+hc*Acp[b]) + I * (hpf*App[b]+hcf*Acp[b]);
+
+    // printf("WAAAAT: %d %.12e %.12e %.12e %.12e \n", n, t_orig, t, M[n].real(), M[n].imag());
+
 }
 
 
@@ -182,12 +187,15 @@ void LISATDIonTheFly::LISA_polarization_tensor(double costh, double phi, double 
     double cosph = cos(phi);
     double sinph = sin(phi);
 
+    
     /*   Tensor construction for building slowly evolving LISA response   */
     //Gravitational Wave source basis vectors
     u[0] =  costh*cosph;  u[1] =  costh*sinph;  u[2] = -sinth;
     v[0] =  sinph;        v[1] = -cosph;        v[2] =  0.;
     k[0] = -sinth*cosph;  k[1] = -sinth*sinph;  k[2] = -costh;
     
+    // printf("CHECKECKECEKCEK: %e %e %e %e %e\n", k[0], k[1], k[2], costh, cosph);
+
     //GW polarization basis tensors
     /*
      * LDC convention:
@@ -248,6 +256,7 @@ void LISATDIonTheFly::get_tdi_n(cmplx *X, cmplx *Y, cmplx *Z, double* phi_ref, d
         // x[i][0] = spline_interpolation(orbit->dx[i],t)/CLIGHT;
         // x[i][1] = spline_interpolation(orbit->dy[i],t)/CLIGHT;
         // x[i][2] = spline_interpolation(orbit->dz[i],t)/CLIGHT;
+        // printf("WHATAA?:%.12e %.12e %.12e %.12e\n", t, x[i].x, x[i].y, x[i].z);
     }
 
     n[0] = x[1] - x[2];
@@ -294,6 +303,9 @@ void LISATDIonTheFly::get_tdi_n(cmplx *X, cmplx *Y, cmplx *Z, double* phi_ref, d
     for(i=0; i<3; i++)
     {
         kdotr[i] = k.dot(x[i]);
+        // for (int j= 0; j<3; j+=1)
+        //     printf("CHECK K: %d %d %d %e %e %e\n", m, i, j, kdotr[i], x[i][j], k[j]);
+              
     }
     
     // k dot n_i (source direction w/ arm vectors)
@@ -328,24 +340,24 @@ void LISATDIonTheFly::get_tdi_n(cmplx *X, cmplx *Y, cmplx *Z, double* phi_ref, d
     // printf("af2: inside: %e %e %e %e %e\n", t, dplus[0], dcross[0], kdotn[0], n[0].x);
     
     double time_sc = t - kdotr[0];
-    get_phase_ref(&time_sc, &phi_ref[m], &params[0], 1, bin_i);
+    get_phase_ref(t, time_sc, &phi_ref[0], &params[0], 1, bin_i, m);
 
     get_t_tdi(&t_tdi[0], &kdotr[0], &L[0], t, 0, 1, 2, m);
-    get_amp_and_phase(&t_tdi[0], &amp_tdi[0], &phase_tdi[0], &params[0], 8, bin_i);
-    // printf("af33: inside: %d \n", m);
-    get_tdi_sub(X, m, N, 0, 1, 2, &t_tdi[0], &amp_tdi[0], &phase_tdi[0], Aplus, Across, cos2psi, sin2psi, &App[0], &Apm[0], &Acp[0], &Acm[0], &kdotr[0], &L[0]);
+    get_amp_and_phase(t, &t_tdi[0], &amp_tdi[0], &phase_tdi[0], &params[0], 8, bin_i);
+    // printf("af33: inside: %d %e \n", m, phi_ref[m]);
+    get_tdi_sub(X, m, N, 0, 1, 2, t, &t_tdi[0], &amp_tdi[0], &phase_tdi[0], Aplus, Across, cos2psi, sin2psi, &App[0], &Apm[0], &Acp[0], &Acm[0], &kdotr[0], &L[0]);
 
     // printf("af44: inside: %d %.12e %.12e %.12e \n", m, X[m].real(), X[m].imag(), phi_ref[m]);
     
     get_t_tdi(&t_tdi[0], &kdotr[0], &L[0], t, 1, 2, 0, m);
-    get_amp_and_phase(&t_tdi[0], &amp_tdi[0], &phase_tdi[0], &params[0], 8, bin_i);
-    get_tdi_sub(Y, m, N, 1, 2, 0, &t_tdi[0], &amp_tdi[0], &phase_tdi[0], Aplus, Across, cos2psi, sin2psi, &App[0], &Apm[0], &Acp[0], &Acm[0], &kdotr[0], &L[0]);
+    get_amp_and_phase(t, &t_tdi[0], &amp_tdi[0], &phase_tdi[0], &params[0], 8, bin_i);
+    get_tdi_sub(Y, m, N, 1, 2, 0, t, &t_tdi[0], &amp_tdi[0], &phase_tdi[0], Aplus, Across, cos2psi, sin2psi, &App[0], &Apm[0], &Acp[0], &Acm[0], &kdotr[0], &L[0]);
 
     // printf("af4: inside: %d \n", m);
     
     get_t_tdi(&t_tdi[0], &kdotr[0], &L[0], t, 2, 0, 1, m);
-    get_amp_and_phase(&t_tdi[0], &amp_tdi[0], &phase_tdi[0], &params[0], 8, bin_i);
-    get_tdi_sub(Z, m, N, 2, 0, 1, &t_tdi[0], &amp_tdi[0], &phase_tdi[0], Aplus, Across, cos2psi, sin2psi, &App[0], &Apm[0], &Acp[0], &Acm[0], &kdotr[0], &L[0]);
+    get_amp_and_phase(t, &t_tdi[0], &amp_tdi[0], &phase_tdi[0], &params[0], 8, bin_i);
+    get_tdi_sub(Z, m, N, 2, 0, 1, t, &t_tdi[0], &amp_tdi[0], &phase_tdi[0], Aplus, Across, cos2psi, sin2psi, &App[0], &Apm[0], &Acp[0], &Acm[0], &kdotr[0], &L[0]);
 
     // printf("af66: inside: %d \n", m);
     
@@ -374,7 +386,9 @@ void LISATDIonTheFly::get_tdi(cmplx *X, cmplx *Y, cmplx *Z, double* phi_ref, dou
         Xphase[i] = -atan2(Mf[i],M[i]);
     }
 
-    FILE *fp1 = fopen("check_phase_before_extract.txt", "w");
+    new_extract_amplitude_and_phase(&flip[0], &pjump[0], N, &Xamp[0], &Xphase[0], &M[0], &Mf[0], &phi_ref[0]);
+    
+     FILE *fp1 = fopen("check_phase_before_unwrap.txt", "w");
     for (int n = 0; n < N; n += 1)
     {
         fprintf(fp1, "%.12e, %.12e, %.12e, %.12e, %.12e, %.12e\n", t_arr[n], Xamp[n], Xphase[n], M[n], Mf[n], phi_ref[n]);
@@ -382,10 +396,14 @@ void LISATDIonTheFly::get_tdi(cmplx *X, cmplx *Y, cmplx *Z, double* phi_ref, dou
     }
     fclose(fp1);
 
-    extract_amplitude_and_phase(&flip[0], &pjump[0], N, &Xamp[0], &Xphase[0], &M[0], &Mf[0], &phi_ref[0]);
-    unwrap_phase(N, &Xphase[0]);
+    new_unwrap_phase(N, &Xphase[0]);
 
-    FILE *fp = fopen("temp_check_amp_phase2.txt", "w");
+    for (int i = 0; i < N; i += 1)
+    {
+        printf("WEEET2: %d %.12e %.12e %.12e %.12e %.12e\n", i, Xamp[i], Xphase[i], X[i].real(), X[i].imag(), phi_ref[i]);
+    }
+
+    FILE *fp = fopen("temp_check_amp_phase_22.txt", "w");
     for (int n = 0; n < N; n += 1)
     {
         fprintf(fp, "%.12e, %.12e, %.12e, %.12e\n", t_arr[n], Xamp[n], Xphase[n], phi_ref[n]);
@@ -396,6 +414,12 @@ void LISATDIonTheFly::get_tdi(cmplx *X, cmplx *Y, cmplx *Z, double* phi_ref, dou
     new_extract_phase(X, phi_ref, N, t_arr);
     new_extract_phase(Y, phi_ref, N, t_arr);
     new_extract_phase(Z, phi_ref, N, t_arr);
+
+    // for (int i = 0; i < N; i += 1)
+    // {
+    //     printf("WEEET3: %d %.12e %.12e %.12e %.12e %.12e\n", i, Xamp[i], Xphase[i], X[i].real(), X[i].imag(), phi_ref[i]);
+    // }
+
 
     // extract_amplitude_and_phase(flip, pjump, N, Yamp, Yphase, Y, Yf, phi_ref);
     // unwrap_phase(N, Yphase);
@@ -424,13 +448,13 @@ void LISATDIonTheFly::get_tdi_Xf(cmplx *X, cmplx *Y, cmplx *Z, double* phi_ref, 
 }
 
 CUDA_CALLABLE_MEMBER
-void LISATDIonTheFly::get_amp_and_phase(double *t, double *amp, double *phase, double *params, int N, int bin_i)
+void LISATDIonTheFly::get_amp_and_phase(double t_ssb, double *t, double *amp, double *phase, double *params, int N, int bin_i)
 {
     printf("Not Implemented. TODO: best way to do this?");
 }
 
 CUDA_CALLABLE_MEMBER
-void LISATDIonTheFly::get_phase_ref(double *t, double *phase, double *params, int N, int bin_i)
+void LISATDIonTheFly::get_phase_ref(double t, double t_sc, double *phase, double *params, int N, int bin_i, int index)
 {
     printf("Not Implemented. TODO: best way to do this?");
 }
@@ -461,6 +485,151 @@ void LISATDIonTheFly::unwrap_phase(int N, double *phase)
 
         // std::cout << "aft u: " << u << " v: " << v << " q: " << q << " phase[i]: " << phase[i] << std::endl;
         
+    }
+    for(i=0; i<N ;i++)
+    {
+        printf("%d %.12e\n", i, phase[i]);
+    }
+}
+
+
+CUDA_CALLABLE_MEMBER
+void LISATDIonTheFly::new_unwrap_phase(int N, double *phase)
+{
+    double dd, ddmod;
+    double period = 2. * M_PI;
+    double interval_high =  period / 2.;
+    double interval_low = -interval_high;
+    double ph_correct[N];
+    double ph_tmp;
+    double discont = period / 2.;
+
+    if (THREAD_ZERO)
+    {
+        ph_correct[0] = 0.0;
+    }
+    CUDA_SYNC_THREADS;
+    double tmp_remainder;
+    // std::cout << "start phase[0]: " << phase[0] << std::endl;
+    for(int i=1; i<N ;i++)
+    {
+        dd = phase[i] - phase[i - 1]; 
+        tmp_remainder = remainder(dd - interval_low, period);
+        while (tmp_remainder < 0.0){tmp_remainder += period;}
+        ddmod = tmp_remainder + interval_low;
+
+        if ((ddmod == interval_low) && (dd > 0))
+        {
+            ddmod = interval_high;
+        }
+        ph_tmp = ddmod - dd;
+
+        if (abs(dd) < discont)
+        {
+            ph_tmp = 0.0;
+        }
+        ph_correct[i] = ph_tmp;
+        printf("PHASE CORR: %d %e %e %e %e %e\n", i, dd, ddmod, ph_correct[i], remainder(dd - interval_low, period), interval_low);
+    }
+    CUDA_SYNC_THREADS;
+
+    // cumsum
+    for (int i = 1; i < N; i += 1)
+    {
+        ph_correct[i] += ph_correct[i - 1];
+    }
+    CUDA_SYNC_THREADS;
+
+    double tmp;
+    for (int i = 1; i < N; i += 1)
+    {
+        tmp = phase[i] + ph_correct[i];
+        // printf("CHANGE: %d %e %e %e \n", i, phase[i], ph_correct[i], tmp);
+        phase[i] = tmp;
+
+    }
+    CUDA_SYNC_THREADS;
+//     CHANGE 135 -3.613320762606 6.283185307179587 2.669864544573587
+// CHANGE 136 2.66749491221 1.7763568394002505e-15 2.667494912210002
+// CHANGE 137 2.662627049648 1.7763568394002505e-15 2.662627049648002
+// CHANGE 138 -3.627703057173 6.283185307179588 2.655482250006588
+}
+
+CUDA_CALLABLE_MEMBER
+void LISATDIonTheFly::new_extract_amplitude_and_phase(double *flip, double *pjump, int Ns, double *As, double *Dphi, double *M, double *Mf, double *phiR)
+{
+    int count[Ns];
+    bool fix_count[Ns];
+    bool is_min;
+    double dA1, dA2, dA3, test1, test2;
+
+    for (int i = 0; i < Ns - 1; i += 1)
+    {
+        count[i] = 0;
+        pjump[i] = 0.0;
+        flip[i] = 1.0;
+    }
+    CUDA_SYNC_THREADS;
+
+    for (int i = 1; i < Ns - 1; i += 1)
+    {   
+        is_min = (As[i] < As[i - 1]) && (As[i] < As[i + 1]);
+
+        printf("CHECKIT2 %d %e %d\n", i, As[i], is_min);
+        if (is_min)
+        {
+            dA1 =  As[i + 1] + As[i - 1] - 2.0*As[i];  //regular second derivative
+            dA2 = -As[i + 1] + As[i - 1] - 2.0*As[i];  //second derivative if i+1 first negative value
+            dA3 = -As[i + 1] + As[i - 1] + 2.0*As[i];  //second derivative if i first negative value
+            test1 = (abs(dA2/dA1) < 0.1);
+            test2 = (abs(dA3/dA1) < 0.1);
+            // TODO: check this. 
+            if (test1)
+            {
+                count[i + 1] = 1;
+            }
+            else if (test2)
+            {
+                count[i] = 1;
+            }
+        }
+    }
+
+    CUDA_SYNC_THREADS;
+
+    // cumsum
+    for (int i = 1; i < Ns; i += 1)
+    {
+        count[i] += count[i - 1];
+    }
+    CUDA_SYNC_THREADS;
+
+
+    // 
+    for (int i = 0; i < Ns - 1; i += 1)
+    {
+        flip[i] = pow(-1., count[i]);
+        pjump[i] = count[i] * M_PI;
+    }    
+    CUDA_SYNC_THREADS;
+
+    if (THREAD_ZERO)
+    {
+        flip[Ns-1]  = flip[Ns-2];
+        pjump[Ns-1] = pjump[Ns-2];
+    }
+    CUDA_SYNC_THREADS;
+
+    double v;
+    for(int i=0; i<Ns ;i++)
+    {
+        As[i] = flip[i]*As[i];
+        // printf("HUH: %e %e\n", flip[i], As[i]);
+        v = remainder(phiR[i], 2 * M_PI);
+        Dphi[i] = -atan2(Mf[i],M[i])+pjump[i]-v;
+        // if ((i > 11670))
+        // printf("INIT new: %d %e %e %e %e %e %e\n", i, -atan2(Mf[i],M[i]), flip[i], pjump[i], As[i], Dphi[i], v);
+    
     }
 }
 
@@ -518,7 +687,7 @@ void LISATDIonTheFly::extract_amplitude_and_phase(double *flip, double *pjump, i
         v = remainder(phiR[i], 2 * M_PI);
         Dphi[i] = -atan2(Mf[i],M[i])+pjump[i]-v;
         // if ((i > 11670))
-        //     printf("INIT: %d %e %e %e %e %e %e\n", i, -atan2(Mf[i],M[i]), flip[i], pjump[i], As[i], Dphi[i], v);
+        printf("INIT: %d %e %e %e %e %e %e\n", i, -atan2(Mf[i],M[i]), flip[i], pjump[i], As[i], Dphi[i], v);
     
     }
     
@@ -590,7 +759,7 @@ GBTDIonTheFly::GBTDIonTheFly(Orbits *orbits_, double T_) : LISATDIonTheFly(orbit
 }
 
 CUDA_CALLABLE_MEMBER
-void GBTDIonTheFly::get_amp_and_phase(double *t, double *amp, double *phase, double *params, int N, int bin_i)
+void GBTDIonTheFly::get_amp_and_phase(double t_ssb, double *t, double *amp, double *phase, double *params, int N, int bin_i)
 {
     // params are already referenced before this. 
     for(int n=0; n<N; n++)
@@ -602,12 +771,10 @@ void GBTDIonTheFly::get_amp_and_phase(double *t, double *amp, double *phase, dou
 
 
 CUDA_CALLABLE_MEMBER
-void GBTDIonTheFly::get_phase_ref(double *t, double *phase, double *params, int N, int spline_i)
+void GBTDIonTheFly::get_phase_ref(double t, double t_sc, double *phase, double *params, int N, int spline_i, int index)
 {
-    for (int n = 0; n < N; n += 1)
-    {
-        phase[n] = ucb_phase(t[n] ,params);
-    }
+    // TD is based on sc1 time
+    phase[index] = ucb_phase(t_sc ,params);
 }
 
 CUDA_CALLABLE_MEMBER
@@ -681,7 +848,7 @@ void TDSplineTDIWaveform::check_x()
 }
 
 CUDA_CALLABLE_MEMBER
-void TDSplineTDIWaveform::get_amp_and_phase(double *t, double *amp, double *phase, double *params, int N, int spline_i)
+void TDSplineTDIWaveform::get_amp_and_phase(double t_ssb, double *t, double *amp, double *phase, double *params, int N, int spline_i)
 {
     for (int i = 0; i < N; i += 1)
     {
@@ -719,34 +886,32 @@ void TDSplineTDIWaveform::run_wave_tdi(cmplx *X, cmplx *Y, cmplx *Z, double *phi
 }
 
 CUDA_CALLABLE_MEMBER
-void TDSplineTDIWaveform::get_phase_ref(double *t, double *phase, double *params, int N, int spline_i)
-{
-    for (int i = 0; i < N; i += 1)
-    {
-        // printf("bef1: t: %d %e\n", i, t[i]);
-        phase[i] = phase_spline->eval_single(t[i], spline_i);
-        // printf("af1: t, phase: %d %e, %e\n", i, t[i], phase[i]);
-    }
+void TDSplineTDIWaveform::get_phase_ref(double t, double t_sc, double *phase, double *params, int N, int spline_i, int index)
+{   
+    // TD is based on t_sc rather than t (t_ssb)
+    phase[index] = phase_spline->eval_single(t_sc, spline_i);
 }
 
 
 
 CUDA_CALLABLE_MEMBER
-FDSplineTDIWaveform::FDSplineTDIWaveform(Orbits *orbits_, CubicSpline *amp_spline_, CubicSpline *freq_spline_): LISATDIonTheFly(orbits_)
+FDSplineTDIWaveform::FDSplineTDIWaveform(Orbits *orbits_, CubicSpline *amp_spline_, CubicSpline *freq_spline_, double *phase_ref_): LISATDIonTheFly(orbits_)
 {
     freq_spline = freq_spline_;
     amp_spline = amp_spline_;
+    phase_ref_store = phase_ref_;
 }
 
 CUDA_CALLABLE_MEMBER
-void FDSplineTDIWaveform::get_amp_and_phase(double *t, double *amp, double *phase, double *params, int N, int spline_i)
+void FDSplineTDIWaveform::get_amp_and_phase(double t_ssb, double *t, double *amp, double *phase, double *params, int N, int spline_i)
 {
-    double f = 0.0;
+    // only do frequency at ssb
+    // TODO: check this? should we just read in f_ssb?
+    double f = freq_spline->eval_single(t_ssb, spline_i);
     double t_i = 0.0;
     for (int i = 0; i < N; i += 1)
     {
         t_i = t[i];
-        f = freq_spline->eval_single(t_i, spline_i);
         // printf("bef: t, amp, phase: %d %e, %e, %e\n", i, t_i, amp[i], phase[i]);
         amp[i] = 1.0;  // for frequency, we just use 1. amp_spline->eval_single(t_i, spline_i);
         phase[i] = 2. * M_PI * f * t_i;
@@ -782,14 +947,17 @@ void FDSplineTDIWaveform::run_wave_tdi(cmplx *X, cmplx *Y, cmplx *Z, double *phi
 }
 
 CUDA_CALLABLE_MEMBER
-void FDSplineTDIWaveform::get_phase_ref(double *t, double *phase, double *params, int N, int spline_i)
+void FDSplineTDIWaveform::get_phase_ref(double t, double t_sc, double *phase, double *params, int N, int spline_i, int index)
 {
+    // in FD, has to be fixed to 2 pi f_ssb t_ssb
+    // t is t_ssb
     double f = 0.0;
     double t_i = 0.0;
-    for (int i = 0; i < N; i += 1)
-    {
-        t_i = t[i];
-        f = freq_spline->eval_single(t_i, spline_i);
-        phase[i] = 2. * M_PI * f * t_i;
-    }
+
+    // t_i = t[i];
+    // // TODO: should we make it so this is without the spline?
+    // f = freq_spline->eval_single(t_i, spline_i);
+    // phase[i] = 2. * M_PI * f * t_i;
+    phase[index] = phase_ref_store[spline_i * N + index];
+
 }

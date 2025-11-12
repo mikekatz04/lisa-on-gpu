@@ -42,7 +42,7 @@ cdef extern from "TDIonTheFly.hh":
         void check_x() except+ 
 
     cdef cppclass FDSplineTDIWaveformWrap "FDSplineTDIWaveform":
-        FDSplineTDIWaveformWrap(Orbits *orbits_, CubicSplineWrap *amp_spline_, CubicSplineWrap *phase_spline_) except+
+        FDSplineTDIWaveformWrap(Orbits *orbits_, CubicSplineWrap *amp_spline_, CubicSplineWrap *freq_spline_, double *phase_ref_) except+
         void run_wave_tdi(cmplx *X, cmplx *Y, cmplx *Z, double *phi_ref, double *params, double *t_arr, int N, int num_sub, int n_params) except+
         int get_td_spline_buffer_size(int N) except+
         void dealloc() except+
@@ -166,15 +166,17 @@ cdef class pyFDSplineTDIWaveform:
     cdef uintptr_t orbits_ptr
     cdef uintptr_t amp_spline_ptr
     cdef uintptr_t freq_spline_ptr
+    cdef uintptr_t phase_ref_ptr
 
-    def __cinit__(self, orbits_ptr, amp_spline_ptr, freq_spline_ptr):
+    def __cinit__(self, orbits_ptr, amp_spline_ptr, freq_spline_ptr, phase_ref_ptr):
         self.orbits_ptr, self.amp_spline_ptr, self.freq_spline_ptr = orbits_ptr, amp_spline_ptr, freq_spline_ptr
-
+        self.phase_ref_ptr = phase_ref_ptr
         cdef size_t orbits_in = orbits_ptr
+        cdef size_t phase_ref_in = phase_ref_ptr
         cdef size_t amp_spline_in = amp_spline_ptr
         cdef size_t freq_spline_in = freq_spline_ptr
         
-        self.g = new FDSplineTDIWaveformWrap(<Orbits*>orbits_in, <CubicSplineWrap*>amp_spline_in, <CubicSplineWrap*>freq_spline_in)
+        self.g = new FDSplineTDIWaveformWrap(<Orbits*>orbits_in, <CubicSplineWrap*>amp_spline_in, <CubicSplineWrap*>freq_spline_in, <double*> phase_ref_in)
 
     def __dealloc__(self):
         self.g.dealloc()
@@ -182,7 +184,7 @@ cdef class pyFDSplineTDIWaveform:
             del self.g
 
     def __reduce__(self):
-        return (rebuild_fd_spline, (self.orbits_ptr, self.amp_spline_ptr, self.freq_spline_ptr))
+        return (rebuild_fd_spline, (self.orbits_ptr, self.amp_spline_ptr, self.freq_spline_ptr, self.phase_ref_ptr))
 
     @property
     def ptr(self) -> long:
@@ -207,6 +209,6 @@ cdef class pyFDSplineTDIWaveform:
 
         self.g.run_wave_tdi(<cmplx *>X_in, <cmplx *>Y_in, <cmplx *>Z_in, <double*> phi_ref_in, <double *>params_in, <double *>t_arr_in, N, num_sub, n_params)
 
-def rebuild_fd_spline(orbits_ptr, amp_spline_ptr, freq_spline_ptr):
-    c = pyFDSplineTDIWaveform(orbits_ptr, amp_spline_ptr, freq_spline_ptr)
+def rebuild_fd_spline(orbits_ptr, amp_spline_ptr, freq_spline_ptr, phase_ref_ptr):
+    c = pyFDSplineTDIWaveform(orbits_ptr, amp_spline_ptr, freq_spline_ptr, phase_ref_ptr)
     return c

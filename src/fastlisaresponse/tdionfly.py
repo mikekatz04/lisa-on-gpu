@@ -4,7 +4,8 @@ from typing import Optional, List
 import warnings
 from typing import Tuple
 from copy import deepcopy
-
+from gpubackendtools import wrapper
+        
 import time
 import h5py
 
@@ -289,6 +290,24 @@ class TDIonTheFly(FastLISAResponseParallelModule):
             self.N, self.num_sub, self.n_params
         )
             
+        phase = np.angle(X.reshape(self.num_sub, self.N))
+        
+        v = phase[0, 0]
+        for i in range(X.shape[-1]):
+            u = phase[0, i]
+
+            q = np.rint(np.fabs(u-v)/(2. * np.pi))
+            if(q > 0.0):
+
+                if(v > u):
+                    u += q*2. * np.pi
+                else:
+                    u -= q*2. * np.pi
+
+            v = u
+            phase[0, i] = u
+        breakpoint()
+
         return TDTDIOutput(
             self.t_arr, 
             X.reshape(self.t_arr.shape), 
@@ -460,6 +479,7 @@ class FDTDIonTheFly(TDIonTheFly):
         t: np.ndarray,
         amp: np.ndarray | CubicSpline_scipy | CubicSplineInterpolant,
         freq: np.ndarray | CubicSpline_scipy | CubicSplineInterpolant,
+        phase_ref: np.ndarray | CubicSpline_scipy | CubicSplineInterpolant,
         *args, 
         t_input: Optional[np.ndarray] = None, 
         spline_type: int = CUBIC_SPLINE_GENERAL_SPACING,
@@ -470,7 +490,8 @@ class FDTDIonTheFly(TDIonTheFly):
 
         self.freq_input = freq
         self.amp_input = amp
-
+        self.phase_ref = phase_ref
+        
         if isinstance(amp, np.ndarray) or isinstance(amp, cp.ndarray):
             if isinstance(amp, np.ndarray):
                 assert isinstance(freq, np.ndarray) and isinstance(t, np.ndarray)
@@ -539,7 +560,8 @@ class FDTDIonTheFly(TDIonTheFly):
 
     @property
     def wave_gen(self) -> callable:
-        self._wave_gen = self.backend.pyFDSplineTDIWaveform(self.orbits.ptr, self.amp.cpp_class.ptr, self.freq.cpp_class.ptr)
+        args_in, _ = wrapper(self.orbits, self.amp.cpp_class, self.freq.cpp_class, self.phase_ref)
+        self._wave_gen = self.backend.pyFDSplineTDIWaveform(*args_in)
         return self._wave_gen
     
     @property
