@@ -73,7 +73,7 @@ void LISATDIonTheFly::get_tdi_sub(cmplx *M, int n, int N, int a, int b, int c, d
     
     //  if(freq_spline) phase = 2 * M_PI*f*t; /* mbh */
     hplus_and_hcross(t, phase, amp, Aplus, Across, cos2psi, sin2psi, &hp, &hc, &hpf, &hcf);
-    printf("%d %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e \n", n, t_orig, t, hp, hc, hpf, hcf, phase, Aplus, Across, cos2psi, sin2psi);
+    // printf("%d %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e \n", n, t_orig, t, hp, hc, hpf, hcf, phase, Aplus, Across, cos2psi, sin2psi);
               
     // M[n] += hp*Apm[b]+hc*Acm[b];
     // M[n] -= hp*App[c]+hc*Acp[c];
@@ -365,55 +365,63 @@ void LISATDIonTheFly::get_tdi_n(cmplx *X, cmplx *Y, cmplx *Z, double* phi_ref, d
 
 
 CUDA_CALLABLE_MEMBER
-void LISATDIonTheFly::get_tdi(cmplx *X, cmplx *Y, cmplx *Z, double* phi_ref, double *params, double *t_arr, int N, double costh, double phi, double cosi, double psi, int bin_i)
+void LISATDIonTheFly::get_tdi(void *buffer, int buffer_length, cmplx *X, cmplx *Y, cmplx *Z, double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double* phi_ref, double *params, double *t_arr, int N, double costh, double phi, double cosi, double psi, int bin_i)
 {   
     get_tdi_Xf(X, Y, Z, phi_ref, params, t_arr, N, costh, phi, cosi, psi, bin_i);
 
-    double flip[N];
-    double pjump[N];
-    double Xamp[N];
-    double Xphase[N];
-    double M[N];
-    double Mf[N];
-
-    for (int i = 0; i < N; i += 1)
+    if (buffer_length < 2 * N)
     {
-        flip[i] = 0.0;
-        pjump[i] = 0.0;
-        M[i] = X[i].real();
-        Mf[i] = X[i].imag();
-        Xamp[i] = abs(X[i]);
-        Xphase[i] = -atan2(Mf[i],M[i]);
+        throw std::invalid_argument("Buffer length not long enough.");
     }
+    // will get reset inside function
+    double *flip = (double*)buffer;
+    double *pjump = &flip[N];
+    int *count = (int *)&pjump[N];
+    bool *fix_count = (bool *)&count[N];
 
-    new_extract_amplitude_and_phase(&flip[0], &pjump[0], N, &Xamp[0], &Xphase[0], &M[0], &Mf[0], &phi_ref[0]);
+    new_extract_amplitude_and_phase(count, fix_count, flip, pjump, N, Xamp, Xphase, X, &phi_ref[0]);
+    new_extract_amplitude_and_phase(count, fix_count, flip, pjump, N, Xamp, Xphase, Y, &phi_ref[0]);
+    new_extract_amplitude_and_phase(count, fix_count, flip, pjump, N, Xamp, Xphase, Z, &phi_ref[0]);
     
-     FILE *fp1 = fopen("check_phase_before_unwrap.txt", "w");
-    for (int n = 0; n < N; n += 1)
-    {
-        fprintf(fp1, "%.12e, %.12e, %.12e, %.12e, %.12e, %.12e\n", t_arr[n], Xamp[n], Xphase[n], M[n], Mf[n], phi_ref[n]);
-        fflush(fp1);
-    }
-    fclose(fp1);
+    //  FILE *fp1 = fopen("check_phase_before_unwrap.txt", "w");
+    // for (int n = 0; n < N; n += 1)
+    // {
+    //     fprintf(fp1, "%.12e, %.12e, %.12e, %.12e, %.12e, %.12e\n", t_arr[n], Xamp[n], Xphase[n], M[n], Mf[n], phi_ref[n]);
+    //     fflush(fp1);
+    // }
+    // fclose(fp1);
+    
+    double *ph_correct_buffer = &flip[0];
+    new_unwrap_phase(ph_correct_buffer, N, &Xphase[0]);
+    new_unwrap_phase(ph_correct_buffer, N, &Yphase[0]);
+    new_unwrap_phase(ph_correct_buffer, N, &Zphase[0]);
 
-    new_unwrap_phase(N, &Xphase[0]);
-
+    cmplx I(0.0, 1.0);
     for (int i = 0; i < N; i += 1)
     {
-        printf("WEEET2: %d %.12e %.12e %.12e %.12e %.12e\n", i, Xamp[i], Xphase[i], X[i].real(), X[i].imag(), phi_ref[i]);
+        X[i] = Xamp[i] * gcmplx::exp(-I * Xphase[i]);
+        Y[i] = Yamp[i] * gcmplx::exp(-I * Yphase[i]);
+        Z[i] = Zamp[i] * gcmplx::exp(-I * Zphase[i]);
     }
+    CUDA_SYNC_THREADS;
 
-    FILE *fp = fopen("temp_check_amp_phase_22.txt", "w");
-    for (int n = 0; n < N; n += 1)
-    {
-        fprintf(fp, "%.12e, %.12e, %.12e, %.12e\n", t_arr[n], Xamp[n], Xphase[n], phi_ref[n]);
-        fflush(fp);
-    }
-    fclose(fp);
 
-    new_extract_phase(X, phi_ref, N, t_arr);
-    new_extract_phase(Y, phi_ref, N, t_arr);
-    new_extract_phase(Z, phi_ref, N, t_arr);
+    // for (int i = 0; i < N; i += 1)
+    // {
+    //     printf("WEEET2: %d %.12e %.12e %.12e %.12e %.12e\n", i, Xamp[i], Xphase[i], X[i].real(), X[i].imag(), phi_ref[i]);
+    // }
+
+    // FILE *fp = fopen("temp_check_amp_phase_22.txt", "w");
+    // for (int n = 0; n < N; n += 1)
+    // {
+    //     fprintf(fp, "%.12e, %.12e, %.12e, %.12e\n", t_arr[n], Xamp[n], Xphase[n], phi_ref[n]);
+    //     fflush(fp);
+    // }
+    // fclose(fp);
+
+    // new_extract_phase(X, phi_ref, N, t_arr);
+    // new_extract_phase(Y, phi_ref, N, t_arr);
+    // new_extract_phase(Z, phi_ref, N, t_arr);
 
     // for (int i = 0; i < N; i += 1)
     // {
@@ -486,28 +494,28 @@ void LISATDIonTheFly::unwrap_phase(int N, double *phase)
         // std::cout << "aft u: " << u << " v: " << v << " q: " << q << " phase[i]: " << phase[i] << std::endl;
         
     }
-    for(i=0; i<N ;i++)
-    {
-        printf("%d %.12e\n", i, phase[i]);
-    }
+    // for(i=0; i<N ;i++)
+    // {
+    //     printf("%d %.12e\n", i, phase[i]);
+    // }
 }
 
 
 CUDA_CALLABLE_MEMBER
-void LISATDIonTheFly::new_unwrap_phase(int N, double *phase)
+void LISATDIonTheFly::new_unwrap_phase(double *ph_correct_buffer, int N, double *phase)
 {
     double dd, ddmod;
     double period = 2. * M_PI;
     double interval_high =  period / 2.;
     double interval_low = -interval_high;
-    double ph_correct[N];
     double ph_tmp;
     double discont = period / 2.;
 
-    if (THREAD_ZERO)
+    for (int i = 0; i < N; i += 1)
     {
-        ph_correct[0] = 0.0;
+        ph_correct_buffer[i] = 0.0;
     }
+
     CUDA_SYNC_THREADS;
     double tmp_remainder;
     // std::cout << "start phase[0]: " << phase[0] << std::endl;
@@ -528,23 +536,23 @@ void LISATDIonTheFly::new_unwrap_phase(int N, double *phase)
         {
             ph_tmp = 0.0;
         }
-        ph_correct[i] = ph_tmp;
-        printf("PHASE CORR: %d %e %e %e %e %e\n", i, dd, ddmod, ph_correct[i], remainder(dd - interval_low, period), interval_low);
+        ph_correct_buffer[i] = ph_tmp;
+        // printf("PHASE CORR: %d %e %e %e %e %e\n", i, dd, ddmod, ph_correct_buffer[i], remainder(dd - interval_low, period), interval_low);
     }
     CUDA_SYNC_THREADS;
 
     // cumsum
     for (int i = 1; i < N; i += 1)
     {
-        ph_correct[i] += ph_correct[i - 1];
+        ph_correct_buffer[i] += ph_correct_buffer[i - 1];
     }
     CUDA_SYNC_THREADS;
 
     double tmp;
     for (int i = 1; i < N; i += 1)
     {
-        tmp = phase[i] + ph_correct[i];
-        // printf("CHANGE: %d %e %e %e \n", i, phase[i], ph_correct[i], tmp);
+        tmp = phase[i] + ph_correct_buffer[i];
+        // printf("CHANGE: %d %e %e %e \n", i, phase[i], ph_correct_buffer[i], tmp);
         phase[i] = tmp;
 
     }
@@ -556,18 +564,18 @@ void LISATDIonTheFly::new_unwrap_phase(int N, double *phase)
 }
 
 CUDA_CALLABLE_MEMBER
-void LISATDIonTheFly::new_extract_amplitude_and_phase(double *flip, double *pjump, int Ns, double *As, double *Dphi, double *M, double *Mf, double *phiR)
+void LISATDIonTheFly::new_extract_amplitude_and_phase(int *count, bool *fix_count, double *flip, double *pjump, int Ns, double *As, double *Dphi, cmplx *M, double *phiR)
 {
-    int count[Ns];
-    bool fix_count[Ns];
     bool is_min;
     double dA1, dA2, dA3, test1, test2;
 
-    for (int i = 0; i < Ns - 1; i += 1)
+    for (int i = 0; i < Ns; i += 1)
     {
         count[i] = 0;
         pjump[i] = 0.0;
         flip[i] = 1.0;
+        fix_count[i] = false;
+        As[i] = gcmplx::abs(M[i]);
     }
     CUDA_SYNC_THREADS;
 
@@ -575,7 +583,7 @@ void LISATDIonTheFly::new_extract_amplitude_and_phase(double *flip, double *pjum
     {   
         is_min = (As[i] < As[i - 1]) && (As[i] < As[i + 1]);
 
-        printf("CHECKIT2 %d %e %d\n", i, As[i], is_min);
+        // printf("CHECKIT2 %d %e %d\n", i, As[i], is_min);
         if (is_min)
         {
             dA1 =  As[i + 1] + As[i - 1] - 2.0*As[i];  //regular second derivative
@@ -586,6 +594,7 @@ void LISATDIonTheFly::new_extract_amplitude_and_phase(double *flip, double *pjum
             // TODO: check this. 
             if (test1)
             {
+                // NEED TO BE CAREFUL HERE
                 count[i + 1] = 1;
             }
             else if (test2)
@@ -626,7 +635,7 @@ void LISATDIonTheFly::new_extract_amplitude_and_phase(double *flip, double *pjum
         As[i] = flip[i]*As[i];
         // printf("HUH: %e %e\n", flip[i], As[i]);
         v = remainder(phiR[i], 2 * M_PI);
-        Dphi[i] = -atan2(Mf[i],M[i])+pjump[i]-v;
+        Dphi[i] = -atan2(M[i].imag(),M[i].real())+pjump[i]-v;
         // if ((i > 11670))
         // printf("INIT new: %d %e %e %e %e %e %e\n", i, -atan2(Mf[i],M[i]), flip[i], pjump[i], As[i], Dphi[i], v);
     
@@ -687,7 +696,7 @@ void LISATDIonTheFly::extract_amplitude_and_phase(double *flip, double *pjump, i
         v = remainder(phiR[i], 2 * M_PI);
         Dphi[i] = -atan2(Mf[i],M[i])+pjump[i]-v;
         // if ((i > 11670))
-        printf("INIT: %d %e %e %e %e %e %e\n", i, -atan2(Mf[i],M[i]), flip[i], pjump[i], As[i], Dphi[i], v);
+        // printf("INIT: %d %e %e %e %e %e %e\n", i, -atan2(Mf[i],M[i]), flip[i], pjump[i], As[i], Dphi[i], v);
     
     }
     
@@ -724,7 +733,7 @@ void LISATDIonTheFly::new_extract_phase(cmplx *M, double *phiR, int N, double *t
 CUDA_CALLABLE_MEMBER
 int LISATDIonTheFly::get_tdi_buffer_size(int N)
 {
-    return 8 * N * sizeof(double);
+    return 2 * N * sizeof(double) + 1 * N * sizeof(bool) + 1 * N * sizeof(int);
 }
 
 CUDA_CALLABLE_MEMBER
@@ -784,7 +793,9 @@ GBTDIonTheFly::~GBTDIonTheFly()
 }
 
 CUDA_CALLABLE_MEMBER
-void GBTDIonTheFly::run_wave_tdi(cmplx *X, cmplx *Y, cmplx *Z, double *phi_ref, double *params, double *t_arr, int N, int num_sub, int n_params)
+void GBTDIonTheFly::run_wave_tdi(void *buffer, int buffer_length, cmplx *X, cmplx *Y, cmplx *Z, 
+    double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase,
+    double *phi_ref, double *params, double *t_arr, int N, int num_sub, int n_params)
 {
      // TODO: CHECK THIS!!
     for (int bin_i = 0; bin_i < num_sub; bin_i += 1)
@@ -805,7 +816,10 @@ void GBTDIonTheFly::run_wave_tdi(cmplx *X, cmplx *Y, cmplx *Z, double *phi_ref, 
         double *t_here = &t_arr[bin_i * N];
 
         get_tdi(
-            &X[bin_i * N], &Y[bin_i * N], &Z[bin_i * N], &phi_ref[bin_i * N],
+            buffer, buffer_length, &X[bin_i * N], &Y[bin_i * N], &Z[bin_i * N], 
+            &Xamp[bin_i * N], &Xphase[bin_i * N],
+            &Yamp[bin_i * N], &Yphase[bin_i * N],
+            &Zamp[bin_i * N], &Zphase[bin_i * N], &phi_ref[bin_i * N],
             params_here, t_here, N, costh, phi, cosi, psi, bin_i);
         CUDA_SYNC_THREADS;   
     }
@@ -861,7 +875,9 @@ void TDSplineTDIWaveform::get_amp_and_phase(double t_ssb, double *t, double *amp
 
 
 CUDA_CALLABLE_MEMBER
-void TDSplineTDIWaveform::run_wave_tdi(cmplx *X, cmplx *Y, cmplx *Z, double *phi_ref, double *params, double *t_arr, int N, int num_sub, int n_params)
+void TDSplineTDIWaveform::run_wave_tdi(void *buffer, int buffer_length, cmplx *X, cmplx *Y, cmplx *Z, 
+    double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase,
+    double *phi_ref, double *params, double *t_arr, int N, int num_sub, int n_params)
 {
     for (int bin_i = 0; bin_i < num_sub; bin_i += 1)
     {
@@ -880,7 +896,10 @@ void TDSplineTDIWaveform::run_wave_tdi(cmplx *X, cmplx *Y, cmplx *Z, double *phi
         double *t_here = &t_arr[bin_i * N];
         
         get_tdi(
-            &X[bin_i * N], &Y[bin_i * N], &Z[bin_i * N], &phi_ref[bin_i * N], 
+            buffer, buffer_length, &X[bin_i * N], &Y[bin_i * N], &Z[bin_i * N], 
+            &Xamp[bin_i * N], &Xphase[bin_i * N],
+            &Yamp[bin_i * N], &Yphase[bin_i * N],
+            &Zamp[bin_i * N], &Zphase[bin_i * N], &phi_ref[bin_i * N],
             params_here, t_here, N, costh, phi, cosi, psi, bin_i);
     }
 }
@@ -921,7 +940,9 @@ void FDSplineTDIWaveform::get_amp_and_phase(double t_ssb, double *t, double *amp
 
 
 CUDA_CALLABLE_MEMBER
-void FDSplineTDIWaveform::run_wave_tdi(cmplx *X, cmplx *Y, cmplx *Z, double *phi_ref, double *params, double *t_arr, int N, int num_sub, int n_params)
+void FDSplineTDIWaveform::run_wave_tdi(void *buffer, int buffer_length, cmplx *X, cmplx *Y, cmplx *Z, 
+    double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase,
+    double *phi_ref, double *params, double *t_arr, int N, int num_sub, int n_params)
 {
     for (int bin_i = 0; bin_i < num_sub; bin_i += 1)
     {
@@ -941,7 +962,10 @@ void FDSplineTDIWaveform::run_wave_tdi(cmplx *X, cmplx *Y, cmplx *Z, double *phi
     
         // TODO: CHECK THIS!!
         get_tdi(
-            &X[bin_i * N], &Y[bin_i * N], &Z[bin_i * N], &phi_ref[bin_i * N], 
+            buffer, buffer_length, &X[bin_i * N], &Y[bin_i * N], &Z[bin_i * N], 
+            &Xamp[bin_i * N], &Xphase[bin_i * N],
+            &Yamp[bin_i * N], &Yphase[bin_i * N],
+            &Zamp[bin_i * N], &Zphase[bin_i * N], &phi_ref[bin_i * N],
             params_here, t_here, N, costh, phi, cosi, psi, bin_i);
     }
 }
