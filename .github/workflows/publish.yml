@@ -119,17 +119,23 @@ jobs:
             cuda_major: 12
             cuda_minor: 6
           - release: cpu
-            os: macos-13
+            os: macos-15-intel
             kind: core
             reqpython: '>=3.9'
             arch: x86_64
-            macos_ver: 13.0
+            macos_ver: 15.0
           - release: cpu
             os: macos-14
             kind: core
             reqpython: '>=3.9'
             arch: arm64
             macos_ver: 14.0
+          - release: cpu
+            os: macos-15
+            kind: core
+            reqpython: '>=3.9'
+            arch: arm64
+            macos_ver: 15.0
     steps:
       # =========================
       # = I - Retrieve sources  =
