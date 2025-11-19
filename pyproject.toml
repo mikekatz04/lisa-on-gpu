@@ -23,7 +23,7 @@ requires-python = ">= 3.9"
 dependencies = [
   "lisaanalysistools>=1.0.17",
   "exceptiongroup; python_version<'3.11'", # To access ExceptionGroup with Python 3.9 and 3.10
-  "h5py",
+  #"h5py",
   "matplotlib",
   "gpubackendtools",
   "jsonschema",                            # To validate content of file registry
@@ -72,6 +72,7 @@ optional-dependencies.doc = [
   "sphinx-rtd-theme",
   "sphinx-tippy",
   "astropy",
+  "h5py"
 ]
 
 optional-dependencies.sampling = [
@@ -79,11 +80,13 @@ optional-dependencies.sampling = [
   "fastlisaresponse",
   "lisaanalysistools",
   "astropy",
+  "h5py"
 ]
 
 optional-dependencies.testing = [
   "matplotlib",
   "astropy",
+  "h5py"
 ]
 
 [tool.setuptools_scm]
