@@ -17,7 +17,7 @@ cdef extern from "LISAResponse.hh":
                   int projections_start_ind,
                   Orbits *orbits);
 
-    void get_tdi_delays(double *delayed_links, double *input_links, int num_inputs, int num_delays, double *t_arr, int *unit_starts, int *unit_lengths, int *tdi_base_link, int *tdi_link_combinations, int *tdi_signs, int *channels, int num_units, int num_channels,
+    void get_tdi_delays(double *delayed_links, double *input_links, int num_inputs, int num_delays, double *t_arr, int *unit_starts, int *unit_lengths, int *tdi_base_link, int *tdi_link_combinations, double *tdi_signs, int *channels, int num_units, int num_channels,
                     int order, double sampling_frequency, int buffer_integer, double *A_in, double deps, int num_A, double *E_in, int tdi_start_ind, Orbits *orbits);
 
 
@@ -66,5 +66,5 @@ def get_tdi_delays_wrap(*args, **kwargs):
     cdef size_t channels_in = channels
     cdef size_t orbits_in = orbits
 
-    get_tdi_delays(<double*> delayed_links_in, <double*> y_gw_in, num_inputs, num_delays, <double*> t_arr_in, <int *>unit_starts_in, <int *>unit_lengths_in, <int*> tdi_base_link_in, <int*> tdi_link_combinations_in, <int*> tdi_signs_in, <int*> channels_in, num_units, num_channels,
+    get_tdi_delays(<double*> delayed_links_in, <double*> y_gw_in, num_inputs, num_delays, <double*> t_arr_in, <int *>unit_starts_in, <int *>unit_lengths_in, <int*> tdi_base_link_in, <int*> tdi_link_combinations_in, <double*> tdi_signs_in, <int*> channels_in, num_units, num_channels,
                    order, sampling_frequency, buffer_integer, <double*> A_in_in, deps, num_A, <double*> E_in_in, tdi_start_ind, <Orbits*> orbits_in)
