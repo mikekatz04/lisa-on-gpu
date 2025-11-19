@@ -100,9 +100,18 @@ execute_process(
   OUTPUT_VARIABLE LISATOOLS_DIR
   OUTPUT_STRIP_TRAILING_WHITESPACE)
 
+execute_process(
+  COMMAND "${PYTHON_EXECUTABLE}" -c "if True:
+    import lisatools
+    print(lisatools._version.version)
+  OUTPUT_VARIABLE LISATOOLS_VERSION
+  OUTPUT_STRIP_TRAILING_WHITESPACE)
+
 message(STATUS "LISATOOLS location is ${LISATOOLS_DIR}.")
-file(GLOB MY_FILES "${LISATOOLS_DIR}/cutils/*.hpp")
-message(STATUS "Source files: ${MY_FILES}")
+file(GLOB MY_FILES "${LISATOOLS_DIR}/cutils/*")
+message(STATUS "LISATOOLS Source files: ${MY_FILES}")
+message(STATUS "LISATOOLS version: ${LISATOOLS_VERSION}")
+
 # I. Process fastlisaresponse_utils_wrap.pyx into a C++ file
 add_custom_command(
   OUTPUT "responselisa.cxx"
