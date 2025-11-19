@@ -3,7 +3,7 @@ requires = [
   "Cython",
   "numpy",
   "astropy",  # TODO: remove astropy?
-  "lisaanalysistools>=1.0.17",
+  "lisaanalysistools>=1.1.15",
   "scikit_build_core",
 ]
 build-backend = "scikit_build_core.build"
@@ -21,7 +21,7 @@ readme = "README.md"
 requires-python = ">= 3.9"
 
 dependencies = [
-  "lisaanalysistools>=1.0.17",
+  "lisaanalysistools>=1.1.15",
   "exceptiongroup; python_version<'3.11'", # To access ExceptionGroup with Python 3.9 and 3.10
   # "h5py",
   "matplotlib",
@@ -77,7 +77,7 @@ optional-dependencies.doc = [
 optional-dependencies.sampling = [
   "eryn",
   "fastlisaresponse",
-  "lisaanalysistools",
+  "lisaanalysistools>=1.1.15",
   "astropy",
 ]
 
