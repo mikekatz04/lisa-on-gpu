@@ -54,7 +54,8 @@ jobs:
         with:
           python-version: '3.12'
       - run: |
-          pip install setuptools_scm
+          pip install setuptools_scm h5py
+
       # ========================
       # = III - Detect version =
       # ========================
