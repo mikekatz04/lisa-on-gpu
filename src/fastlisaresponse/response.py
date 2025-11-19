@@ -341,7 +341,7 @@ class pyResponseTDI(FastLISAResponseParallelModule):
                 tdi_base_links.append(
                     self._cyclic_permutation(tmp["link"], permutation_number)
                 )
-                tdi_signs.append(tmp["sign"])
+                tdi_signs.append(float(tmp["sign"]))
                 channels.append(permutation_number)
                 if len(tmp["links_for_delay"]) == 0:
                     tdi_link_combinations.append(-11)
@@ -364,7 +364,7 @@ class pyResponseTDI(FastLISAResponseParallelModule):
         self.tdi_link_combinations = self.xp.asarray(tdi_link_combinations).astype(
             self.xp.int32
         )
-        self.tdi_signs = self.xp.asarray(tdi_signs).astype(self.xp.int32)
+        self.tdi_signs = self.xp.asarray(tdi_signs).astype(self.xp.float64)
         self.channels = self.xp.asarray(channels).astype(self.xp.int32)
         assert len(self.tdi_link_combinations) == len(self.tdi_operation_index)
 

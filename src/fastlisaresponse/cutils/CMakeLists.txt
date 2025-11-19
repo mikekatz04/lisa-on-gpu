@@ -366,32 +366,25 @@ endfunction()
 # ----------------
 
 
-# 0. Download lisa analysis tools c files.
-# file(
-#   DOWNLOAD 
-#   https://raw.githubusercontent.com/mikekatz04/LISAanalysistools/refs/heads/main/src/lisatools/cutils/Detector.cu 
-#   "./src/fastlisaresponse/cutils/Detector.cu"
-# )
-# file(
-#   DOWNLOAD 
-#   https://raw.githubusercontent.com/mikekatz04/LISAanalysistools/refs/heads/main/src/lisatools/cutils/Detector.hpp 
-#   "./src/fastlisaresponse/cutils/Detector.hpp"
-# )
-# file(
-#   DOWNLOAD 
-#   https://raw.githubusercontent.com/mikekatz04/LISAanalysistools/refs/heads/main/src/lisatools/cutils/global.hpp 
-#   "./src/fastlisaresponse/cutils/global.hpp"
-# )
-# file(
-#   DOWNLOAD 
-#   https://raw.githubusercontent.com/mikekatz04/GPUBackendTools/refs/heads/main/src/gpubackendtools/cutils/Interpolate.cu 
-#   "./src/fastlisaresponse/cutils/Interpolate.cu"
-# )
-# file(
-#   DOWNLOAD 
-#   https://raw.githubusercontent.com/mikekatz04/GPUBackendTools/refs/heads/main/src/gpubackendtools/cutils/Interpolate.hh 
-#   "./src/fastlisaresponse/cutils/Interpolate.hh"
-# )
+execute_process(
+  COMMAND "${PYTHON_EXECUTABLE}" -c "if True:
+    import lisatools
+    _tmp = lisatools.__file__
+    print(_tmp.split('/__init__.py')[0])"
+  OUTPUT_VARIABLE LISATOOLS_DIR
+  OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+execute_process(
+  COMMAND "${PYTHON_EXECUTABLE}" -c "if True:
+    import lisatools
+    print(lisatools._version.version)"
+  OUTPUT_VARIABLE LISATOOLS_VERSION
+  OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+message(STATUS "LISATOOLS location is ${LISATOOLS_DIR}.")
+file(GLOB MY_FILES "${LISATOOLS_DIR}/cutils/*")
+message(STATUS "LISATOOLS Source files: ${MY_FILES}")
+message(STATUS "LISATOOLS version: ${LISATOOLS_VERSION}")
 
 # I. Process fastlisaresponse_utils_wrap.pyx into a C++ file
 add_custom_command(
@@ -403,6 +396,26 @@ add_custom_command(
     "responselisa" -I "${CMAKE_CURRENT_SOURCE_DIR}"
   DEPENDS "responselisa.pyx"
   VERBATIM)
+
+  message(STATUS "CHECKING: ${LISATOOLS_DIR}/cutils/global.hpp  ${CMAKE_CURRENT_SOURCE_DIR}/global.hpp")
+  
+file(COPY_FILE "${LISATOOLS_DIR}/cutils/global.hpp" "${CMAKE_CURRENT_SOURCE_DIR}/global.hpp"
+     RESULT copy_result)
+if(NOT copy_result EQUAL 0)
+    message(FATAL_ERROR "Failed to copy file: ${copy_result}")
+endif()
+
+file(COPY_FILE "${LISATOOLS_DIR}/cutils/Detector.hpp" "${CMAKE_CURRENT_SOURCE_DIR}/Detector.hpp"
+     RESULT copy_result)
+if(NOT copy_result EQUAL 0)
+    message(FATAL_ERROR "Failed to copy file: ${copy_result}")
+endif()
+
+file(COPY_FILE "${LISATOOLS_DIR}/cutils/Detector.cu" "${CMAKE_CURRENT_SOURCE_DIR}/Detector.cu"
+     RESULT copy_result)
+if(NOT copy_result EQUAL 0)
+    message(FATAL_ERROR "Failed to copy file: ${copy_result}")
+endif()
 
 # II. Declare the CPU backend
 if(FASTLISA_WITH_CPU)
@@ -431,6 +444,8 @@ endif()
 
 # III. Declare the GPU backend
 if(FASTLISA_WITH_GPU)
+
+
   message(STATUS "This is the cuda archs to be run: ${FASTLISA_CUDA_ARCH}")
   
   python_add_library(fastlisaresponse_gpu_responselisa MODULE WITH_SOABI responselisa.cxx Detector.cu LISAResponse.cu)
