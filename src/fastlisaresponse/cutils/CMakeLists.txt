@@ -103,7 +103,7 @@ execute_process(
 execute_process(
   COMMAND "${PYTHON_EXECUTABLE}" -c "if True:
     import lisatools
-    print(lisatools._version.version)
+    print(lisatools._version.version)"
   OUTPUT_VARIABLE LISATOOLS_VERSION
   OUTPUT_STRIP_TRAILING_WHITESPACE)
 
