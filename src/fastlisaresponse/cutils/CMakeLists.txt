@@ -376,15 +376,34 @@ execute_process(
 
 execute_process(
   COMMAND "${PYTHON_EXECUTABLE}" -c "if True:
+    import gpubackendtools
+    _tmp = gpubackendtools.__file__
+    print(_tmp.split('/__init__.py')[0])"
+  OUTPUT_VARIABLE GBT_DIR
+  OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+execute_process(
+  COMMAND "${PYTHON_EXECUTABLE}" -c "if True:
     import lisatools
     print(lisatools._version.version)"
   OUTPUT_VARIABLE LISATOOLS_VERSION
   OUTPUT_STRIP_TRAILING_WHITESPACE)
 
-message(STATUS "LISATOOLS location is ${LISATOOLS_DIR}.")
-file(GLOB MY_FILES "${LISATOOLS_DIR}/cutils/*")
-message(STATUS "LISATOOLS Source files: ${MY_FILES}")
 message(STATUS "LISATOOLS version: ${LISATOOLS_VERSION}")
+
+execute_process(
+  COMMAND "${PYTHON_EXECUTABLE}" -c "if True:
+    import gpubackendtools
+    print(gpubackendtools._version.version)"
+  OUTPUT_VARIABLE GBT_VERSION
+  OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+message(STATUS "GBT version: ${GBT_VERSION}")
+
+message(STATUS "LISATOOLS location is ${LISATOOLS_DIR}.")
+message(STATUS "GBT location is ${GBT_DIR}.")
+file(GLOB MY_FILES "${LISATOOLS_DIR}/cutils/*" "${GBT_DIR}/cutils/*")
+message(STATUS "Source files: ${MY_FILES}")
 
 # I. Process fastlisaresponse_utils_wrap.pyx into a C++ file
 add_custom_command(
@@ -399,23 +418,27 @@ add_custom_command(
 
   message(STATUS "CHECKING: ${LISATOOLS_DIR}/cutils/global.hpp  ${CMAKE_CURRENT_SOURCE_DIR}/global.hpp")
   
-file(COPY_FILE "${LISATOOLS_DIR}/cutils/global.hpp" "${CMAKE_CURRENT_SOURCE_DIR}/global.hpp"
-     RESULT copy_result)
-if(NOT copy_result EQUAL 0)
-    message(FATAL_ERROR "Failed to copy file: ${copy_result}")
-endif()
+set(FILES_TO_COPY 
+  "${LISATOOLS_DIR}/cutils/global.hpp"
+  "${LISATOOLS_DIR}/cutils/Detector.hpp"
+  "${LISATOOLS_DIR}/cutils/Detector.cu"
+  "${GBT_DIR}/cutils/gbt_global.h"
+  "${GBT_DIR}/cutils/cuda_complex.hpp"
+  "${GBT_DIR}/cutils/Interpolate.hh"
+  "${GBT_DIR}/cutils/Interpolate.cu"
+  "${GBT_DIR}/cutils/CubicSpline.cu"
+)
+# MY_LIST will be "string1;string2;another string"
 
-file(COPY_FILE "${LISATOOLS_DIR}/cutils/Detector.hpp" "${CMAKE_CURRENT_SOURCE_DIR}/Detector.hpp"
+foreach(FILE_TO_COPY IN LISTS FILES_TO_COPY)
+  get_filename_component(NEW_FILE "${FILE_TO_COPY}" NAME)
+  file(COPY_FILE "${FILE_TO_COPY}" "${CMAKE_CURRENT_SOURCE_DIR}/${NEW_FILE}"
      RESULT copy_result)
-if(NOT copy_result EQUAL 0)
-    message(FATAL_ERROR "Failed to copy file: ${copy_result}")
-endif()
+  if(NOT copy_result EQUAL 0)
+      message(FATAL_ERROR "Failed to copy file: ${copy_result} (${FILE_TO_COPY})")
+  endif()
+endforeach()
 
-file(COPY_FILE "${LISATOOLS_DIR}/cutils/Detector.cu" "${CMAKE_CURRENT_SOURCE_DIR}/Detector.cu"
-     RESULT copy_result)
-if(NOT copy_result EQUAL 0)
-    message(FATAL_ERROR "Failed to copy file: ${copy_result}")
-endif()
 
 # II. Declare the CPU backend
 if(FASTLISA_WITH_CPU)
