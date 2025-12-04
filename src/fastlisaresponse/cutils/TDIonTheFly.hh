@@ -53,8 +53,8 @@ class LISATDIonTheFly{
 
         CUDA_CALLABLE_MEMBER 
         void run_wave_tdi(
-            cmplx *tdi_channels_arr, 
-            double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double *phi_ref, 
+            void *buffer, int buffer_length, cmplx *tdi_channels_arr, 
+            double *tdi_amp, double *tdi_phase, double *phi_ref, 
             double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels
         );
         CUDA_CALLABLE_MEMBER 
@@ -64,7 +64,7 @@ class LISATDIonTheFly{
         // CUDA_CALLABLE_MEMBER
         // void LISA_polarization_tensor(double costh, double phi, double *eplus, double *ecross, double *k);
         CUDA_CALLABLE_MEMBER
-        void get_tdi(cmplx *tdi_channels_arr, double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double* phi_ref, double *params, double *t_arr, int N, int bin_i, int nchannels);
+        void get_tdi(void *buffer, int buffer_length, cmplx *tdi_channels_arr, double *tdi_amp, double *tdi_phase, double* phi_ref, double *params, double *t_arr, int N, int bin_i, int nchannels);
         // CUDA_CALLABLE_MEMBER
         // virtual void get_amp_and_phase(double t_ssb, double *t, double *amp, double *phase, double *params, int N, int bin_i);
         // CUDA_CALLABLE_MEMBER

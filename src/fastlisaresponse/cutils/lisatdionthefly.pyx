@@ -35,15 +35,19 @@ cdef extern from "TDIonTheFly.hh":
     cdef cppclass GBTDIonTheFlyWrap "GBTDIonTheFly":
         GBTDIonTheFlyWrap(Orbits *orbits, TDIConfigWrap *tdi_config, double T_) except+
         void dealloc() except+
-        void run_wave_tdi(cmplx *tdi_channels_arr, 
-            double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase,
+        void run_wave_tdi(
+            void *buffer, int buffer_length,
+            cmplx *tdi_channels_arr, 
+            double *tdi_amp, double *tdi_phase,
             double *phi_ref, double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels) except+
         int get_gb_buffer_size(int N) except+
 
     cdef cppclass TDSplineTDIWaveformWrap "TDSplineTDIWaveform":
         TDSplineTDIWaveformWrap(Orbits *orbits_, TDIConfigWrap *tdi_config, CubicSplineWrap *amp_spline_, CubicSplineWrap *phase_spline_) except+
-        void run_wave_tdi(cmplx *tdi_channels_arr, 
-            double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase,
+        void run_wave_tdi(
+            void *buffer, int buffer_length,
+            cmplx *tdi_channels_arr, 
+            double *tdi_amp, double *tdi_phase,
             double *phi_ref, double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels) except+
         int get_td_spline_buffer_size(int N) except+
         void dealloc() except+
@@ -51,8 +55,10 @@ cdef extern from "TDIonTheFly.hh":
 
     cdef cppclass FDSplineTDIWaveformWrap "FDSplineTDIWaveform":
         FDSplineTDIWaveformWrap(Orbits *orbits_, TDIConfigWrap *tdi_config, CubicSplineWrap *amp_spline_, CubicSplineWrap *freq_spline_, double *phase_ref_) except+
-        void run_wave_tdi(cmplx *tdi_channels_arr, 
-            double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase,
+        void run_wave_tdi(
+            void *buffer, int buffer_length,
+            cmplx *tdi_channels_arr, 
+            double *tdi_amp, double *tdi_phase,
             double *phi_ref, double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels) except+
         int get_fd_spline_buffer_size(int N) except+
         void dealloc() except+
@@ -191,27 +197,26 @@ cdef class pyGBTDIonTheFly:
 
     def run_wave_tdi(self, *args, **kwargs):
         (
+            buffer, buffer_length,
             tdi_channels_arr,
-            Xamp, Xphase, Yamp, Yphase, Zamp, Zphase,
+            tdi_amp, tdi_phase,
             phi_ref,
             params, t_arr,
             N, num_sub, n_params, nchannels
         ), tkwargs = wrapper(*args, **kwargs)
 
-        # cdef size_t buffer_in = buffer
+        cdef size_t buffer_in = buffer
         cdef size_t tdi_channels_arr_in = tdi_channels_arr
-        cdef size_t Xamp_in = Xamp
-        cdef size_t Yamp_in = Yamp
-        cdef size_t Zamp_in = Zamp
-        cdef size_t Xphase_in = Xphase
-        cdef size_t Yphase_in = Yphase
-        cdef size_t Zphase_in = Zphase
+        cdef size_t tdi_amp_in = tdi_amp
+        cdef size_t tdi_phase_in = tdi_phase
         cdef size_t phi_ref_in = phi_ref
         cdef size_t params_in = params
         cdef size_t t_arr_in = t_arr
 
-        self.g.run_wave_tdi(<cmplx *> tdi_channels_arr_in, 
-        <double*> Xamp_in, <double*> Xphase_in, <double*> Yamp_in, <double*> Yphase_in, <double*> Zamp_in, <double*> Zphase_in,
+        self.g.run_wave_tdi(
+            <void *>buffer_in, buffer_length,
+            <cmplx *> tdi_channels_arr_in, 
+        <double *> tdi_amp_in, <double *> tdi_phase_in,
         <double*> phi_ref_in, <double *>params_in, <double *>t_arr_in, N, num_sub, n_params, nchannels)
 
     def get_buffer_size(self, N: int) -> int:
@@ -266,27 +271,26 @@ cdef class pyTDSplineTDIWaveform:
 
     def run_wave_tdi(self, *args, **kwargs):
         (
+            buffer, buffer_length,
             tdi_channels_arr,
-            Xamp, Xphase, Yamp, Yphase, Zamp, Zphase,
+            tdi_amp, tdi_phase,
             phi_ref,
             params, t_arr,
             N, num_sub, n_params, nchannels
         ), tkwargs = wrapper(*args, **kwargs)
 
-        # cdef size_t buffer_in = buffer
+        cdef size_t buffer_in = buffer
         cdef size_t tdi_channels_arr_in = tdi_channels_arr
-        cdef size_t Xamp_in = Xamp
-        cdef size_t Yamp_in = Yamp
-        cdef size_t Zamp_in = Zamp
-        cdef size_t Xphase_in = Xphase
-        cdef size_t Yphase_in = Yphase
-        cdef size_t Zphase_in = Zphase
+        cdef size_t tdi_amp_in = tdi_amp
+        cdef size_t tdi_phase_in = tdi_phase
         cdef size_t phi_ref_in = phi_ref
         cdef size_t params_in = params
         cdef size_t t_arr_in = t_arr
 
-        self.g.run_wave_tdi(<cmplx *> tdi_channels_arr_in, 
-        <double*> Xamp_in, <double*> Xphase_in, <double*> Yamp_in, <double*> Yphase_in, <double*> Zamp_in, <double*> Zphase_in,
+        self.g.run_wave_tdi(
+            <void *>buffer_in, buffer_length,
+            <cmplx *> tdi_channels_arr_in, 
+        <double *> tdi_amp_in, <double *> tdi_phase_in,
         <double*> phi_ref_in, <double *>params_in, <double *>t_arr_in, N, num_sub, n_params, nchannels)
 
 
@@ -332,27 +336,26 @@ cdef class pyFDSplineTDIWaveform:
 
     def run_wave_tdi(self, *args, **kwargs):
         (
+            buffer, buffer_length,
             tdi_channels_arr,
-            Xamp, Xphase, Yamp, Yphase, Zamp, Zphase,
+            tdi_amp, tdi_phase,
             phi_ref,
             params, t_arr,
             N, num_sub, n_params, nchannels
         ), tkwargs = wrapper(*args, **kwargs)
 
-        # cdef size_t buffer_in = buffer
+        cdef size_t buffer_in = buffer
         cdef size_t tdi_channels_arr_in = tdi_channels_arr
-        cdef size_t Xamp_in = Xamp
-        cdef size_t Yamp_in = Yamp
-        cdef size_t Zamp_in = Zamp
-        cdef size_t Xphase_in = Xphase
-        cdef size_t Yphase_in = Yphase
-        cdef size_t Zphase_in = Zphase
+        cdef size_t tdi_amp_in = tdi_amp
+        cdef size_t tdi_phase_in = tdi_phase
         cdef size_t phi_ref_in = phi_ref
         cdef size_t params_in = params
         cdef size_t t_arr_in = t_arr
 
-        self.g.run_wave_tdi(<cmplx *> tdi_channels_arr_in, 
-        <double*> Xamp_in, <double*> Xphase_in, <double*> Yamp_in, <double*> Yphase_in, <double*> Zamp_in, <double*> Zphase_in,
+        self.g.run_wave_tdi(
+            <void *>buffer_in, buffer_length,
+            <cmplx *> tdi_channels_arr_in, 
+        <double *> tdi_amp_in, <double *> tdi_phase_in,
         <double*> phi_ref_in, <double *>params_in, <double *>t_arr_in, N, num_sub, n_params, nchannels)
 
 def rebuild_fd_spline(orbits_ptr, tdi_config_ptr, amp_spline_ptr, freq_spline_ptr, phase_ref_ptr):

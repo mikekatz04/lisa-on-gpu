@@ -481,6 +481,11 @@ void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double
 
     for (int i = start; i < N; i += increment)
     {
+        for (int channel = 0; channel < tdi_config->num_channels; channel += 1)
+        {
+            tdi_channels_arr[channel * N + i] = 0.0;
+        }
+        CUDA_SYNC_THREADS;
         t = t_data[i];
         temp_output = 0.0;
         for (int unit_i = 0; unit_i < tdi_config->num_units; unit_i += increment)
@@ -521,7 +526,7 @@ void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double
             x0 = orbits->get_pos(time_eval, sc0);
             x1 = orbits->get_pos(time_eval, sc1);
             n = x0 - x1; // # TODO: check if this right
-            norm = n.dot(n);
+            norm = sqrt(n.dot(n));
             n = n / norm;
 
             k_dot_n = k.dot(n);
@@ -547,9 +552,9 @@ void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double
             get_hp_hc(&hp_del0, &hc_del0, delay0, params, phase_change, bin_i);
             get_hp_hc(&hp_del1, &hc_del1, delay1, params, phase_change, bin_i);
             
-            large_factor_real = (hp_del0 - hp_del1) * xi_p + (hc_del0 - hc_del1) * xi_c;
-            
+            large_factor_imag = (hp_del0 - hp_del1) * xi_p + (hc_del0 - hc_del1) * xi_c;
             tdi_channels_arr[channel * N + i] += pre_factor * (large_factor_real + I * large_factor_imag);
+            // printf("%d %d %d hpdel: %e prefactor: %e large_factor_real: %e large_factor_imag: %e xi_p: %e delay0:%e L: %e tdi: %e %e kdotn: %e n: (%e %e %e)\n", channel, unit_i, i, hp_del0, pre_factor, large_factor_real, large_factor_imag, xi_p, delay0, L, tdi_channels_arr[channel * N + i].real(), tdi_channels_arr[channel * N + i].imag(), k_dot_n, n.x, n.y, n.z);
             CUDA_SYNC_THREADS;
         }
     }
@@ -588,26 +593,26 @@ void LISATDIonTheFly::get_hp_hc(double *hp, double *hc, double t, double *params
 
 
 CUDA_CALLABLE_MEMBER
-void LISATDIonTheFly::get_tdi(cmplx *tdi_channels_arr, double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double* phi_ref, double *params, double *t_arr, int N, int bin_i, int nchannels)
+void LISATDIonTheFly::get_tdi(void *buffer, int buffer_length, cmplx *tdi_channels_arr, double *tdi_amp, double *tdi_phase, double* phi_ref, double *params, double *t_arr, int N, int bin_i, int nchannels)
 {   
-    // void *buffer, int buffer_length, 
-    // if (buffer_length < 2 * N)
-    // {
-    //     throw std::invalid_argument("Buffer length not long enough.");
-    // }
+
+    if (buffer_length < 2 * N * sizeof(double) + 1 * N * sizeof(int) + 1 * N * sizeof(bool))
+    {
+        throw std::invalid_argument("Buffer length not long enough.");
+    }
 
     get_tdi_Xf(tdi_channels_arr, params, t_arr, N, bin_i);
     CUDA_SYNC_THREADS;
     
     // will get reset inside function
-    // double *flip = (double*)buffer;
-    // double *pjump = &flip[N];
-    // int *count = (int *)&pjump[N];
-    // bool *fix_count = (bool *)&count[N];
+    double *flip = (double*)buffer;
+    double *pjump = &flip[N];
+    int *count = (int *)&pjump[N];
+    bool *fix_count = (bool *)&count[N];
 
-    // new_extract_amplitude_and_phase(count, fix_count, flip, pjump, N, Xamp, Xphase, X, &phi_ref[0]);
-    // new_extract_amplitude_and_phase(count, fix_count, flip, pjump, N, Xamp, Xphase, Y, &phi_ref[0]);
-    // new_extract_amplitude_and_phase(count, fix_count, flip, pjump, N, Xamp, Xphase, Z, &phi_ref[0]);
+    new_extract_amplitude_and_phase(count, fix_count, flip, pjump, N, &tdi_amp[0], &tdi_phase[0], &tdi_channels_arr[0], &phi_ref[0]);
+    new_extract_amplitude_and_phase(count, fix_count, flip, pjump, N, &tdi_amp[N], &tdi_phase[N], &tdi_channels_arr[N], &phi_ref[0]);
+    new_extract_amplitude_and_phase(count, fix_count, flip, pjump, N, &tdi_amp[2 * N], &tdi_phase[2 * N], &tdi_channels_arr[2 * N], &phi_ref[0]);
     
     // //  FILE *fp1 = fopen("check_phase_before_unwrap.txt", "w");
     // // for (int n = 0; n < N; n += 1)
@@ -617,10 +622,10 @@ void LISATDIonTheFly::get_tdi(cmplx *tdi_channels_arr, double *Xamp, double *Xph
     // // }
     // // fclose(fp1);
     
-    // double *ph_correct_buffer = &flip[0];
-    // new_unwrap_phase(ph_correct_buffer, N, &Xphase[0]);
-    // new_unwrap_phase(ph_correct_buffer, N, &Yphase[0]);
-    // new_unwrap_phase(ph_correct_buffer, N, &Zphase[0]);
+    double *ph_correct_buffer = &flip[0];
+    new_unwrap_phase(ph_correct_buffer, N, &tdi_phase[0]);
+    new_unwrap_phase(ph_correct_buffer, N, &tdi_phase[N]);
+    new_unwrap_phase(ph_correct_buffer, N, &tdi_phase[2 * N]);
 
     // cmplx I(0.0, 1.0);
     // for (int i = 0; i < N; i += 1)
@@ -794,7 +799,6 @@ void LISATDIonTheFly::new_extract_amplitude_and_phase(int *count, bool *fix_coun
 {
     bool is_min;
     double dA1, dA2, dA3, test1, test2;
-
     for (int i = 0; i < Ns; i += 1)
     {
         count[i] = 0;
@@ -804,7 +808,6 @@ void LISATDIonTheFly::new_extract_amplitude_and_phase(int *count, bool *fix_coun
         As[i] = gcmplx::abs(M[i]);
     }
     CUDA_SYNC_THREADS;
-
     for (int i = 1; i < Ns - 1; i += 1)
     {   
         is_min = (As[i] < As[i - 1]) && (As[i] < As[i + 1]);
@@ -1083,8 +1086,8 @@ GBTDIonTheFly::~GBTDIonTheFly()
 }
 
 CUDA_CALLABLE_MEMBER
-void LISATDIonTheFly::run_wave_tdi(cmplx *tdi_channels_arr, 
-    double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double *phi_ref, 
+void LISATDIonTheFly::run_wave_tdi(void *buffer, int buffer_length, cmplx *tdi_channels_arr, 
+    double *tdi_amp, double *tdi_phase, double *phi_ref, 
     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels)
 {
      // TODO: CHECK THIS!!
@@ -1096,10 +1099,10 @@ void LISATDIonTheFly::run_wave_tdi(cmplx *tdi_channels_arr,
         double *t_here = &t_arr[bin_i * N];
 
         get_tdi(
+            buffer, buffer_length,
             &tdi_channels_arr[bin_i * nchannels * N], 
-            &Xamp[bin_i * N], &Xphase[bin_i * N],
-            &Yamp[bin_i * N], &Yphase[bin_i * N],
-            &Zamp[bin_i * N], &Zphase[bin_i * N], &phi_ref[bin_i * N],
+            &tdi_amp[bin_i * nchannels * N], &tdi_phase[bin_i * nchannels * N],
+            &phi_ref[bin_i * N],
             params_here, t_here, N, bin_i, nchannels);
         CUDA_SYNC_THREADS;   
     }

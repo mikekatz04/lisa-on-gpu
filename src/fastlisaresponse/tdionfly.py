@@ -157,18 +157,13 @@ class TDIonTheFly(FastLISAResponseParallelModule):
 
     def __call__(self, inc, psi, lam, beta, return_spline: bool =False):
         
-
         params = np.array([inc, psi, lam, beta]).T.flatten().copy()
 
         assert len(params) == 4 * self.num_sub
 
         tdi_channels_arr = np.zeros((self.N * self.tdi_config.nchannels * self.num_sub), dtype=complex)
-        Xamp = np.zeros((self.N * self.num_sub), dtype=float)
-        Xphase = np.zeros((self.N * self.num_sub), dtype=float)
-        Yamp = np.zeros((self.N * self.num_sub), dtype=float)
-        Yphase = np.zeros((self.N * self.num_sub), dtype=float)
-        Zamp = np.zeros((self.N * self.num_sub), dtype=float)
-        Zphase = np.zeros((self.N * self.num_sub), dtype=float)
+        tdi_amp = np.zeros((self.N * self.tdi_config.nchannels * self.num_sub), dtype=float)
+        tdi_phase = np.zeros((self.N * self.tdi_config.nchannels * self.num_sub), dtype=float)
         phase_ref = np.zeros((self.N * self.num_sub), dtype=float)
         assert int(np.prod(self.t_arr.shape)) == self.N * self.num_sub
 
@@ -177,21 +172,20 @@ class TDIonTheFly(FastLISAResponseParallelModule):
         buffer = np.zeros(buffer_length, dtype=bool)
 
         self.wave_gen.run_wave_tdi(
+            buffer, buffer_length,
             tdi_channels_arr,
-            Xamp, Xphase, Yamp, Yphase, Zamp, Zphase, 
+            tdi_amp, tdi_phase,
             phase_ref,
             params, self.t_arr.flatten().copy(),
             self.N, self.num_sub, self.n_params, self.tdi_config.nchannels
         )
 
+        reshape_shape = (self.num_sub, self.tdi_config.nchannels, self.N)
+
         return TDTDIOutput(
             self.t_arr, 
-            Xamp.reshape(self.t_arr.shape), 
-            Xphase.reshape(self.t_arr.shape), 
-            Yamp.reshape(self.t_arr.shape), 
-            Yphase.reshape(self.t_arr.shape), 
-            Zamp.reshape(self.t_arr.shape), 
-            Zphase.reshape(self.t_arr.shape), 
+            tdi_amp.reshape(reshape_shape), 
+            tdi_phase.reshape(reshape_shape), 
             phase_ref.reshape(self.t_arr.shape),
             fill_splines=return_spline,
         )
@@ -289,17 +283,17 @@ class TDTDIonTheFly(TDIonTheFly):
     
 
 class TDTDIOutput(FastLISAResponseParallelModule):
-    def __init__(self, t, Xamp, Xphase, Yamp, Yphase, Zamp, Zphase, phase_ref, fill_splines=True, **kwargs):
-        self.Xamp, self.Xphase, self.Yamp, self.Yphase, self.Zamp, self.Zphase = Xamp, Xphase, Yamp, Yphase, Zamp, Zphase
+    def __init__(self, t, tdi_amp, tdi_phase, phase_ref, fill_splines=True, **kwargs):
+        self.tdi_amp, self.tdi_phase = tdi_amp, tdi_phase
         self.phase_ref = phase_ref
         self.t = t
         super().__init__(**kwargs)
         self.fill_splines = fill_splines
         if fill_splines:
             self._splines = {}
-            for name in ["Xamp", "Xphase", "Yamp", "Yphase", "Zamp", "Zphase", "phase_ref"]:
+            for name in ["tdi_amp", "tdi_phase", "phase_ref"]:
                 self._splines[name] = self.build_spline(self.t, getattr(self, name))
-                
+
     def _get_spl(self, key: str) -> CubicSpline:
         assert self.fill_splines
         return self._splines[key]
@@ -309,7 +303,11 @@ class TDTDIOutput(FastLISAResponseParallelModule):
         return self._get_spl("phase_ref")
     
     def build_spline(self, x, y, **kwargs) -> CubicSplineInterpolant:
-        return CubicSplineInterpolant(x, y, **kwargs)
+        if x.ndim == 2 and y.ndim == 3:
+            x_in =  np.repeat(x[:, None, :], y.shape[1], axis=1)
+        else:
+            x_in = x.copy()
+        return CubicSplineInterpolant(x_in, y, **kwargs)
     
     @classmethod
     def supported_backends(cls) -> list:
@@ -320,43 +318,36 @@ class TDTDIOutput(FastLISAResponseParallelModule):
         return self.Xamp * self.xp.exp(-1j * self.Xphase)
     @property
     def Y(self) -> np.ndarray:
-        return self.Xamp * self.xp.exp(-1j * self.Xphase)
+        return self.Yamp * self.xp.exp(-1j * self.Yphase)
     @property
     def Z(self) -> np.ndarray:
-        return self.Xamp * self.xp.exp(-1j * self.Xphase)
+        return self.Zamp * self.xp.exp(-1j * self.Zphase)
+    @property
+    def Xamp(self) -> np.ndarray:
+        return self.tdi_amp[:, 0]
+    @property
+    def Yamp(self) -> np.ndarray:
+        return self.tdi_amp[:, 1]
+    @property
+    def Zamp(self) -> np.ndarray:
+        return self.tdi_amp[:, 2]
+    @property
+    def Xphase(self) -> np.ndarray:
+        return self.tdi_phase[:, 0]
+    @property
+    def Yphase(self) -> np.ndarray:
+        return self.tdi_phase[:, 1]
+    @property
+    def Zphase(self) -> np.ndarray:
+        return self.tdi_phase[:, 2]
     
-    def _build_complex_splines(self, arr):
-        return (self.build_spline(self.t, arr.real), self.build_spline(self.t, arr.imag))
+    @property
+    def tdi_amp_spl(self):
+        return self._get_spl("tdi_amp")
     
     @property
-    def X_spl(self) -> CubicSpline:
-        return self._build_complex_splines(self.X)
-    @property
-    def Y_spl(self) -> CubicSpline:
-        return self._build_complex_splines(self.Y)
-    
-    @property
-    def Z_spl(self) -> CubicSpline:
-        return self._build_complex_splines(self.Z)
-    
-    @property
-    def Xamp_spl(self):
-        return self._get_spl("Xamp")
-    @property
-    def Xphase_spl(self):
-        return self._get_spl("Xphase")
-    @property
-    def Yamp_spl(self):
-        return self._get_spl("Yamp")
-    @property
-    def Yphase_spl(self):
-        return self._get_spl("Yphase")
-    @property
-    def Zamp_spl(self):
-        return self._get_spl("Zamp")
-    @property
-    def Zphase_spl(self):
-        return self._get_spl("Zphase")
+    def tdi_phase_spl(self):
+        return self._get_spl("tdi_phase")
     
     @property
     def Aamp(self):
