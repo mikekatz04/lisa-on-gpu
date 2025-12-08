@@ -60,7 +60,7 @@ void get_basis_vecs(double lam, double beta, double u[], double v[], double k[])
     v[2] = 0.;
     k[0] = -cosbeta * coslam;
     k[1] = -cosbeta * sinlam;
-    k[2] = -cosbeta;
+    k[2] = -sinbeta;
 
     return;
 }

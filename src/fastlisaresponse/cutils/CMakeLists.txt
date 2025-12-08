@@ -125,23 +125,23 @@ add_custom_command(
 
   message(STATUS "CHECKING: ${LISATOOLS_DIR}/cutils/global.hpp  ${CMAKE_CURRENT_SOURCE_DIR}/global.hpp")
   
-file(COPY_FILE "${LISATOOLS_DIR}/cutils/global.hpp" "${CMAKE_CURRENT_SOURCE_DIR}/global.hpp"
-     RESULT copy_result)
-if(NOT copy_result EQUAL 0)
-    message(FATAL_ERROR "Failed to copy file: ${copy_result}")
-endif()
 
-file(COPY_FILE "${LISATOOLS_DIR}/cutils/Detector.hpp" "${CMAKE_CURRENT_SOURCE_DIR}/Detector.hpp"
-     RESULT copy_result)
-if(NOT copy_result EQUAL 0)
-    message(FATAL_ERROR "Failed to copy file: ${copy_result}")
-endif()
+  
+set(FILES_TO_COPY 
+  "${LISATOOLS_DIR}/cutils/global.hpp"
+  "${LISATOOLS_DIR}/cutils/Detector.hpp"
+  "${LISATOOLS_DIR}/cutils/Detector.cu"
+)
+# MY_LIST will be "string1;string2;another string"
 
-file(COPY_FILE "${LISATOOLS_DIR}/cutils/Detector.cu" "${CMAKE_CURRENT_SOURCE_DIR}/Detector.cu"
+foreach(FILE_TO_COPY IN LISTS FILES_TO_COPY)
+  get_filename_component(NEW_FILE "${FILE_TO_COPY}" NAME)
+  file(COPY_FILE "${FILE_TO_COPY}" "${CMAKE_CURRENT_SOURCE_DIR}/${NEW_FILE}"
      RESULT copy_result)
-if(NOT copy_result EQUAL 0)
-    message(FATAL_ERROR "Failed to copy file: ${copy_result}")
-endif()
+  if(NOT copy_result EQUAL 0)
+      message(FATAL_ERROR "Failed to copy file: ${copy_result} (${FILE_TO_COPY})")
+  endif()
+endforeach()
 
 # II. Declare the CPU backend
 if(FASTLISA_WITH_CPU)
