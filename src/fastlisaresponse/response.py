@@ -530,8 +530,9 @@ class pyResponseTDI(FastLISAResponseParallelModule):
         Args:
             y_gw (xp.ndarray, optional): Projections along each link. Must be
                 a 2D ``numpy`` or ``cupy`` array with shape: ``(nlinks, num_pts)``.
-                The links must be entered in the proper order in the code:
-                21, 12, 31, 13, 32, 23. (Default: None)
+                The links must be entered in the proper order in the code.
+                The link order is given in the orbits class: ``orbits.LINKS``. 
+                (Default: None)
 
         Returns:
             tuple: (X,Y,Z) or (A,E,T) or (A,E)
