@@ -88,7 +88,7 @@ class LISATDIonTheFly{
         CUDA_CALLABLE_MEMBER
         void new_extract_phase(cmplx *M, double *phiR, int N, double *t_arr);
         // CUDA_CALLABLE_MEMBER
-        // virtual void get_phase_ref(double t, double t_sc, double *phase, double *params, int N, int bin_i, int m);
+        double get_phase_ref(double t, double *params, int bin_i);
         CUDA_CALLABLE_MEMBER
         virtual void get_hp_hc(double *hp, double *hc, double t, double *params, double phase_change, int bin_i);
         CUDA_CALLABLE_MEMBER
@@ -134,8 +134,6 @@ class GBTDIonTheFly : public LISATDIonTheFly {
         CUDA_CALLABLE_MEMBER
         void dealloc();
         CUDA_CALLABLE_MEMBER
-        void get_phase_ref(double t, double t_sc, double *phase, double *params, int N, int bin_i, int m);
-        CUDA_CALLABLE_MEMBER
         int get_amplitude_index();
         CUDA_CALLABLE_MEMBER
         int get_f0_index();
@@ -180,8 +178,6 @@ class TDSplineTDIWaveform : public LISATDIonTheFly{
     CUDA_CALLABLE_MEMBER
     int get_td_spline_buffer_size(int N){return get_tdi_buffer_size(N);};
     CUDA_CALLABLE_MEMBER
-    void get_phase_ref(double t, double t_sc, double *phase, double *params, int N, int spline_i, int m);
-    CUDA_CALLABLE_MEMBER
     void dealloc(){};
     CUDA_CALLABLE_MEMBER
     void check_x();
@@ -221,7 +217,7 @@ class FDSplineTDIWaveform : public LISATDIonTheFly{
     CUDA_CALLABLE_MEMBER
     int get_fd_spline_buffer_size(int N){return get_tdi_buffer_size(N);};
     CUDA_CALLABLE_MEMBER
-    void get_phase_ref(double t, double t_sc, double *phase, double *params, int N, int spline_i, int m);
+    double get_phase_ref(double t, double *params, int bin_i);
     CUDA_CALLABLE_MEMBER
     void dealloc(){};
     CUDA_CALLABLE_MEMBER
@@ -236,6 +232,10 @@ class FDSplineTDIWaveform : public LISATDIonTheFly{
     int get_psi_index(); 
     CUDA_CALLABLE_MEMBER
     int get_inc_index();
+    CUDA_CALLABLE_MEMBER
+    void get_tdi(void *buffer, int buffer_length, cmplx *tdi_channels_arr, double *tdi_amp, double *tdi_phase, double* phi_ref, double *params, double *t_arr, int N, int bin_i, int nchannels);
+    CUDA_CALLABLE_MEMBER
+    double get_amp_f(double t, double *params, int spline_i);
 };
 
 #endif // __TDI_ON_THE_FLY_HH__

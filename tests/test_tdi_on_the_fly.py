@@ -132,8 +132,17 @@ class TDIonTheFlyTest(unittest.TestCase):
         beta = np.full(num_bin, -0.234091341)
 
         # TODO: inclination appearing here? what about for emris (or precession)
-        output_info_td = td_spline_tdi(inc, psi, lam, beta, return_spline=True)  
-            
+        output_info_td = td_spline_tdi(inc, psi, lam, beta, return_spline=True) 
+
+        dt_new = 5.0
+        t_new = np.tile(np.arange(
+            output_info_td.t_arr[0].min().item(),
+            output_info_td.t_arr[0].max().item(),
+            dt_new,
+        ), (num_bin, 1))
+
+        tdi_out = output_info_td.eval_tdi(t_new)
+
     def test_fd_spline_tdi(self):
 
         _Tobs = YRSID_SI
@@ -164,3 +173,12 @@ class TDIonTheFlyTest(unittest.TestCase):
         beta = np.full(num_bin, -0.234091341)
 
         output_info_fd = fd_spline_tdi(inc, psi, lam, beta, return_spline=True) 
+
+        df_new = 1 / YRSID_SI
+
+        f_new = np.tile(np.arange(
+            np.sort(f_of_t, axis=-1)[0, 1].item(),
+            np.sort(f_of_t, axis=-1)[0, -2].item(),
+            df_new,
+        ), (num_bin, 1))
+        tdi_out = output_info_fd.eval_tdi(f_new)

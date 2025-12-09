@@ -610,6 +610,19 @@ void LISATDIonTheFly::get_tdi(void *buffer, int buffer_length, cmplx *tdi_channe
     int *count = (int *)&pjump[N];
     bool *fix_count = (bool *)&count[N];
 
+    CUDA_SYNC_THREADS;
+#ifdef __CUDACC__
+    int start = threadIdx.x;
+    int incr = blockDim.x;
+#else // __CUDACC__
+    int start = 0;
+    int incr = 1;
+#endif // __CUDACC__
+    for (int i = start; i < N; i += incr)
+    {
+        phi_ref[i] = get_phase_ref(t_arr[i], params, bin_i);
+    }
+    CUDA_SYNC_THREADS;
     new_extract_amplitude_and_phase(count, fix_count, flip, pjump, N, &tdi_amp[0], &tdi_phase[0], &tdi_channels_arr[0], &phi_ref[0]);
     new_extract_amplitude_and_phase(count, fix_count, flip, pjump, N, &tdi_amp[N], &tdi_phase[N], &tdi_channels_arr[N], &phi_ref[0]);
     new_extract_amplitude_and_phase(count, fix_count, flip, pjump, N, &tdi_amp[2 * N], &tdi_phase[2 * N], &tdi_channels_arr[2 * N], &phi_ref[0]);
@@ -693,7 +706,7 @@ void LISATDIonTheFly::get_tdi(void *buffer, int buffer_length, cmplx *tdi_channe
 // }
 
 // CUDA_CALLABLE_MEMBER
-// void LISATDIonTheFly::get_phase_ref(double t, double t_sc, double *phase, double *params, int N, int bin_i, int index)
+// double LISATDIonTheFly::get_phase_ref(double t, double *params, int bin_i)
 // {
 //     printf("Not Implemented. TODO: best way to do this?");
 // }
@@ -931,6 +944,24 @@ void LISATDIonTheFly::extract_amplitude_and_phase(double *flip, double *pjump, i
     
 }
 
+
+
+CUDA_CALLABLE_MEMBER
+double LISATDIonTheFly::get_phase_ref(double t, double *params, int bin_i)
+{   
+    // TD is based on t_sc rather than t (t_ssb)
+    Vec k(0.0, 0.0, 0.0);
+    Vec u(0.0, 0.0, 0.0);
+    Vec v(0.0, 0.0, 0.0);
+    
+    get_sky_vectors(&k, &u, &v, params);
+    // reference phase is at spacecraft 1
+    Vec x0 = orbits->get_pos(t, 1);
+    double k_dot_x0 = k.dot(x0);
+    double t_sc = t - k_dot_x0 * C_inv;
+    double phase_ref = get_phase(t_sc, params, bin_i);
+    return phase_ref;
+}
 
 
 CUDA_CALLABLE_MEMBER
@@ -1173,6 +1204,37 @@ int FDSplineTDIWaveform::get_beta_index()
     return 1;
 }
 
+void FDSplineTDIWaveform::get_tdi(void *buffer, int buffer_length, cmplx *tdi_channels_arr, double *tdi_amp, double *tdi_phase, double* phi_ref, double *params, double *t_arr, int N, int bin_i, int nchannels)
+{
+    LISATDIonTheFly::get_tdi(
+        buffer, buffer_length,
+        tdi_channels_arr, 
+        tdi_amp, tdi_phase,
+        phi_ref,
+        params, t_arr, N, bin_i, nchannels
+    );
+    
+    double amp_f;
+    
+#ifdef __CUDACC__
+    int start = threadIdx.x;
+    int incr = blockDim.x;
+#else // __CUDACC__
+    int start = 0;
+    int incr = 1;
+#endif // __CUDACC__
+    for (int i = start; i < N; i += incr)
+    {
+        amp_f = get_amp_f(t_arr[i], params, bin_i);
+        for (int chan = 0; chan < tdi_config->num_channels; chan += 1)
+        {
+            tdi_amp[chan * N + i] *= amp_f;
+        }
+    }
+    CUDA_SYNC_THREADS;
+}
+
+
 int FDSplineTDIWaveform::get_lam_index()
 {
     // ndim = 2; lam first
@@ -1239,12 +1301,6 @@ double TDSplineTDIWaveform::get_phase(double t, double *params, int spline_i)
 //     }
 // }
 
-// CUDA_CALLABLE_MEMBER
-// void TDSplineTDIWaveform::get_phase_ref(double t, double t_sc, double *phase, double *params, int N, int spline_i, int index)
-// {   
-//     // TD is based on t_sc rather than t (t_ssb)
-//     phase[index] = phase_spline->eval_single(t_sc, spline_i);
-// }
 
 
 
@@ -1286,6 +1342,13 @@ double FDSplineTDIWaveform::get_phase(double t, double *params, int spline_i)
     return 2. * M_PI * f * t;
 }
 
+CUDA_CALLABLE_MEMBER
+double FDSplineTDIWaveform::get_amp_f(double t, double *params, int spline_i)
+{
+    // TODO: may want to do this in a fast way
+    return amp_spline->eval_single(t, spline_i);
+}
+
 
 // CUDA_CALLABLE_MEMBER
 // void FDSplineTDIWaveform::run_wave_tdi(cmplx *tdi_channels_arr, 
@@ -1318,18 +1381,17 @@ double FDSplineTDIWaveform::get_phase(double t, double *params, int spline_i)
 //     }
 // }
 
-// CUDA_CALLABLE_MEMBER
-// void FDSplineTDIWaveform::get_phase_ref(double t, double t_sc, double *phase, double *params, int N, int spline_i, int index)
-// {
-//     // in FD, has to be fixed to 2 pi f_ssb t_ssb
-//     // t is t_ssb
-//     double f = 0.0;
-//     double t_i = 0.0;
+CUDA_CALLABLE_MEMBER
+double FDSplineTDIWaveform::get_phase_ref(double t, double *params, int bin_i)
+{
+    // in FD, has to be fixed to 2 pi f_ssb t_ssb
+    // t is t_ssb
 
-//     // t_i = t[i];
-//     // // TODO: should we make it so this is without the spline?
-//     // f = freq_spline->eval_single(t_i, spline_i);
-//     // phase[i] = 2. * M_PI * f * t_i;
-//     phase[index] = phase_ref_store[spline_i * N + index];
+    // t_i = t[i];
+    // // TODO: should we make it so this is without the spline?
+    double f = freq_spline->eval_single(t, bin_i);
+    return 2. * M_PI * f * t;
+    // phase[i] = 2. * M_PI * f * t_i;
+    // phase[index] = phase_ref_store[spline_i * N + index];
 
-// }
+}

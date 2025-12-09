@@ -155,7 +155,7 @@ class TDIonTheFly(FastLISAResponseParallelModule):
     def supported_backends(cls):
         return ["fastlisaresponse_" + _tmp for _tmp in cls.GPU_RECOMMENDED()]
 
-    def __call__(self, inc, psi, lam, beta, return_spline: bool =False):
+    def __call__(self, inc, psi, lam, beta, return_spline: bool =False) -> TDIOutput:
         
         params = np.array([inc, psi, lam, beta]).T.flatten().copy()
 
@@ -181,14 +181,15 @@ class TDIonTheFly(FastLISAResponseParallelModule):
         )
 
         reshape_shape = (self.num_sub, self.tdi_config.nchannels, self.N)
-
-        return TDTDIOutput(
+        return self.from_tdi_output(TDIOutput(
             self.t_arr, 
             tdi_amp.reshape(reshape_shape), 
             tdi_phase.reshape(reshape_shape), 
-            phase_ref.reshape(self.t_arr.shape),
-            fill_splines=return_spline,
-        )
+            phase_ref.reshape(self.t_arr.shape)
+        ), fill_splines=return_spline)
+    
+    def from_tdi_output(self, tdi_output: TDIOutput, fill_splines: Optional[bool] = False) -> FDTDIOutput:
+        return tdi_output
 
 
 CUBIC_SPLINE_LINEAR_SPACING = 1
@@ -281,18 +282,24 @@ class TDTDIonTheFly(TDIonTheFly):
         self._wave_gen = self.backend.pyTDSplineTDIWaveform(self.orbits.ptr, self.tdi_config.ptr, self.amp.cpp_class.ptr, self.phase.cpp_class.ptr)
         return self._wave_gen
     
+    def from_tdi_output(self, tdi_output: TDIOutput, fill_splines: Optional[bool] = False) -> FDTDIOutput:
+        assert np.allclose(tdi_output.x, self.t_arr)
+        return TDTDIOutput(
+            tdi_output.x, tdi_output.tdi_amp, tdi_output.tdi_phase, tdi_output.phase_ref, fill_splines=fill_splines
+        )
+    
 
-class TDTDIOutput(FastLISAResponseParallelModule):
-    def __init__(self, t, tdi_amp, tdi_phase, phase_ref, fill_splines=True, **kwargs):
+class TDIOutput(FastLISAResponseParallelModule):
+    def __init__(self, x, tdi_amp, tdi_phase, phase_ref, fill_splines=True, **kwargs):
         self.tdi_amp, self.tdi_phase = tdi_amp, tdi_phase
         self.phase_ref = phase_ref
-        self.t = t
+        self.x = x
         super().__init__(**kwargs)
         self.fill_splines = fill_splines
         if fill_splines:
             self._splines = {}
             for name in ["tdi_amp", "tdi_phase", "phase_ref"]:
-                self._splines[name] = self.build_spline(self.t, getattr(self, name))
+                self._splines[name] = self.build_spline(self.x, getattr(self, name))
 
     def _get_spl(self, key: str) -> CubicSpline:
         assert self.fill_splines
@@ -309,19 +316,26 @@ class TDTDIOutput(FastLISAResponseParallelModule):
             x_in = x.copy()
         return CubicSplineInterpolant(x_in, y, **kwargs)
     
+    @property
+    def num_bin(self) -> int:
+        if self.tdi_amp.ndim == 3:
+            return self.tdi_amp.shape[0]
+        elif self.tdi_amp.ndim == 2:
+            return 1
+
     @classmethod
     def supported_backends(cls) -> list:
         return ["fastlisaresponse_" + _tmp for _tmp in cls.GPU_RECOMMENDED()]
 
     @property
     def X(self) -> np.ndarray:
-        return self.Xamp * self.xp.exp(-1j * self.Xphase)
+        return self.Xamp * self.xp.exp(-1j * (self.Xphase + self.phase_ref))
     @property
     def Y(self) -> np.ndarray:
-        return self.Yamp * self.xp.exp(-1j * self.Yphase)
+        return self.Yamp * self.xp.exp(-1j * (self.Xphase + self.phase_ref))
     @property
     def Z(self) -> np.ndarray:
-        return self.Zamp * self.xp.exp(-1j * self.Zphase)
+        return self.Zamp * self.xp.exp(-1j * (self.Xphase + self.phase_ref))
     @property
     def Xamp(self) -> np.ndarray:
         return self.tdi_amp[:, 0]
@@ -367,6 +381,50 @@ class TDTDIOutput(FastLISAResponseParallelModule):
     @property
     def Tphase(self):
         raise NotImplementedError
+    
+    def eval_spline_vals(self, x_new: np.ndarray) -> np.ndarray:
+
+        if x_new.ndim == 1:
+            t_amp_phase = np.tile(x_new, (self.num_bin, 3, 1))
+            t_phase_ref = np.tile(x_new, (self.num_bin, 1))
+        elif x_new.ndim == 2:
+            t_amp_phase = np.repeat(x_new[:, None, :], 3, axis=1)
+            t_phase_ref = x_new
+
+        tdi_amp_new = self.tdi_amp_spl(t_amp_phase)
+        tdi_phase_new = self.tdi_phase_spl(t_amp_phase)
+        phase_ref_new = self.phase_ref_spl(t_phase_ref)
+        return (tdi_amp_new, tdi_phase_new, phase_ref_new)
+    
+    def eval_tdi(self, x_new: np.ndarray) -> np.ndarray:
+        raise NotImplementedError
+    
+class TDTDIOutput(TDIOutput):
+    @classmethod
+    def from_tdi_output(cls, tdi_output: TDIOutput, fill_splines: Optional[bool] = False) -> TDTDIOutput:
+        return TDTDIOutput(
+            tdi_output.x, tdi_output.tdi_amp, tdi_output.tdi_phase, tdi_output.phase_ref, fill_splines=fill_splines
+        )
+
+    def eval_tdi(self, t_new: np.ndarray) -> np.ndarray:
+        tdi_amp_new, tdi_phase_new, phase_ref_new = self.eval_spline_vals(t_new)
+        tdi_output = np.real(tdi_amp_new * np.exp(-1j * (tdi_phase_new + phase_ref_new)))
+        return tdi_output
+    
+    @property
+    def t_arr(self) -> np.ndarray:
+        return self.x
+        
+    
+class FDTDIOutput(TDIOutput):
+    def eval_tdi(self, f_new: np.ndarray) -> np.ndarray:
+        tdi_amp_new, tdi_phase_new, phase_ref_new = self.eval_spline_vals(f_new)
+        tdi_output = tdi_amp_new * np.exp(-1j * (tdi_phase_new + phase_ref_new[:, None, :]))
+        return tdi_output
+    
+    @property
+    def f_arr(self) -> np.ndarray:
+        return self.x
 
 
 # TODO: make it log spaced in frequency?
@@ -470,3 +528,10 @@ class FDTDIonTheFly(TDIonTheFly):
         assert isinstance(spline_type, int)
         assert spline_type in [CUBIC_SPLINE_LINEAR_SPACING, CUBIC_SPLINE_LOG10_SPACING, CUBIC_SPLINE_GENERAL_SPACING]
         self._spline_type = spline_type
+    
+    def from_tdi_output(self, tdi_output: TDIOutput, fill_splines: Optional[bool] = False) -> FDTDIOutput:
+        # TODO: remove the freq spline?
+        return FDTDIOutput(
+            self.freq(tdi_output.x), tdi_output.tdi_amp, tdi_output.tdi_phase, tdi_output.phase_ref, fill_splines=fill_splines
+        )
+    
