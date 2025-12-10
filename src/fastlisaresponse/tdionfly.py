@@ -264,7 +264,7 @@ class TDTDIonTheFly(TDIonTheFly):
             raise ValueError("# TODO: fix this.")
         
         self.t_arr = self.xp.atleast_2d(self.xp.asarray(t))
-        
+
         self.N = self.t_arr.shape[1]
 
         if self.t_arr.shape[0] == 1:
@@ -291,16 +291,19 @@ class TDTDIonTheFly(TDIonTheFly):
 
 class TDIOutput(FastLISAResponseParallelModule):
     def __init__(self, x, tdi_amp, tdi_phase, phase_ref, fill_splines=True, **kwargs):
-        self.tdi_amp, self.tdi_phase = tdi_amp, tdi_phase
-        self.phase_ref = phase_ref
+        
+        self.fill_splines = fill_splines
+        if self.fill_splines:
+            self._splines = {}
+
         self.x = x
         super().__init__(**kwargs)
-        self.fill_splines = fill_splines
-        if fill_splines:
-            self._splines = {}
-            for name in ["tdi_amp", "tdi_phase", "phase_ref"]:
-                self._splines[name] = self.build_spline(self.x, getattr(self, name))
 
+        # need to be after for proper setter
+        self.tdi_amp, self.tdi_phase = tdi_amp, tdi_phase
+        self.phase_ref = phase_ref
+       
+        
     def _get_spl(self, key: str) -> CubicSpline:
         assert self.fill_splines
         return self._splines[key]
@@ -356,6 +359,39 @@ class TDIOutput(FastLISAResponseParallelModule):
         return self.tdi_phase[:, 2]
     
     @property
+    def tdi_amp(self) -> np.ndarray:
+        return self._tdi_amp
+    
+    @tdi_amp.setter
+    def tdi_amp(self, tdi_amp: np.ndarray):
+        if self.fill_splines:
+            self._splines["tdi_amp"] = self.build_spline(self.x, tdi_amp)
+
+        self._tdi_amp = tdi_amp
+
+    @property
+    def tdi_phase(self) -> np.ndarray:
+        return self._tdi_phase
+    
+    @tdi_phase.setter
+    def tdi_phase(self, tdi_phase: np.ndarray):
+        if self.fill_splines:
+            self._splines["tdi_phase"] = self.build_spline(self.x, tdi_phase)
+
+        self._tdi_phase = tdi_phase
+
+    @property
+    def phase_ref(self) -> np.ndarray:
+        return self._phase_ref
+    
+    @phase_ref.setter
+    def phase_ref(self, phase_ref: np.ndarray):
+        if self.fill_splines:
+            self._splines["phase_ref"] = self.build_spline(self.x, phase_ref)
+
+        self._phase_ref = phase_ref
+    
+    @property
     def tdi_amp_spl(self):
         return self._get_spl("tdi_amp")
     
@@ -382,7 +418,7 @@ class TDIOutput(FastLISAResponseParallelModule):
     def Tphase(self):
         raise NotImplementedError
     
-    def eval_spline_vals(self, x_new: np.ndarray) -> np.ndarray:
+    def eval_spline_vals(self, x_new: np.ndarray, **kwargs) -> np.ndarray:
 
         if x_new.ndim == 1:
             t_amp_phase = np.tile(x_new, (self.num_bin, 3, 1))
@@ -391,12 +427,12 @@ class TDIOutput(FastLISAResponseParallelModule):
             t_amp_phase = np.repeat(x_new[:, None, :], 3, axis=1)
             t_phase_ref = x_new
 
-        tdi_amp_new = self.tdi_amp_spl(t_amp_phase)
-        tdi_phase_new = self.tdi_phase_spl(t_amp_phase)
-        phase_ref_new = self.phase_ref_spl(t_phase_ref)
+        tdi_amp_new = self.tdi_amp_spl(t_amp_phase, **kwargs)
+        tdi_phase_new = self.tdi_phase_spl(t_amp_phase, **kwargs)
+        phase_ref_new = self.phase_ref_spl(t_phase_ref, **kwargs)
         return (tdi_amp_new, tdi_phase_new, phase_ref_new)
     
-    def eval_tdi(self, x_new: np.ndarray) -> np.ndarray:
+    def eval_tdi(self, x_new: np.ndarray, **kwargs) -> np.ndarray:
         raise NotImplementedError
     
 class TDTDIOutput(TDIOutput):
@@ -406,8 +442,8 @@ class TDTDIOutput(TDIOutput):
             tdi_output.x, tdi_output.tdi_amp, tdi_output.tdi_phase, tdi_output.phase_ref, fill_splines=fill_splines
         )
 
-    def eval_tdi(self, t_new: np.ndarray) -> np.ndarray:
-        tdi_amp_new, tdi_phase_new, phase_ref_new = self.eval_spline_vals(t_new)
+    def eval_tdi(self, t_new: np.ndarray, **kwargs) -> np.ndarray:
+        tdi_amp_new, tdi_phase_new, phase_ref_new = self.eval_spline_vals(t_new, **kwargs)
         tdi_output = np.real(tdi_amp_new * np.exp(-1j * (tdi_phase_new + phase_ref_new)))
         return tdi_output
     
@@ -417,8 +453,8 @@ class TDTDIOutput(TDIOutput):
         
     
 class FDTDIOutput(TDIOutput):
-    def eval_tdi(self, f_new: np.ndarray) -> np.ndarray:
-        tdi_amp_new, tdi_phase_new, phase_ref_new = self.eval_spline_vals(f_new)
+    def eval_tdi(self, f_new: np.ndarray, **kwargs) -> np.ndarray:
+        tdi_amp_new, tdi_phase_new, phase_ref_new = self.eval_spline_vals(f_new, **kwargs)
         tdi_output = tdi_amp_new * np.exp(-1j * (tdi_phase_new + phase_ref_new[:, None, :]))
         return tdi_output
     
