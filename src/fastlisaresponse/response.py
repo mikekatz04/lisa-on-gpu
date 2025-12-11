@@ -14,7 +14,7 @@ from lisatools.detector import EqualArmlengthOrbits, Orbits
 from lisatools.utils.utility import AET
 
 from .utils.parallelbase import FastLISAResponseParallelModule
-
+from .tdiconfig import TDIConfig
 
 # TODO: need to update constants setup
 YRSID_SI = 31558149.763545603
@@ -270,56 +270,58 @@ class pyResponseTDI(FastLISAResponseParallelModule):
         """Initialize TDI specific information"""
 
         # setup the actual TDI combination
-        if self.tdi in ["1st generation", "2nd generation"]:
-            # tdi 1.0
-            tdi_combinations = [
-                {"link": 13, "links_for_delay": [], "sign": +1},
-                {"link": 31, "links_for_delay": [13], "sign": +1},
-                {"link": 12, "links_for_delay": [13, 31], "sign": +1},
-                {"link": 21, "links_for_delay": [13, 31, 12], "sign": +1},
-                {"link": 12, "links_for_delay": [], "sign": -1},
-                {"link": 21, "links_for_delay": [12], "sign": -1},
-                {"link": 13, "links_for_delay": [12, 21], "sign": -1},
-                {"link": 31, "links_for_delay": [12, 21, 13], "sign": -1},
-            ]
+        # if self.tdi in ["1st generation", "2nd generation"]:
+        #     # tdi 1.0
+        #     tdi_combinations = [
+        #         {"link": 13, "links_for_delay": [], "sign": +1},
+        #         {"link": 31, "links_for_delay": [13], "sign": +1},
+        #         {"link": 12, "links_for_delay": [13, 31], "sign": +1},
+        #         {"link": 21, "links_for_delay": [13, 31, 12], "sign": +1},
+        #         {"link": 12, "links_for_delay": [], "sign": -1},
+        #         {"link": 21, "links_for_delay": [12], "sign": -1},
+        #         {"link": 13, "links_for_delay": [12, 21], "sign": -1},
+        #         {"link": 31, "links_for_delay": [12, 21, 13], "sign": -1},
+        #     ]
 
-            if self.tdi == "2nd generation":
-                # tdi 2.0 is tdi 1.0 + additional terms
-                tdi_combinations += [
-                    {"link": 12, "links_for_delay": [13, 31, 12, 21], "sign": +1},
-                    {"link": 21, "links_for_delay": [13, 31, 12, 21, 12], "sign": +1},
-                    {
-                        "link": 13,
-                        "links_for_delay": [13, 31, 12, 21, 12, 21],
-                        "sign": +1,
-                    },
-                    {
-                        "link": 31,
-                        "links_for_delay": [13, 31, 12, 21, 12, 21, 13],
-                        "sign": +1,
-                    },
-                    {"link": 13, "links_for_delay": [12, 21, 13, 31], "sign": -1},
-                    {"link": 31, "links_for_delay": [12, 21, 13, 31, 13], "sign": -1},
-                    {
-                        "link": 12,
-                        "links_for_delay": [12, 21, 13, 31, 13, 31],
-                        "sign": -1,
-                    },
-                    {
-                        "link": 21,
-                        "links_for_delay": [12, 21, 13, 31, 13, 31, 12],
-                        "sign": -1,
-                    },
-                ]
+        #     if self.tdi == "2nd generation":
+        #         # tdi 2.0 is tdi 1.0 + additional terms
+        #         tdi_combinations += [
+        #             {"link": 12, "links_for_delay": [13, 31, 12, 21], "sign": +1},
+        #             {"link": 21, "links_for_delay": [13, 31, 12, 21, 12], "sign": +1},
+        #             {
+        #                 "link": 13,
+        #                 "links_for_delay": [13, 31, 12, 21, 12, 21],
+        #                 "sign": +1,
+        #             },
+        #             {
+        #                 "link": 31,
+        #                 "links_for_delay": [13, 31, 12, 21, 12, 21, 13],
+        #                 "sign": +1,
+        #             },
+        #             {"link": 13, "links_for_delay": [12, 21, 13, 31], "sign": -1},
+        #             {"link": 31, "links_for_delay": [12, 21, 13, 31, 13], "sign": -1},
+        #             {
+        #                 "link": 12,
+        #                 "links_for_delay": [12, 21, 13, 31, 13, 31],
+        #                 "sign": -1,
+        #             },
+        #             {
+        #                 "link": 21,
+        #                 "links_for_delay": [12, 21, 13, 31, 13, 31, 12],
+        #                 "sign": -1,
+        #             },
+        #         ]
 
-        elif isinstance(self.tdi, list):
-            tdi_combinations = self.tdi
+        # elif isinstance(self.tdi, list):
+        #     tdi_combinations = self.tdi
 
-        else:
-            raise ValueError(
-                "tdi kwarg should be '1st generation', '2nd generation', or a list with a specific tdi combination."
-            )
-        self.tdi_combinations = tdi_combinations
+        # else:
+        #     raise ValueError(
+        #         "tdi kwarg should be '1st generation', '2nd generation', or a list with a specific tdi combination."
+        #     )
+        # self.tdi_combinations = tdi_combinations
+
+        assert isinstance(self.tdi, TDIConfig)
 
     @property
     def y_gw(self):
@@ -492,16 +494,15 @@ class pyResponseTDI(FastLISAResponseParallelModule):
         self.delayed_links_flat = self.delayed_links_flat.flatten()
 
         t_data = self.xp.arange(self.y_gw_length) * self.dt
-
-        num_units = int(self.tdi_operation_index.max() + 1)
+        num_units = int(self.tdi.tdi_operation_index.max() + 1)
 
         assert np.all(
-            (np.diff(self.tdi_operation_index) == 0)
-            | (np.diff(self.tdi_operation_index) == 1)
+            (np.diff(self.tdi.tdi_operation_index) == 0)
+            | (np.diff(self.tdi.tdi_operation_index) == 1)
         )
 
         _, unit_starts, unit_lengths = np.unique(
-            self.tdi_operation_index,
+            self.tdi.tdi_operation_index,
             return_index=True,
             return_counts=True,
         )
@@ -517,10 +518,10 @@ class pyResponseTDI(FastLISAResponseParallelModule):
             t_data,
             unit_starts,
             unit_lengths,
-            self.tdi_base_links,
-            self.tdi_link_combinations,
-            self.tdi_signs,
-            self.channels,
+            self.tdi.tdi_base_links,
+            self.tdi.tdi_link_combinations,
+            self.tdi.tdi_signs,
+            self.tdi.channels,
             num_units,
             3,  # num channels
             self.order,
