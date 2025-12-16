@@ -1395,3 +1395,108 @@ double FDSplineTDIWaveform::get_phase_ref(double t, double *params, int bin_i)
     // phase[index] = phase_ref_store[spline_i * N + index];
 
 }
+
+
+CUDA_CALLABLE_MEMBER
+cmplx LagrangeInterpolant::interp(double t, cmplx *wave, int wave_N, int bin_i)
+{
+    /*
+    double A = 1.0;
+    for (int i = 1; i < h; i += 1){
+        A *= (i + e) * (i + 1 - e);
+    }
+    double denominator = factorials[h - 1] * factorials[h];
+    A /= denominator;
+    */
+
+    // if ((i == 0) && (link_i == 0)) printf("%.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e\n", L, delay0, delay1, x0[0], x0[1], x0[2],x1[0], x1[1], x1[2]);
+    double clipped_delay0 = t; 
+    int integer_delay0 = (int)ceil(clipped_delay0 * sampling_frequency) - 1;
+    double fraction0 = 1.0 + integer_delay0 - clipped_delay0 * sampling_frequency;
+    
+    // int h, int d, double e, double *A_arr, double deps, double *E_arr, int start_input_ind
+    // half_point_count, integer_delay, fraction, A_arr, deps, E_arr, start_input_ind
+    double e = fraction0;
+    int d = integer_delay0;
+    
+    int ind = (int)(e / deps);
+
+    double frac = (e - ind * deps) / deps;
+    double A = A_arr[ind] * (1. - frac) + A_arr[ind + 1] * frac;
+
+    double B = 1.0 - e;
+    double C = e;
+    double D = e * (1.0 - e);
+
+    double sum_hp = 0.0;
+    double sum_hc = 0.0;
+    cmplx temp_up, temp_down;
+    // if ((i == 100) && (link_i == 0)) printf("%d %e %e %e %e %e\n", d, e, A, B, C, D);
+    // printf("in: %d %d\n", d, start_input_ind);
+    for (int j = 1; j < h; j += 1)
+    {
+
+        // get constants
+
+        /*
+        double first_term = factorials[h - 1] / factorials[h - 1 - j];
+        double second_term = factorials[h] / factorials[h + j];
+        double value = first_term * second_term;
+
+        value = value * pow(-1.0, (double)j);
+        */
+
+        double E = E_arr[j - 1];
+
+        double F = j + e;
+        double G = j + (1 - e);
+
+        // perform calculation
+        temp_up = wave[(bin_i * wave_N) + d + 1 + j];
+        temp_down = wave[(bin_i * wave_N) + d - j];
+
+        // if ((i == 100) && (link_i == 0)) printf("mid: %d %d %d %e %e %e %e %e %e %e\n", j, d + 1 + j - start_input_ind, d - j - start_input_ind, temp_up, temp_down, E, F, G);
+        sum_hp += E * (temp_up.real() / F + temp_down.real() / G);
+        sum_hc += E * (temp_up.imag() / F + temp_down.imag() / G);
+    }
+    temp_up = wave[(bin_i * wave_N) + d + 1];
+    temp_down = wave[(bin_i * wave_N) + d];
+    // printf("out: %d %d\n", d, start_input_ind);
+    double real_out = A * (B * temp_up.real() + C * temp_down.real() + D * sum_hp);
+    double imag_out = A * (B * temp_up.imag() + C * temp_down.imag() + D * sum_hc);
+    cmplx output(real_out, imag_out);
+    return output;
+    // if ((i == 100) && (link_i == 0)) printf("end: %e %e\n", *result_hp, *result_hc);
+}
+
+CUDA_CALLABLE_MEMBER
+void TDLagrangeInterpTDIWave::get_hp_hc(double *hp, double *hc, double t, double *params, double phase_change, int bin_i)
+{
+    cmplx I(0.0, 1.0);
+    cmplx wave_out = lagrange->interp(t, wave, wave_N, bin_i);
+
+    wave_out *= gcmplx::exp(I * phase_change);
+    *hp = wave_out.real();
+    *hc = wave_out.imag();
+}
+
+CUDA_CALLABLE_MEMBER
+TDLagrangeInterpTDIWave::TDLagrangeInterpTDIWave(Orbits *orbits_, TDIConfig *tdi_config_, cmplx *wave_, int wave_N_, LagrangeInterpolant *lagrange_): LISATDIonTheFly(orbits_, tdi_config_)
+{
+    lagrange = lagrange_;
+    wave = wave_;
+    wave_N = wave_N_; 
+}
+
+
+int TDLagrangeInterpTDIWave::get_beta_index()
+{
+    // ndim = 2; beta second
+    return 1;
+}
+
+int TDLagrangeInterpTDIWave::get_lam_index()
+{
+    // ndim = 2; lam first
+    return 0;
+}

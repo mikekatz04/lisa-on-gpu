@@ -238,4 +238,60 @@ class FDSplineTDIWaveform : public LISATDIonTheFly{
     double get_amp_f(double t, double *params, int spline_i);
 };
 
+class LagrangeInterpolant{
+  public:
+    double sampling_frequency;
+    double deps;
+    double *A_arr;
+    double *E_arr;
+    int h;
+
+    CUDA_CALLABLE_MEMBER
+    LagrangeInterpolant(double sampling_frequency_, double deps_, double *A_arr_, double *E_arr_, int h_)
+    {
+        sampling_frequency = sampling_frequency_;
+        deps = deps_;
+        A_arr = A_arr_;
+        E_arr = E_arr_;
+        h = h_;
+    };
+    ~LagrangeInterpolant(){};
+    void dealloc(){};
+    CUDA_CALLABLE_MEMBER
+    cmplx interp(double t, cmplx *wave, int wave_N, int bin_i);
+};
+
+
+class TDLagrangeInterpTDIWave : public LISATDIonTheFly{
+    public:
+        cmplx* wave;
+        int wave_N;
+        LagrangeInterpolant *lagrange;
+
+    CUDA_CALLABLE_MEMBER
+    TDLagrangeInterpTDIWave(Orbits *orbits_, TDIConfig *tdi_config_, cmplx *wave_, int wave_N_, LagrangeInterpolant *lagrange_);
+    CUDA_CALLABLE_MEMBER
+    ~TDLagrangeInterpTDIWave(){};
+    // CUDA_CALLABLE_MEMBER
+    // void get_amp_and_phase(double t_ssb, double *t, double *amp, double *phase, double *params, int N, int spline_i);
+    CUDA_CALLABLE_MEMBER
+    // void run_wave_tdi(
+    //     cmplx *tdi_channels_arr, 
+    //     double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double *phi_ref, 
+    //     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels
+    // );
+    CUDA_CALLABLE_MEMBER
+    int get_td_lagrange_buffer_size(int N){return get_tdi_buffer_size(N);};
+    CUDA_CALLABLE_MEMBER
+    void dealloc(){};
+    CUDA_CALLABLE_MEMBER
+    int get_beta_index(); 
+    CUDA_CALLABLE_MEMBER
+    int get_lam_index(); 
+    CUDA_CALLABLE_MEMBER
+    void get_hp_hc(double *hp, double *hc, double t, double *params, double phase_change, int bin_i);
+};
+
+
+
 #endif // __TDI_ON_THE_FLY_HH__

@@ -32,6 +32,10 @@ cdef extern from "TDIonTheFly.hh":
         TDIConfigWrap(int *unit_starts_, int *unit_lengths_, int *tdi_base_link_, int *tdi_link_combinations_, double *tdi_signs_in_, int *channels_, int num_units_, int num_channels_) except+
         void dealloc() except+
 
+    cdef cppclass LagrangeInterpolantWrap "LagrangeInterpolant":
+        LagrangeInterpolantWrap(double sampling_frequency_, double deps_, double *A_arr_, double *E_arr_, int h_) except+
+        void dealloc() except+
+
     cdef cppclass GBTDIonTheFlyWrap "GBTDIonTheFly":
         GBTDIonTheFlyWrap(Orbits *orbits, TDIConfigWrap *tdi_config, double T_) except+
         void dealloc() except+
@@ -42,6 +46,16 @@ cdef extern from "TDIonTheFly.hh":
             double *phi_ref, double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels) except+
         int get_gb_buffer_size(int N) except+
 
+    cdef cppclass TDLagrangeInterpTDIWaveWrap "TDLagrangeInterpTDIWave":
+        TDLagrangeInterpTDIWaveWrap(Orbits *orbits_, TDIConfigWrap *tdi_config_, cmplx *wave_, int wave_N_, LagrangeInterpolantWrap *lagrange_) except+
+        void run_wave_tdi(
+            void *buffer, int buffer_length,
+            cmplx *tdi_channels_arr, 
+            double *tdi_amp, double *tdi_phase,
+            double *phi_ref, double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels) except+
+        void dealloc() except+
+        int get_td_lagrange_buffer_size(int N) except+
+        
     cdef cppclass TDSplineTDIWaveformWrap "TDSplineTDIWaveform":
         TDSplineTDIWaveformWrap(Orbits *orbits_, TDIConfigWrap *tdi_config, CubicSplineWrap *amp_spline_, CubicSplineWrap *phase_spline_) except+
         void run_wave_tdi(
@@ -163,6 +177,80 @@ def rebuild_tdi_config(
     return c
   
 
+cdef class pyLagrangeInterpolant:
+    cdef LagrangeInterpolantWrap *g
+    cdef size_t A_arr
+    cdef size_t E_arr
+    cdef double sampling_frequency
+    cdef double deps
+    cdef int h
+
+    def __cinit__(self, 
+        *args, 
+        **kwargs
+    ):
+        (
+            sampling_frequency,
+            deps,
+            A_arr,
+            E_arr,
+            h
+        ), tkwargs = wrapper(*args, **kwargs)
+
+        self.sampling_frequency = sampling_frequency
+        self.h = h
+        self.deps = deps
+        self.A_arr = A_arr
+        self.E_arr = E_arr
+
+        cdef size_t A_arr_in = A_arr
+        cdef size_t E_arr_in = E_arr
+        
+        self.g = new LagrangeInterpolantWrap(
+            sampling_frequency,
+            deps,
+            <double *>A_arr_in, 
+            <double *>E_arr_in, 
+            h
+        )
+    
+
+    def __dealloc__(self):
+        self.g.dealloc()
+        if self.g:
+            del self.g
+
+    def __reduce__(self):
+        return (rebuild_lagrange_interp, (
+            self.sampling_frequency,
+            self.deps,
+            self.A_arr,
+            self.E_arr,
+            self.h
+        ))
+
+    @property
+    def ptr(self) -> long:
+        return <uintptr_t>self.g
+    
+        
+def rebuild_lagrange_interp(
+    sampling_frequency,
+    deps,
+    A_arr,
+    E_arr,
+    h
+):
+    c = pyLagrangeInterpolant(
+        sampling_frequency,
+        deps,
+        A_arr,
+        E_arr,
+        h
+    )
+    return c
+  
+
 
 cdef class pyGBTDIonTheFly:
     cdef Orbits *orbits
@@ -233,6 +321,70 @@ def rebuild(dt,
         T,
     )
     return c
+
+
+
+cdef class pyTDLagrangeInterpTDIWave:
+    cdef TDLagrangeInterpTDIWaveWrap *g
+    cdef uintptr_t orbits_ptr
+    cdef uintptr_t tdi_config_ptr
+    cdef uintptr_t wave_ptr
+    cdef int wave_N
+    cdef uintptr_t lagrange_ptr
+
+    def __cinit__(self, orbits_ptr, tdi_config_ptr, wave_ptr, wave_N, lagrange_ptr):
+        self.orbits_ptr, self.tdi_config_ptr, self.wave_ptr, self.wave_N, self.lagrange_ptr = orbits_ptr, tdi_config_ptr, wave_ptr, wave_N, lagrange_ptr
+
+        cdef size_t orbits_in = orbits_ptr
+        cdef size_t lagrange_in = lagrange_ptr
+        cdef size_t wave_in = wave_ptr
+        cdef size_t tdi_config_in = tdi_config_ptr
+        self.g = new TDLagrangeInterpTDIWaveWrap(<Orbits*>orbits_in, <TDIConfigWrap*> tdi_config_in, <cmplx*>wave_in, wave_N, <LagrangeInterpolantWrap*>lagrange_in)
+
+    def __dealloc__(self):
+        self.g.dealloc()
+        if self.g:
+            del self.g
+            
+    def __reduce__(self):
+        return (rebuild_td_lagrange, (self.orbits_ptr, self.tdi_config_ptr, self.wave_ptr, self.wave_N, self.lagrange_ptr))
+
+    @property
+    def ptr(self) -> long:
+        return <uintptr_t>self.g
+
+    def get_buffer_size(self, N: int) -> int:
+        return self.g.get_td_lagrange_buffer_size(N)
+
+    def run_wave_tdi(self, *args, **kwargs):
+        (
+            buffer, buffer_length,
+            tdi_channels_arr,
+            tdi_amp, tdi_phase,
+            phi_ref,
+            params, t_arr,
+            N, num_sub, n_params, nchannels
+        ), tkwargs = wrapper(*args, **kwargs)
+
+        cdef size_t buffer_in = buffer
+        cdef size_t tdi_channels_arr_in = tdi_channels_arr
+        cdef size_t tdi_amp_in = tdi_amp
+        cdef size_t tdi_phase_in = tdi_phase
+        cdef size_t phi_ref_in = phi_ref
+        cdef size_t params_in = params
+        cdef size_t t_arr_in = t_arr
+
+        self.g.run_wave_tdi(
+            <void *>buffer_in, buffer_length,
+            <cmplx *> tdi_channels_arr_in, 
+        <double *> tdi_amp_in, <double *> tdi_phase_in,
+        <double*> phi_ref_in, <double *>params_in, <double *>t_arr_in, N, num_sub, n_params, nchannels)
+
+
+def rebuild_td_lagrange(orbits_ptr, tdi_config_ptr, wave_ptr, wave_N, lagrange_ptr):
+    c = pyTDSplineTDIWaveform(orbits_ptr, tdi_config_ptr, wave_ptr, wave_N, lagrange_ptr)
+    return c
+
 
 
 cdef class pyTDSplineTDIWaveform:
