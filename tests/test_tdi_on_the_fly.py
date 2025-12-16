@@ -45,15 +45,22 @@ class GBWave(FastLISAResponseParallelModule):
         """Numpy or Cupy"""
         return self.backend.xp
 
-    def __call__(self, A, f, fdot, iota, phi0, psi, T=1.0, dt=10.0):
+    def __call__(self, A, f, fdot, iota, phi0, psi, T=1.0, dt=10.0, t_vals = None):
 
+        
         # get the t array
-        t = self.xp.arange(0.0, T * YRSID_SI, dt)
+        if t_vals is None:
+            t = self.xp.arange(0.0, T * YRSID_SI, dt)
+        else:
+            t = t_vals
+
         cos2psi = self.xp.cos(2.0 * psi)
         sin2psi = self.xp.sin(2.0 * psi)
         cosiota = self.xp.cos(iota)
 
-        fddot = 11.0 / 3.0 * fdot**2 / f
+        fddot = 0.0  # 11.0 / 3.0 * fdot**2 / f
+
+        amp = A * ( 1.0 + 2.0/3.0*fdot/f*t )
 
         # phi0 is phi(t = 0) not phi(t = t0)
         phase = (
@@ -61,8 +68,8 @@ class GBWave(FastLISAResponseParallelModule):
             - phi0
         )
 
-        hSp = -self.xp.cos(phase) * A * (1.0 + cosiota * cosiota)
-        hSc = -self.xp.sin(phase) * 2.0 * A * cosiota
+        hSp = -self.xp.cos(phase) * amp * (1.0 + cosiota * cosiota)
+        hSc = -self.xp.sin(phase) * 2.0 * amp * cosiota
 
         hp = hSp * cos2psi - hSc * sin2psi
         hc = hSp * sin2psi + hSc * cos2psi
@@ -225,14 +232,13 @@ class TDIonTheFlyTest(unittest.TestCase):
         
         import matplotlib.pyplot as plt
         
-        plt.plot(t_new[0], chans[0])
-        plt.plot(t_new[0], chans_fly[0, 0],'--')
-        plt.plot(t_new[0], chans_fly[0, 1],'--')
-        plt.plot(t_new[0], chans_fly[0, 2],'--')
-        
-        
+        plt.plot(t_new[0], chans_fly[0, 0])
+        plt.plot(t_new[0], chans_fly[0, 1])
+        plt.plot(t_new[0], chans_fly[0, 2])
+        plt.plot(t_new[0], chans[0], '--')
         
         plt.show()
+        gb_check = gb(A, f, fdot, iota, phi0, psi, T=T, dt=dt, t_vals = np.array([6.30857402730072e+07, 6.30857388146307e+07]))
         breakpoint()
 
     def test_td_spline_tdi(self):

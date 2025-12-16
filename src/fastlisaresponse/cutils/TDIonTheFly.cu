@@ -554,7 +554,8 @@ void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double
             
             large_factor_imag = (hp_del0 - hp_del1) * xi_p + (hc_del0 - hc_del1) * xi_c;
             tdi_channels_arr[channel * N + i] += pre_factor * (large_factor_real + I * large_factor_imag);
-            // printf("%d %d %d hpdel: %e prefactor: %e large_factor_real: %e large_factor_imag: %e xi_p: %e delay0:%e L: %e tdi: %e %e kdotn: %e n: (%e %e %e)\n", channel, unit_i, i, hp_del0, pre_factor, large_factor_real, large_factor_imag, xi_p, delay0, L, tdi_channels_arr[channel * N + i].real(), tdi_channels_arr[channel * N + i].imag(), k_dot_n, n.x, n.y, n.z);
+            if ((t > 1e6) && (t < 1e6 + 1e4))
+                printf("FLY: %d %d %e %e %e %e %e %e %e\n", i, unit_i, t, pre_factor, large_factor_real, delay0, delay1, L, xi_p);
             CUDA_SYNC_THREADS;
         }
     }
@@ -587,8 +588,18 @@ void LISATDIonTheFly::get_hp_hc(double *hp, double *hc, double t, double *params
     double inc_p = (1. + cos(inc) * cos(inc)) / 2.;
     double inc_c = cos(inc);
     
-    *hp = amp * (inc_p * cos(2. * psi) * cos(phase + phase_change) - inc_c * sin(2. * psi) * sin(phase + phase_change));
-    *hc = amp * (-inc_p * sin(2. * psi) * cos(phase + phase_change) - inc_c * cos(2. * psi) * sin(phase + phase_change));       
+    // *hp = amp * (inc_p * cos(2. * psi) * cos(phase + phase_change) - inc_c * sin(2. * psi) * sin(phase + phase_change));
+    // *hc = amp * (-inc_p * sin(2. * psi) * cos(phase + phase_change) - inc_c * cos(2. * psi) * sin(phase + phase_change));  
+    double cos2psi = cos(2.0 * psi);
+    double sin2psi = sin(2.0 * psi);
+    double cosiota = cos(inc);
+
+    double hSp = -cos(phase) * amp * (1.0 + cosiota * cosiota);
+    double hSc = -sin(phase) * 2.0 * amp * cosiota;
+
+    *hp = hSp * cos2psi - hSc * sin2psi;
+    *hc = hSp * sin2psi + hSc * cos2psi;
+
 }
 
 

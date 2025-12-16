@@ -667,8 +667,8 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
 
             pre_factor = 1. / (1. - k_dot_n);
             large_factor = (hp_del0 - hp_del1) * xi_p + (hc_del0 - hc_del1) * xi_c;
-            // if (i % 10000 == 0)
-            //     printf("%d %d %e %e %e %e %e %e\n", i, link_i, pre_factor, large_factor, delay0, delay1, L, xi_p);
+            if ((t > 1e6) && (t < 1e6 + 1e2))
+                printf("BASE: %d %d %e %e %e %e %e %e %e\n", i, link_i, t, pre_factor, large_factor, delay0, delay1, L, xi_p);
             y_gw[link_i * num_delays + i] = pre_factor * large_factor;
             CUDA_SYNC_THREADS;
         }
