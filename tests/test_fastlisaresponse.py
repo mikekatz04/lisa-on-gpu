@@ -8,6 +8,7 @@ path_to_file = os.path.dirname(__file__)
 from lisatools.detector import EqualArmlengthOrbits
 from fastlisaresponse import ResponseWrapper
 from fastlisaresponse.utils import get_overlap
+from fastlisaresponse.tdiconfig import TDIConfig
 
 try:
     import cupy as cp
@@ -85,7 +86,7 @@ class ResponseTest(unittest.TestCase):
         tdi_kwargs_esa = dict(
             orbits=orbits,
             order=order,
-            tdi=tdi_gen,
+            tdi=TDIConfig(tdi_gen),
             tdi_chan="AET",
         )
 
