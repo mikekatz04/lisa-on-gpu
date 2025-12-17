@@ -162,15 +162,62 @@ class pyResponseTDI(FastLISAResponseParallelModule):
         # setup TDI info
         self._init_TDI_delays()
 
+        # initialize the cpp holders of orbit and other information
+        self.cpp_response = self.backend.pyLISAResponseWrap()
+        self.cpp_response.add_orbit_information(*self.check_add_orbit_args(*self.response_orbits.pycppdetector_args))
+
+    def check_add_orbit_args(self, *args):
+        """Check orbit arguments for adherence to cpp Orbits class.
+        
+        # TODO: make this an automatic version based check?
+        
+        Args are supposed to be [dt, N,  n_arr, L_arr,  x_arr, links, sc_r,  sc_e, armlength].
+
+        Args:
+            *args (tuple): Arguments for cpp Orbits class.
+            
+        """
+        try:
+            assert len(args) == 9
+            assert isinstance(args[0], float)
+            assert isinstance(args[1], int)
+            assert isinstance(args[2], self.xp.ndarray)
+            assert isinstance(args[3], self.xp.ndarray)
+            assert isinstance(args[4], self.xp.ndarray)
+            assert args[2].dtype == args[3].dtype == args[4].dtype == float
+            # assert len(args[2]) == 9 * len(args[3]) == len(args[4])
+            assert len(args[5]) == len(self.response_orbits.LINKS)
+            assert len(args[6]) == len(self.response_orbits.LINKS)
+            assert len(args[7]) == len(self.response_orbits.LINKS)
+            assert isinstance(args[8], float)
+        except AssertionError:
+            raise ValueError("Arguments for cpp class are not correct.")
+        
+        return args
+    
+    @property
+    def cpp_response(self):
+        if self._cpp_response is None:
+            raise ValueError("Must add cpp_response and add orbit information.")
+        return self._cpp_response
+
+    @cpp_response.setter
+    def cpp_response(self, cpp_response):
+        self._cpp_response = cpp_response
+
     @property
     def response_gen(self) -> callable:
         """CPU/GPU function for generating the projections."""
-        return self.backend.get_response_wrap
+        return self.cpp_response.get_response_wrap
 
     @property
     def tdi_gen(self) -> callable:
         """CPU/GPU function for generating tdi."""
-        return self.backend.get_tdi_delays_wrap
+        return self.cpp_response.get_tdi_delays_wrap
+    
+    @property
+    def pycppDetector_fastlisa(self):
+        return self.backend.pycppDetector_fastlisa
 
     @property
     def xp(self) -> object:
@@ -443,7 +490,6 @@ class pyResponseTDI(FastLISAResponseParallelModule):
             len(self.A_in),
             self.E_in,
             self.projections_start_ind,
-            self.response_orbits,
         )
 
         self.y_gw_flat = y_gw
@@ -532,7 +578,6 @@ class pyResponseTDI(FastLISAResponseParallelModule):
             len(self.A_in),
             self.E_in,
             self.tdi_start_ind,
-            self.tdi_orbits,
         )
 
         if self.tdi_chan == "XYZ":

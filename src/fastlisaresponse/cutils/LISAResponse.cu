@@ -412,10 +412,13 @@ void TDI_delay(double *delayed_links, double *input_links, int num_inputs, int n
     }
 }
 
-void get_tdi_delays(double *delayed_links, double *input_links, int num_inputs, int num_delays, double *t_arr, int *unit_starts, int *unit_lengths, int *tdi_base_link, int *tdi_link_combinations, double *tdi_signs_in, int *channels, int num_units, int num_channels,
-                    int order, double sampling_frequency, int buffer_integer, double *A_in, double deps, int num_A, double *E_in, int tdi_start_ind, Orbits *orbits_in)
+void LISAResponse::get_tdi_delays(double *delayed_links, double *input_links, int num_inputs, int num_delays, double *t_arr, int *unit_starts, int *unit_lengths, int *tdi_base_link, int *tdi_link_combinations, double *tdi_signs_in, int *channels, int num_units, int num_channels,
+                    int order, double sampling_frequency, int buffer_integer, double *A_in, double deps, int num_A, double *E_in, int tdi_start_ind)
 {
-
+    if (orbits == NULL)
+    {
+        throw std::invalid_argument("Must add orbits with add_orbit_information method.");
+    }
 #ifdef __CUDACC__
     int num_blocks = std::ceil((num_delays - 2 * tdi_start_ind + NUM_THREADS - 1) / NUM_THREADS);
 
@@ -423,7 +426,7 @@ void get_tdi_delays(double *delayed_links, double *input_links, int num_inputs, 
 
     Orbits *orbits_gpu;
     gpuErrchk(cudaMalloc(&orbits_gpu, sizeof(Orbits)));
-    gpuErrchk(cudaMemcpy(orbits_gpu, orbits_in, sizeof(Orbits), cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpy(orbits_gpu, orbits, sizeof(Orbits), cudaMemcpyHostToDevice));
 
     // printf("RUNNING: %d\n", i);
     TDI_delay<<<gridDim, NUM_THREADS>>>(delayed_links, input_links, num_inputs, num_delays, t_arr, unit_starts, unit_lengths, tdi_base_link, tdi_link_combinations, tdi_signs_in, channels, num_units, num_channels,
@@ -435,7 +438,7 @@ void get_tdi_delays(double *delayed_links, double *input_links, int num_inputs, 
 
 #else
     TDI_delay(delayed_links, input_links, num_inputs, num_delays, t_arr, unit_starts, unit_lengths, tdi_base_link, tdi_link_combinations, tdi_signs_in, channels, num_units, num_channels,
-              order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind, orbits_in);
+              order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind, orbits);
 
 #endif
 }
@@ -675,14 +678,18 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
     }
 }
 
-void get_response(double *y_gw, double *t_data, double *k_in, double *u_in, double *v_in, double dt,
+void LISAResponse::get_response(double *y_gw, double *t_data, double *k_in, double *u_in, double *v_in, double dt,
                   int num_delays,
                   cmplx *input_in, int num_inputs, int order,
                   double sampling_frequency, int buffer_integer,
-                  double *A_in, double deps, int num_A, double *E_in, int projections_start_ind,
-                  Orbits *orbits)
+                  double *A_in, double deps, int num_A, double *E_in, int projections_start_ind)
 {
 
+    if (orbits == NULL)
+    {
+        throw std::invalid_argument("Must add orbits with add_orbit_information method.");
+    }
+    
 #ifdef __CUDACC__
 
     int num_delays_here = (num_delays - 2 * projections_start_ind);
@@ -917,3 +924,4 @@ int main()
     delete[] input_in;
 }
 */
+

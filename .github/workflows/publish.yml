@@ -20,6 +20,11 @@ jobs:
         if: contains(github.event.head_commit.message, '[ci:build-wheels]')
         run: |
           echo "FASTLISAWHL_BUILD=true" >> "$GITHUB_ENV"
+      - name: publish wheels on commit message
+        if: contains(github.event.head_commit.message, '[ci:publish-wheels]')
+        run: |
+          echo "FASTLISAWHL_BUILD=true" >> "$GITHUB_ENV"
+          echo "FASTLISAWHL_PUBLISH=true" >> "$GITHUB_ENV"
       - name: build and publish on tag 'v*'
         if: startsWith(github.event.ref, 'refs/tags/v')
         run: |
@@ -70,6 +75,17 @@ jobs:
           echo "notice:: Detected version: ${VERSION}"
           echo "value=${VERSION}" >> $GITHUB_OUTPUT
           echo "version: ${VERSION}" >> $GITHUB_STEP_SUMMARY
+
+      # =======================
+      # = IV - install llvm   =
+      # =======================
+
+      # - name: Install LLVM and Clang
+      #   uses: KyleMayes/install-llvm-action@v2
+      #   with:
+      #     version: "10.0"
+      #     directory: ${{ runner.temp }}/llvm
+      
   build:
     name: fastlisaresponse-${{ matrix.release }} on ${{ matrix.os }}-${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
@@ -119,12 +135,12 @@ jobs:
             kind: cuda_plugin
             cuda_major: 12
             cuda_minor: 6
-          - release: cpu
-            os: macos-15-intel
-            kind: core
-            reqpython: '>=3.9'
-            arch: x86_64
-            macos_ver: 15.0
+          # - release: cpu
+          #   os: macos-15-intel
+          #   kind: core
+          #   reqpython: '>=3.9'
+          #   arch: x86_64
+          #   macos_ver: 15.0
           - release: cpu
             os: macos-14
             kind: core

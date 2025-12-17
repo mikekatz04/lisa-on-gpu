@@ -12,8 +12,7 @@ from gpubackendtools.exceptions import *
 
 @dataclasses.dataclass
 class FastLISAResponseBackendMethods(BackendMethods):
-    get_response_wrap: typing.Callable[(...), None]
-    get_tdi_delays_wrap: typing.Callable[(...), None]
+    pyLISAResponseWrap: object
     pyTDSplineTDIWaveform: object
     pyFDSplineTDIWaveform: object
     pyTDIConfig: object
@@ -21,11 +20,11 @@ class FastLISAResponseBackendMethods(BackendMethods):
 
 
 class FastLISAResponseBackend:
-    get_response_wrap: typing.Callable[(...), None]
-    get_tdi_delays_wrap: typing.Callable[(...), None]
+    pyLISAResponseWrap: object
     pyTDSplineTDIWaveform: object
     pyFDSplineTDIWaveform: object
     pyTDIConfig: object
+    
     # pyCubicSplineWrap: object
 
     def __init__(self, fastlisaresponse_backend_methods):
@@ -34,13 +33,11 @@ class FastLISAResponseBackend:
         # pass rest to general backend
         assert isinstance(fastlisaresponse_backend_methods, FastLISAResponseBackendMethods)
 
-        self.get_response_wrap = fastlisaresponse_backend_methods.get_response_wrap
-        self.get_tdi_delays_wrap = fastlisaresponse_backend_methods.get_tdi_delays_wrap
         self.pyTDSplineTDIWaveform = fastlisaresponse_backend_methods.pyTDSplineTDIWaveform
         self.pyFDSplineTDIWaveform = fastlisaresponse_backend_methods.pyFDSplineTDIWaveform
         self.pyTDIConfig = fastlisaresponse_backend_methods.pyTDIConfig
         # self.pyCubicSplineWrap = fastlisaresponse_backend_methods.pyCubicSplineWrap
-
+        self.pyLISAResponseWrap = fastlisaresponse_backend_methods.pyLISAResponseWrap
 
 class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
     """Implementation of the CPU backend"""
@@ -65,11 +62,10 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
         numpy = FastLISAResponseCpuBackend.check_numpy()
 
         return FastLISAResponseBackendMethods(
-            get_response_wrap=fastlisaresponse_backend_cpu.responselisa.get_response_wrap,
-            get_tdi_delays_wrap=fastlisaresponse_backend_cpu.responselisa.get_tdi_delays_wrap,
             pyTDSplineTDIWaveform=fastlisaresponse_backend_cpu.tdionthefly.pyTDSplineTDIWaveform,
             pyFDSplineTDIWaveform=fastlisaresponse_backend_cpu.tdionthefly.pyFDSplineTDIWaveform,
             pyTDIConfig=fastlisaresponse_backend_cpu.tdionthefly.pyTDIConfig,
+            pyLISAResponseWrap=fastlisaresponse_backend_cpu.responselisa.pyLISAResponseWrap,
             xp=numpy,
         )
 
@@ -103,12 +99,11 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
             ) from e
 
         return FastLISAResponseBackendMethods(
-            get_response_wrap=fastlisaresponse_backend_cuda11x.responselisa.get_response_wrap,
-            get_tdi_delays_wrap=fastlisaresponse_backend_cuda11x.responselisa.get_tdi_delays_wrap,
             pyTDSplineTDIWaveform=fastlisaresponse_backend_cuda11x.tdionthefly.pyTDSplineTDIWaveform,
             pyFDSplineTDIWaveform=fastlisaresponse_backend_cuda11x.tdionthefly.pyFDSplineTDIWaveform,
             pyTDIConfig=fastlisaresponse_backend_cuda11x.tdionthefly.pyTDIConfig,
             # pyCubicSplineWrap=fastlisaresponse_backend_cuda11x.tdionthefly.pyCubicSplineWrap,
+            pyLISAResponseWrap=fastlisaresponse_backend_cuda11x.responselisa.pyLISAResponseWrap,
             xp=cupy,
         )
 
@@ -140,12 +135,11 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
             ) from e
 
         return FastLISAResponseBackendMethods(
-            get_response_wrap=fastlisaresponse_backend_cuda12x.responselisa.get_response_wrap,
-            get_tdi_delays_wrap=fastlisaresponse_backend_cuda12x.responselisa.get_tdi_delays_wrap,
             pyTDSplineTDIWaveform=fastlisaresponse_backend_cuda12x.tdionthefly.pyTDSplineTDIWaveform,
             pyFDSplineTDIWaveform=fastlisaresponse_backend_cuda12x.tdionthefly.pyFDSplineTDIWaveform,
             pyTDIConfig=fastlisaresponse_backend_cuda12x.tdionthefly.pyTDIConfig,
             # pyCubicSplineWrap=fastlisaresponse_backend_cuda12x.tdionthefly.pyCubicSplineWrap,
+            pyLISAResponseWrap=fastlisaresponse_backend_cuda12x.responselisa.pyLISAResponseWrap,
             xp=cupy,
         )
 

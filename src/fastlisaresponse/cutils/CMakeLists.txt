@@ -463,6 +463,8 @@ if(FASTLISA_WITH_CPU)
 
   target_sources(fastlisaresponse_cpu_responselisa PUBLIC FILE_SET HEADERS FILES
                                          global.hpp Detector.hpp cuda_complex.hpp LISAResponse.hh)
+
+
 endif()
 
 # III. Declare the GPU backend
