@@ -70,6 +70,16 @@ jobs:
           echo "notice:: Detected version: ${VERSION}"
           echo "value=${VERSION}" >> $GITHUB_OUTPUT
           echo "version: ${VERSION}" >> $GITHUB_STEP_SUMMARY
+
+      # =======================
+      # = IV - install llvm   =
+      # =======================
+
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "10.0"
+          directory: ${{ runner.temp }}/llvm
   build:
     name: fastlisaresponse-${{ matrix.release }} on ${{ matrix.os }}-${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
