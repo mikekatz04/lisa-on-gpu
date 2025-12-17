@@ -497,7 +497,6 @@ class pyResponseTDI(FastLISAResponseParallelModule):
 
         orbits_in = self.pycppDetector_fastlisa(*self.response_orbits.pycppdetector_args)
         self.response_gen(
-            orbits_in,
             y_gw,
             t_data,
             k_in,
@@ -515,6 +514,7 @@ class pyResponseTDI(FastLISAResponseParallelModule):
             len(self.A_in),
             self.E_in,
             self.projections_start_ind,
+            orbits_in,
         )
 
         self.y_gw_flat = y_gw
@@ -585,7 +585,6 @@ class pyResponseTDI(FastLISAResponseParallelModule):
         orbits_in = self.pycppDetector_fastlisa(*self.tdi_orbits.pycppdetector_args)
         
         self.tdi_gen(
-            orbits_in,
             self.delayed_links_flat,
             self.y_gw_flat,
             self.y_gw_length,
@@ -607,6 +606,7 @@ class pyResponseTDI(FastLISAResponseParallelModule):
             len(self.A_in),
             self.E_in,
             self.tdi_start_ind,
+            orbits_in,
         )
 
         if self.tdi_chan == "XYZ":

@@ -123,6 +123,17 @@ add_custom_command(
   DEPENDS "responselisa.pyx"
   VERBATIM)
 
+
+add_custom_command(
+  OUTPUT "pycppdetector_fastlisa.cxx"
+  COMMENT "Cythonize pycppdetector.pyx into pycppdetector.cxx"
+  COMMAND
+    Python::Interpreter -m cython "${CMAKE_CURRENT_SOURCE_DIR}/pycppdetector.pyx"
+    --output-file "${CMAKE_CURRENT_BINARY_DIR}/pycppdetector_fastlisa.cxx" -3 -+ --module-name
+    "pycppdetector_fastlisa" -I "${CMAKE_CURRENT_SOURCE_DIR}"
+  DEPENDS "pycppdetector.pyx"
+  VERBATIM)
+
   message(STATUS "CHECKING: ${LISATOOLS_DIR}/cutils/global.hpp  ${CMAKE_CURRENT_SOURCE_DIR}/global.hpp")
   
 
@@ -131,7 +142,7 @@ set(FILES_TO_COPY
   "${LISATOOLS_DIR}/cutils/global.hpp"
   "${LISATOOLS_DIR}/cutils/Detector.hpp"
   "${LISATOOLS_DIR}/cutils/Detector.cu"
-  #"${LISATOOLS_DIR}/cutils/pycppdetector.pyx"
+  "${LISATOOLS_DIR}/cutils/pycppdetector.pyx"
   #"${LISATOOLS_DIR}/cutils/pycppdetector.pxd"
 )
 # MY_LIST will be "string1;string2;another string"
@@ -168,6 +179,13 @@ if(FASTLISA_WITH_CPU)
 
   target_sources(fastlisaresponse_cpu_responselisa PUBLIC FILE_SET HEADERS FILES
                                          global.hpp Detector.hpp cuda_complex.hpp LISAResponse.hh)
+
+  
+  python_add_library(fastlisaresponse_cpu_pycppdetector_fastlisa MODULE WITH_SOABI pycppdetector_fastlisa.cxx Detector.cxx)
+  apply_cpu_backend_common_options(pycppdetector_fastlisa)
+
+  target_sources(fastlisaresponse_cpu_pycppdetector_fastlisa PUBLIC FILE_SET HEADERS FILES
+                                         global.hpp Detector.hpp)
 endif()
 
 # III. Declare the GPU backend
