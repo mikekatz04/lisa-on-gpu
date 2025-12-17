@@ -45,7 +45,6 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
     def cpu_methods_loader() -> FastLISAResponseBackendMethods:
         try:
             import fastlisaresponse_backend_cpu.responselisa
-            import fastlisaresponse_backend_cpu.pycppdetector_fastlisa
             
         except (ModuleNotFoundError, ImportError) as e:
             raise BackendUnavailableException(
@@ -57,7 +56,7 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
         return FastLISAResponseBackendMethods(
             get_response_wrap=fastlisaresponse_backend_cpu.responselisa.get_response_wrap,
             get_tdi_delays_wrap=fastlisaresponse_backend_cpu.responselisa.get_tdi_delays_wrap,
-            pycppDetector_fastlisa=fastlisaresponse_backend_cpu.pycppdetector_fastlisa.pycppDetector,
+            pycppDetector_fastlisa=fastlisaresponse_backend_cpu.responselisa.pycppDetector,
             xp=numpy,
         )
 
@@ -92,7 +91,7 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
         return FastLISAResponseBackendMethods(
             get_response_wrap=fastlisaresponse_backend_cuda11x.responselisa.get_response_wrap,
             get_tdi_delays_wrap=fastlisaresponse_backend_cuda11x.responselisa.get_tdi_delays_wrap,
-            pycppDetector_fastlisa=fastlisaresponse_backend_cuda11x.pycppdetector_fastlisa.pycppDetector_fastlisa,
+            pycppDetector_fastlisa=fastlisaresponse_backend_cuda11x.responselisa.pycppDetector_fastlisa,
             xp=cupy,
         )
 
@@ -125,7 +124,7 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
         return FastLISAResponseBackendMethods(
             get_response_wrap=fastlisaresponse_backend_cuda12x.responselisa.get_response_wrap,
             get_tdi_delays_wrap=fastlisaresponse_backend_cuda12x.responselisa.get_tdi_delays_wrap,
-            pycppDetector_fastlisa=fastlisaresponse_backend_cuda12x.pycppdetector_fastlisa.pycppDetector_fastlisa,
+            pycppDetector_fastlisa=fastlisaresponse_backend_cuda12x.responselisa.pycppDetector_fastlisa,
             xp=cupy,
         )
 

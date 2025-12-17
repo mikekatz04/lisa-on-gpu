@@ -496,6 +496,7 @@ class pyResponseTDI(FastLISAResponseParallelModule):
         y_gw = self.xp.zeros((self.nlinks * self.num_pts,), dtype=self.xp.float64)
 
         orbits_in = self.pycppDetector_fastlisa(*self.response_orbits.pycppdetector_args)
+        
         self.response_gen(
             y_gw,
             t_data,
