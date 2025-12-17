@@ -161,21 +161,20 @@ class pyResponseTDI(FastLISAResponseParallelModule):
 
         # setup TDI info
         self._init_TDI_delays()
-        self.cpp_response = self.backend.pyLISAResponseWrap()
-        self.cpp_response.add_orbit_information(*self.check_args(*self.response_orbits.pycppdetector_args))
 
-    def check_args(self, *args):
-        """
+        # initialize the cpp holders of orbit and other information
+        self.cpp_response = self.backend.pyLISAResponseWrap()
+        self.cpp_response.add_orbit_information(*self.check_add_orbit_args(*self.response_orbits.pycppdetector_args))
+
+    def check_add_orbit_args(self, *args):
+        """Check orbit arguments for adherence to cpp Orbits class.
         
-            dt,
-            N, 
-            n_arr,
-            L_arr, 
-            x_arr,
-            links,
-            sc_r, 
-            sc_e,
-            armlength
+        # TODO: make this an automatic version based check?
+        
+        Args are supposed to be [dt, N,  n_arr, L_arr,  x_arr, links, sc_r,  sc_e, armlength].
+
+        Args:
+            *args (tuple): Arguments for cpp Orbits class.
             
         """
         try:
@@ -195,6 +194,7 @@ class pyResponseTDI(FastLISAResponseParallelModule):
             raise ValueError("Arguments for cpp class are not correct.")
         
         return args
+    
     @property
     def cpp_response(self):
         if self._cpp_response is None:
