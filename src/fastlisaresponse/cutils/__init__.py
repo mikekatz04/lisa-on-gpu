@@ -14,11 +14,12 @@ from gpubackendtools.exceptions import *
 class FastLISAResponseBackendMethods(BackendMethods):
     get_response_wrap: typing.Callable[(...), None]
     get_tdi_delays_wrap: typing.Callable[(...), None]
-
+    pycppDetector_fastlisa: object
 
 class FastLISAResponseBackend:
     get_response_wrap: typing.Callable[(...), None]
     get_tdi_delays_wrap: typing.Callable[(...), None]
+    pycppDetector_fastlisa: object
 
     def __init__(self, fastlisaresponse_backend_methods):
 
@@ -28,6 +29,7 @@ class FastLISAResponseBackend:
 
         self.get_response_wrap = fastlisaresponse_backend_methods.get_response_wrap
         self.get_tdi_delays_wrap = fastlisaresponse_backend_methods.get_tdi_delays_wrap
+        self.pycppDetector_fastlisa = fastlisaresponse_backend_methods.pycppDetector_fastlisa
 
 
 class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
@@ -54,6 +56,7 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
         return FastLISAResponseBackendMethods(
             get_response_wrap=fastlisaresponse_backend_cpu.responselisa.get_response_wrap,
             get_tdi_delays_wrap=fastlisaresponse_backend_cpu.responselisa.get_tdi_delays_wrap,
+            pycppDetector_fastlisa=fastlisaresponse_backend_cpu.responselisa.pycppDetector_fastlisa,
             xp=numpy,
         )
 
@@ -88,6 +91,7 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
         return FastLISAResponseBackendMethods(
             get_response_wrap=fastlisaresponse_backend_cuda11x.responselisa.get_response_wrap,
             get_tdi_delays_wrap=fastlisaresponse_backend_cuda11x.responselisa.get_tdi_delays_wrap,
+            pycppDetector_fastlisa=fastlisaresponse_backend_cuda11x.responselisa.pycppDetector_fastlisa,
             xp=cupy,
         )
 
@@ -120,6 +124,7 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
         return FastLISAResponseBackendMethods(
             get_response_wrap=fastlisaresponse_backend_cuda12x.responselisa.get_response_wrap,
             get_tdi_delays_wrap=fastlisaresponse_backend_cuda12x.responselisa.get_tdi_delays_wrap,
+            pycppDetector_fastlisa=fastlisaresponse_backend_cuda12x.responselisa.pycppDetector_fastlisa,
             xp=cupy,
         )
 

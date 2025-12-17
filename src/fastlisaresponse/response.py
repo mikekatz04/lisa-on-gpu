@@ -171,6 +171,10 @@ class pyResponseTDI(FastLISAResponseParallelModule):
     def tdi_gen(self) -> callable:
         """CPU/GPU function for generating tdi."""
         return self.backend.get_tdi_delays_wrap
+    
+    @property
+    def pycppDetector_fastlisa(self):
+        return self.backend.pycppDetector_fastlisa
 
     @property
     def xp(self) -> object:
@@ -491,7 +495,9 @@ class pyResponseTDI(FastLISAResponseParallelModule):
         assert len(input_in) >= self.num_pts
         y_gw = self.xp.zeros((self.nlinks * self.num_pts,), dtype=self.xp.float64)
 
+        orbits_in = self.pycppDetector_fastlisa(*self.response_orbits.pycppdetector_args)
         self.response_gen(
+            orbits_in,
             y_gw,
             t_data,
             k_in,
@@ -509,7 +515,6 @@ class pyResponseTDI(FastLISAResponseParallelModule):
             len(self.A_in),
             self.E_in,
             self.projections_start_ind,
-            self.response_orbits,
         )
 
         self.y_gw_flat = y_gw
@@ -577,7 +582,10 @@ class pyResponseTDI(FastLISAResponseParallelModule):
         unit_starts = unit_starts.astype(np.int32)
         unit_lengths = unit_lengths.astype(np.int32)
 
+        orbits_in = self.pycppDetector_fastlisa(*self.tdi_orbits.pycppdetector_args)
+        
         self.tdi_gen(
+            orbits_in,
             self.delayed_links_flat,
             self.y_gw_flat,
             self.y_gw_length,
@@ -599,7 +607,6 @@ class pyResponseTDI(FastLISAResponseParallelModule):
             len(self.A_in),
             self.E_in,
             self.tdi_start_ind,
-            self.tdi_orbits,
         )
 
         if self.tdi_chan == "XYZ":

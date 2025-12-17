@@ -3,7 +3,7 @@ requires = [
   "Cython",
   "numpy",
   "astropy",  # TODO: remove astropy?
-  "lisaanalysistools>=1.1.16",
+  "lisaanalysistools @ file:///Users/mlkatz/Research/LISAanalysistools",  # >=1.1.16",
   "scikit_build_core",
 ]
 build-backend = "scikit_build_core.build"

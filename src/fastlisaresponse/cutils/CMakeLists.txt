@@ -131,6 +131,8 @@ set(FILES_TO_COPY
   "${LISATOOLS_DIR}/cutils/global.hpp"
   "${LISATOOLS_DIR}/cutils/Detector.hpp"
   "${LISATOOLS_DIR}/cutils/Detector.cu"
+  #"${LISATOOLS_DIR}/cutils/pycppdetector.pyx"
+  #"${LISATOOLS_DIR}/cutils/pycppdetector.pxd"
 )
 # MY_LIST will be "string1;string2;another string"
 
