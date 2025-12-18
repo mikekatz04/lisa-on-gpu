@@ -158,8 +158,8 @@ class pyResponseTDI(FastLISAResponseParallelModule):
             self.num_pts = int(self.response_orbits.t_base.max() / self.dt)
 
         # setup spacecraft links indexes
-        
-        self.tdi_config = TDIConfig(tdi)
+
+        self.tdi_config = tdi
         
         # setup TDI info
         self._init_TDI_delays()
