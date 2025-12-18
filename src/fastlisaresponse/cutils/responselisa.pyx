@@ -10,6 +10,7 @@ cdef extern from "LISAResponse.hh":
 
     cdef cppclass LISAResponseWrap "LISAResponse":
         void add_orbit_information(double dt_, int N_, double *n_arr_, double *L_arr_, double *x_arr_, int *links_, int *sc_r_, int *sc_e_, double armlength_) except+
+        void add_tdi_config(int *unit_starts_, int *unit_lengths_, int *tdi_base_link_, int *tdi_link_combinations_, double *tdi_signs_in_, int *channels_, int num_units_, int num_channels_) except+
         void dealloc() except+
         void get_tdi_delays(double *delayed_links, double *input_links, int num_inputs, int num_delays, double *t_arr, int *unit_starts, int *unit_lengths, int *tdi_base_link, int *tdi_link_combinations, double *tdi_signs, int *channels, int num_units, int num_channels,
                 int order, double sampling_frequency, int buffer_integer, double *A_in, double deps, int num_A, double *E_in, int tdi_start_ind) except+
@@ -57,6 +58,29 @@ cdef class pyLISAResponseWrap:
             <int*> sc_r_in, 
             <int*> sc_e_in,
             armlength
+        )
+
+    def add_tdi_config(self, *args, **kwargs):
+        (
+            unit_starts,
+            unit_lengths, 
+            tdi_base_link,
+            tdi_link_combinations, 
+            tdi_signs_in,
+            channels,
+            num_units, 
+            num_channels
+        ), tkwargs = wrapper(*args, **kwargs)
+
+        cdef size_t unit_starts_in = unit_starts
+        cdef size_t unit_lengths_in = unit_lengths
+        cdef size_t tdi_base_link_in = tdi_base_link
+        cdef size_t tdi_link_combinations_in = tdi_link_combinations
+        cdef size_t tdi_signs_in_in = tdi_signs_in
+        cdef size_t channels_in = channels
+        
+        self.g.add_tdi_config(
+            <int *>unit_starts_in, <int *>unit_lengths_in, <int *>tdi_base_link_in, <int *>tdi_link_combinations_in, <double *>tdi_signs_in_in, <int *>channels_in, num_units, num_channels
         )
 
     def __dealloc__(self):

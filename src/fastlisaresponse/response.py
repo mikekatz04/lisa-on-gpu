@@ -158,13 +158,16 @@ class pyResponseTDI(FastLISAResponseParallelModule):
             self.num_pts = int(self.response_orbits.t_base.max() / self.dt)
 
         # setup spacecraft links indexes
-
+        
+        self.tdi_config = TDIConfig(tdi)
+        
         # setup TDI info
         self._init_TDI_delays()
 
         # initialize the cpp holders of orbit and other information
         self.cpp_response = self.backend.pyLISAResponseWrap()
         self.cpp_response.add_orbit_information(*self.check_add_orbit_args(*self.response_orbits.pycppdetector_args))
+        self.cpp_response.add_tdi_config(*self.tdi_config.pytdiconfig_args)
 
     def check_add_orbit_args(self, *args):
         """Check orbit arguments for adherence to cpp Orbits class.

@@ -6,6 +6,7 @@ requires = [
   "eryn",
   "lisaanalysistools>=1.2.0",  #", # @ file:///Users/mlkatz/Research/LISAanalysistools
   "scikit_build_core",
+  "eryn",
 ]
 build-backend = "scikit_build_core.build"
 
