@@ -167,10 +167,34 @@ class TDIonTheFly(FastLISAResponseParallelModule):
         phase_ref = np.zeros((self.N * self.num_sub), dtype=float)
         assert int(np.prod(self.t_arr.shape)) == self.N * self.num_sub
 
+        
+        self.wave_gen = self.backend.pyTDSplineTDIWaveform()
+
+        tmp_out = []
+        for tmp in list(self.orbits.pycppdetector_args):
+            try:
+                tmp_out.append(tmp.copy())
+            except AttributeError:
+                tmp_out.append(tmp)
+
+        self.wave_gen.add_orbit_information(*tmp_out)
+
+        tmp_out2 = []
+        for tmp in list(self.tdi_config.pytdiconfig_args):
+            try:
+                tmp_out2.append(tmp.copy())
+            except AttributeError:
+                tmp_out2.append(tmp)
+        self.wave_gen.add_tdi_config(*tmp_out2)
+        self.wave_gen.add_amp_spline(*self.amp.cpp_class_args)
+        self.wave_gen.add_phase_spline(*self.phase.cpp_class_args)
+
         buffer_length = self.wave_gen.get_buffer_size(self.N)
         # bool is 1 byte
         buffer = np.zeros(buffer_length, dtype=bool)
 
+        
+        breakpoint()
         self.wave_gen.run_wave_tdi(
             buffer, buffer_length,
             tdi_channels_arr,
@@ -180,6 +204,7 @@ class TDIonTheFly(FastLISAResponseParallelModule):
             self.N, self.num_sub, self.n_params, self.tdi_config.nchannels
         )
 
+        breakpoint()
         reshape_shape = (self.num_sub, self.tdi_config.nchannels, self.N)
         return self.from_tdi_output(TDIOutput(
             self.t_arr, 
@@ -275,12 +300,21 @@ class TDTDIonTheFly(TDIonTheFly):
         self.amp = amp
         self.phase = phase
 
+        # self.wave_gen = self.backend.pyTDSplineTDIWaveform()
+        # self.wave_gen.add_orbit_information(*self.orbits.pycppdetector_args)
+        # self.wave_gen.add_tdi_config(*self.tdi_config.pytdiconfig_args)
+        # self.wave_gen.add_amp_spline(*self.amp.cpp_class_args)
+        # self.wave_gen.add_phase_spline(*self.phase.cpp_class_args)
+        
         # import time
         # time.sleep(1.0)
     @property
     def wave_gen(self) -> callable:
-        self._wave_gen = self.backend.pyTDSplineTDIWaveform(self.orbits.ptr, self.tdi_config.ptr, self.amp.cpp_class.ptr, self.phase.cpp_class.ptr)
         return self._wave_gen
+    
+    @wave_gen.setter
+    def wave_gen(self, wave_gen):
+        self._wave_gen = wave_gen
     
     def from_tdi_output(self, tdi_output: TDIOutput, fill_splines: Optional[bool] = False) -> FDTDIOutput:
         assert np.allclose(tdi_output.x, self.t_arr)

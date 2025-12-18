@@ -8,12 +8,12 @@
 // TODO: GET RID OF THIS ??!!!
 double C_SI = 299792458.;
 
-CUDA_CALLABLE_MEMBER
-LISATDIonTheFly::LISATDIonTheFly(Orbits *orbits_, TDIConfig *tdi_config_)
-{
-    orbits = orbits_;
-    tdi_config = tdi_config_;
-}
+// CUDA_CALLABLE_MEMBER
+// LISATDIonTheFly::LISATDIonTheFly(Orbits *orbits_, TDIConfig *tdi_config_)
+// {
+//     orbits = orbits_;
+//     tdi_config = tdi_config_;
+// }
 
 CUDA_CALLABLE_MEMBER
 LISATDIonTheFly::~LISATDIonTheFly()
@@ -634,7 +634,7 @@ void LISATDIonTheFly::get_tdi(void *buffer, int buffer_length, cmplx *tdi_channe
         phi_ref[i] = get_phase_ref(t_arr[i], params, bin_i);
     }
     CUDA_SYNC_THREADS;
-    new_extract_amplitude_and_phase(count, fix_count, flip, pjump, N, &tdi_amp[0], &tdi_phase[0], &tdi_channels_arr[0], &phi_ref[0]);
+     _extract_amplitude_and_phase(count, fix_count, flip, pjump, N, &tdi_amp[0], &tdi_phase[0], &tdi_channels_arr[0], &phi_ref[0]);
     new_extract_amplitude_and_phase(count, fix_count, flip, pjump, N, &tdi_amp[N], &tdi_phase[N], &tdi_channels_arr[N], &phi_ref[0]);
     new_extract_amplitude_and_phase(count, fix_count, flip, pjump, N, &tdi_amp[2 * N], &tdi_phase[2 * N], &tdi_channels_arr[2 * N], &phi_ref[0]);
     
@@ -1090,7 +1090,7 @@ double GBTDIonTheFly::ucb_amplitude(double t, double *params)
 }
 
 CUDA_CALLABLE_MEMBER
-GBTDIonTheFly::GBTDIonTheFly(Orbits *orbits_, TDIConfig *tdi_config_, double T_) : LISATDIonTheFly(orbits_, tdi_config_)
+GBTDIonTheFly::GBTDIonTheFly(double T_) : LISATDIonTheFly()
 {
     T = T_;
 }
@@ -1128,18 +1128,52 @@ GBTDIonTheFly::~GBTDIonTheFly()
 }
 
 CUDA_CALLABLE_MEMBER
+void LISATDIonTheFly::print_orbits_tdi()
+{
+    printf("inside print\n");
+    printf("ahead of check\n");
+    if (orbits == NULL)
+    {
+        throw std::invalid_argument("Need to add orbital information.\n");
+    }
+    printf("orbits inside: %e\n", orbits->armlength);
+    
+    if (tdi_config == NULL)
+    {
+        throw std::invalid_argument("Need to add tdi config.\n");
+    }
+    printf("tdi_config inside: %d\n", tdi_config->num_channels);
+}
+
+CUDA_CALLABLE_MEMBER
 void LISATDIonTheFly::run_wave_tdi(void *buffer, int buffer_length, cmplx *tdi_channels_arr, 
     double *tdi_amp, double *tdi_phase, double *phi_ref, 
     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels)
 {
+    printf("INSIDE\n");
+    printf("OUTSIDE\n");
+    printf("ahead of check22\n");
+    // printf("orbits inside: %e", orbits->armlength);
+    if (orbits == NULL)
+    {
+        throw std::invalid_argument("Need to add orbital information.\n");
+    }
+    printf("CHECK CHECK: %d\n", orbits->N);
+    if (tdi_config == NULL)
+    {
+        throw std::invalid_argument("Need to add tdi config2.\n");
+    }
+    printf("tdi_config inside: %d", tdi_config->num_channels);
+
+
      // TODO: CHECK THIS!!
     for (int bin_i = 0; bin_i < num_bin; bin_i += 1)
     {
-
+        
         // map to Tyson/Neil setup
         double *params_here = &params[bin_i * n_params];
         double *t_here = &t_arr[bin_i * N];
-
+        
         get_tdi(
             buffer, buffer_length,
             &tdi_channels_arr[bin_i * nchannels * N], 
@@ -1165,13 +1199,25 @@ void GBTDIonTheFly::dealloc()
 
 
 
+// CUDA_CALLABLE_MEMBER
+// TDSplineTDIWaveform::TDSplineTDIWaveform(Orbits *orbits_, TDIConfig *tdi_config_, CubicSpline *amp_spline_, CubicSpline *phase_spline_): LISATDIonTheFly(orbits_, tdi_config_)
+// {
+//     phase_spline = phase_spline_;
+//     amp_spline = amp_spline_;
+//     // printf("spline type init : %d %d\n", amp_spline->spline_type, phase_spline->spline_type);        
+//     // check_x();
+// }
+
 CUDA_CALLABLE_MEMBER
-TDSplineTDIWaveform::TDSplineTDIWaveform(Orbits *orbits_, TDIConfig *tdi_config_, CubicSpline *amp_spline_, CubicSpline *phase_spline_): LISATDIonTheFly(orbits_, tdi_config_)
+void TDSplineTDIWaveform::add_amp_spline(double *x0_, double *y0_, double *c1_, double *c2_, double *c3_, double ninterps_, int length_, int spline_type_)
 {
-    phase_spline = phase_spline_;
-    amp_spline = amp_spline_;
-    // printf("spline type init : %d %d\n", amp_spline->spline_type, phase_spline->spline_type);        
-    // check_x();
+    add_cubic_spline(amp_spline, x0_, y0_, c1_, c2_, c3_, ninterps_, length_, spline_type_);
+}
+
+CUDA_CALLABLE_MEMBER
+void TDSplineTDIWaveform::add_phase_spline(double *x0_, double *y0_, double *c1_, double *c2_, double *c3_, double ninterps_, int length_, int spline_type_)
+{
+    add_cubic_spline(phase_spline, x0_, y0_, c1_, c2_, c3_, ninterps_, length_, spline_type_);
 }
 
 CUDA_CALLABLE_MEMBER
@@ -1268,12 +1314,15 @@ int FDSplineTDIWaveform::get_inc_index()
 CUDA_CALLABLE_MEMBER
 double TDSplineTDIWaveform::get_amp(double t, double *params, int spline_i)
 {
+    printf("before amp: %d\n", amp_spline->ninterps);
     return amp_spline->eval_single(t, spline_i);
 }
 
 CUDA_CALLABLE_MEMBER
 double TDSplineTDIWaveform::get_phase(double t, double *params, int spline_i)
 {
+    printf("before phase: %d\n", phase_spline->ninterps);
+    
     return phase_spline->eval_single(t, spline_i);
 }
 
@@ -1315,13 +1364,13 @@ double TDSplineTDIWaveform::get_phase(double t, double *params, int spline_i)
 
 
 
-CUDA_CALLABLE_MEMBER
-FDSplineTDIWaveform::FDSplineTDIWaveform(Orbits *orbits_, TDIConfig *tdi_config_, CubicSpline *amp_spline_, CubicSpline *freq_spline_, double *phase_ref_): LISATDIonTheFly(orbits_, tdi_config_)
-{
-    freq_spline = freq_spline_;
-    amp_spline = amp_spline_;
-    phase_ref_store = phase_ref_;
-}
+// CUDA_CALLABLE_MEMBER
+// FDSplineTDIWaveform::FDSplineTDIWaveform(Orbits *orbits_, TDIConfig *tdi_config_, CubicSpline *amp_spline_, CubicSpline *freq_spline_, double *phase_ref_): LISATDIonTheFly(orbits_, tdi_config_)
+// {
+//     freq_spline = freq_spline_;
+//     amp_spline = amp_spline_;
+//     phase_ref_store = phase_ref_;
+// }
 
 // CUDA_CALLABLE_MEMBER
 // void FDSplineTDIWaveform::get_amp_and_phase(double t_ssb, double *t, double *amp, double *phase, double *params, int N, int spline_i)
@@ -1339,6 +1388,18 @@ FDSplineTDIWaveform::FDSplineTDIWaveform(Orbits *orbits_, TDIConfig *tdi_config_
 //         // printf("af: t, amp, phase: %d %e, %e, %e\n", i, t_i, amp[i], phase[i]);
 //     }
 // }
+
+CUDA_CALLABLE_MEMBER
+void FDSplineTDIWaveform::add_amp_spline(double *x0_, double *y0_, double *c1_, double *c2_, double *c3_, double ninterps_, int length_, int spline_type_)
+{
+    add_cubic_spline(amp_spline, x0_, y0_, c1_, c2_, c3_, ninterps_, length_, spline_type_);
+}
+
+CUDA_CALLABLE_MEMBER
+void FDSplineTDIWaveform::add_freq_spline(double *x0_, double *y0_, double *c1_, double *c2_, double *c3_, double ninterps_, int length_, int spline_type_)
+{
+    add_cubic_spline(freq_spline, x0_, y0_, c1_, c2_, c3_, ninterps_, length_, spline_type_);
+}
 
 CUDA_CALLABLE_MEMBER
 double FDSplineTDIWaveform::get_amp(double t, double *params, int spline_i)
@@ -1408,106 +1469,106 @@ double FDSplineTDIWaveform::get_phase_ref(double t, double *params, int bin_i)
 }
 
 
-CUDA_CALLABLE_MEMBER
-cmplx LagrangeInterpolant::interp(double t, cmplx *wave, int wave_N, int bin_i)
-{
-    /*
-    double A = 1.0;
-    for (int i = 1; i < h; i += 1){
-        A *= (i + e) * (i + 1 - e);
-    }
-    double denominator = factorials[h - 1] * factorials[h];
-    A /= denominator;
-    */
+// CUDA_CALLABLE_MEMBER
+// cmplx LagrangeInterpolant::interp(double t, cmplx *wave, int wave_N, int bin_i)
+// {
+//     /*
+//     double A = 1.0;
+//     for (int i = 1; i < h; i += 1){
+//         A *= (i + e) * (i + 1 - e);
+//     }
+//     double denominator = factorials[h - 1] * factorials[h];
+//     A /= denominator;
+//     */
 
-    // if ((i == 0) && (link_i == 0)) printf("%.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e\n", L, delay0, delay1, x0[0], x0[1], x0[2],x1[0], x1[1], x1[2]);
-    double clipped_delay0 = t; 
-    int integer_delay0 = (int)ceil(clipped_delay0 * sampling_frequency) - 1;
-    double fraction0 = 1.0 + integer_delay0 - clipped_delay0 * sampling_frequency;
+//     // if ((i == 0) && (link_i == 0)) printf("%.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e\n", L, delay0, delay1, x0[0], x0[1], x0[2],x1[0], x1[1], x1[2]);
+//     double clipped_delay0 = t; 
+//     int integer_delay0 = (int)ceil(clipped_delay0 * sampling_frequency) - 1;
+//     double fraction0 = 1.0 + integer_delay0 - clipped_delay0 * sampling_frequency;
     
-    // int h, int d, double e, double *A_arr, double deps, double *E_arr, int start_input_ind
-    // half_point_count, integer_delay, fraction, A_arr, deps, E_arr, start_input_ind
-    double e = fraction0;
-    int d = integer_delay0;
+//     // int h, int d, double e, double *A_arr, double deps, double *E_arr, int start_input_ind
+//     // half_point_count, integer_delay, fraction, A_arr, deps, E_arr, start_input_ind
+//     double e = fraction0;
+//     int d = integer_delay0;
     
-    int ind = (int)(e / deps);
+//     int ind = (int)(e / deps);
 
-    double frac = (e - ind * deps) / deps;
-    double A = A_arr[ind] * (1. - frac) + A_arr[ind + 1] * frac;
+//     double frac = (e - ind * deps) / deps;
+//     double A = A_arr[ind] * (1. - frac) + A_arr[ind + 1] * frac;
 
-    double B = 1.0 - e;
-    double C = e;
-    double D = e * (1.0 - e);
+//     double B = 1.0 - e;
+//     double C = e;
+//     double D = e * (1.0 - e);
 
-    double sum_hp = 0.0;
-    double sum_hc = 0.0;
-    cmplx temp_up, temp_down;
-    // if ((i == 100) && (link_i == 0)) printf("%d %e %e %e %e %e\n", d, e, A, B, C, D);
-    // printf("in: %d %d\n", d, start_input_ind);
-    for (int j = 1; j < h; j += 1)
-    {
+//     double sum_hp = 0.0;
+//     double sum_hc = 0.0;
+//     cmplx temp_up, temp_down;
+//     // if ((i == 100) && (link_i == 0)) printf("%d %e %e %e %e %e\n", d, e, A, B, C, D);
+//     // printf("in: %d %d\n", d, start_input_ind);
+//     for (int j = 1; j < h; j += 1)
+//     {
 
-        // get constants
+//         // get constants
 
-        /*
-        double first_term = factorials[h - 1] / factorials[h - 1 - j];
-        double second_term = factorials[h] / factorials[h + j];
-        double value = first_term * second_term;
+//         /*
+//         double first_term = factorials[h - 1] / factorials[h - 1 - j];
+//         double second_term = factorials[h] / factorials[h + j];
+//         double value = first_term * second_term;
 
-        value = value * pow(-1.0, (double)j);
-        */
+//         value = value * pow(-1.0, (double)j);
+//         */
 
-        double E = E_arr[j - 1];
+//         double E = E_arr[j - 1];
 
-        double F = j + e;
-        double G = j + (1 - e);
+//         double F = j + e;
+//         double G = j + (1 - e);
 
-        // perform calculation
-        temp_up = wave[(bin_i * wave_N) + d + 1 + j];
-        temp_down = wave[(bin_i * wave_N) + d - j];
+//         // perform calculation
+//         temp_up = wave[(bin_i * wave_N) + d + 1 + j];
+//         temp_down = wave[(bin_i * wave_N) + d - j];
 
-        // if ((i == 100) && (link_i == 0)) printf("mid: %d %d %d %e %e %e %e %e %e %e\n", j, d + 1 + j - start_input_ind, d - j - start_input_ind, temp_up, temp_down, E, F, G);
-        sum_hp += E * (temp_up.real() / F + temp_down.real() / G);
-        sum_hc += E * (temp_up.imag() / F + temp_down.imag() / G);
-    }
-    temp_up = wave[(bin_i * wave_N) + d + 1];
-    temp_down = wave[(bin_i * wave_N) + d];
-    // printf("out: %d %d\n", d, start_input_ind);
-    double real_out = A * (B * temp_up.real() + C * temp_down.real() + D * sum_hp);
-    double imag_out = A * (B * temp_up.imag() + C * temp_down.imag() + D * sum_hc);
-    cmplx output(real_out, imag_out);
-    return output;
-    // if ((i == 100) && (link_i == 0)) printf("end: %e %e\n", *result_hp, *result_hc);
-}
+//         // if ((i == 100) && (link_i == 0)) printf("mid: %d %d %d %e %e %e %e %e %e %e\n", j, d + 1 + j - start_input_ind, d - j - start_input_ind, temp_up, temp_down, E, F, G);
+//         sum_hp += E * (temp_up.real() / F + temp_down.real() / G);
+//         sum_hc += E * (temp_up.imag() / F + temp_down.imag() / G);
+//     }
+//     temp_up = wave[(bin_i * wave_N) + d + 1];
+//     temp_down = wave[(bin_i * wave_N) + d];
+//     // printf("out: %d %d\n", d, start_input_ind);
+//     double real_out = A * (B * temp_up.real() + C * temp_down.real() + D * sum_hp);
+//     double imag_out = A * (B * temp_up.imag() + C * temp_down.imag() + D * sum_hc);
+//     cmplx output(real_out, imag_out);
+//     return output;
+//     // if ((i == 100) && (link_i == 0)) printf("end: %e %e\n", *result_hp, *result_hc);
+// }
 
-CUDA_CALLABLE_MEMBER
-void TDLagrangeInterpTDIWave::get_hp_hc(double *hp, double *hc, double t, double *params, double phase_change, int bin_i)
-{
-    cmplx I(0.0, 1.0);
-    cmplx wave_out = lagrange->interp(t, wave, wave_N, bin_i);
+// CUDA_CALLABLE_MEMBER
+// void TDLagrangeInterpTDIWave::get_hp_hc(double *hp, double *hc, double t, double *params, double phase_change, int bin_i)
+// {
+//     cmplx I(0.0, 1.0);
+//     cmplx wave_out = lagrange->interp(t, wave, wave_N, bin_i);
 
-    wave_out *= gcmplx::exp(I * phase_change);
-    *hp = wave_out.real();
-    *hc = wave_out.imag();
-}
+//     wave_out *= gcmplx::exp(I * phase_change);
+//     *hp = wave_out.real();
+//     *hc = wave_out.imag();
+// }
 
-CUDA_CALLABLE_MEMBER
-TDLagrangeInterpTDIWave::TDLagrangeInterpTDIWave(Orbits *orbits_, TDIConfig *tdi_config_, cmplx *wave_, int wave_N_, LagrangeInterpolant *lagrange_): LISATDIonTheFly(orbits_, tdi_config_)
-{
-    lagrange = lagrange_;
-    wave = wave_;
-    wave_N = wave_N_; 
-}
+// CUDA_CALLABLE_MEMBER
+// TDLagrangeInterpTDIWave::TDLagrangeInterpTDIWave(Orbits *orbits_, TDIConfig *tdi_config_, cmplx *wave_, int wave_N_, LagrangeInterpolant *lagrange_): LISATDIonTheFly(orbits_, tdi_config_)
+// {
+//     lagrange = lagrange_;
+//     wave = wave_;
+//     wave_N = wave_N_; 
+// }
 
 
-int TDLagrangeInterpTDIWave::get_beta_index()
-{
-    // ndim = 2; beta second
-    return 1;
-}
+// int TDLagrangeInterpTDIWave::get_beta_index()
+// {
+//     // ndim = 2; beta second
+//     return 1;
+// }
 
-int TDLagrangeInterpTDIWave::get_lam_index()
-{
-    // ndim = 2; lam first
-    return 0;
-}
+// int TDLagrangeInterpTDIWave::get_lam_index()
+// {
+//     // ndim = 2; lam first
+//     return 0;
+// }

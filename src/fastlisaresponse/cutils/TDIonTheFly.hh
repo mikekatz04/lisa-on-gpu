@@ -132,6 +132,37 @@ class LISATDIonTheFly{
         virtual double get_amp(double t, double *params, int bin_i);
         CUDA_CALLABLE_MEMBER
         virtual double get_phase(double t, double *params, int bin_i);
+        void add_orbit_information(double dt_, int N_, double *n_arr_, double *L_arr_, double *x_arr_, int *links_, int *sc_r_, int *sc_e_, double armlength_)
+        {
+            // printf("new orbits 45454454\n");
+            if (orbits != NULL)
+            {
+                printf("deleting orbits\n");
+                delete orbits;
+            }
+            // printf("new orbits2\n");
+            orbits = new Orbits(dt_, N_, n_arr_, L_arr_, x_arr_, links_, sc_r_, sc_e_, armlength_);
+            // printf("new orbits3\n");
+            // printf("orbits: %e\n", orbits->armlength);
+        };
+        void add_tdi_config(int *unit_starts_, int *unit_lengths_, int *tdi_base_link_, int *tdi_link_combinations_, double *tdi_signs_in_, int *channels_, int num_units_, int num_channels_){
+            printf("new tdi config\n");
+            if (tdi_config != NULL)
+            {
+                printf("delete tdi config\n");
+                delete tdi_config;
+            }
+            
+            tdi_config = new TDIConfig(unit_starts_,  unit_lengths_,  tdi_base_link_,  tdi_link_combinations_,  tdi_signs_in_,  channels_,  num_units_,  num_channels_);
+            printf("tdi config: %d\n", tdi_config->num_channels);
+        };
+        void dealloc(){
+            printf("dealloc orbits\n");
+            if (orbits != NULL) 
+                delete orbits;
+            if (tdi_config != NULL) 
+                delete tdi_config;
+        };
 };
 
 class GBTDIonTheFly : public LISATDIonTheFly, public AddOrbits, public AddTDIConfig{

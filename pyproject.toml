@@ -4,9 +4,9 @@ requires = [
   "numpy",
   "astropy",  # TODO: remove astropy?
   "eryn",
-  "lisaanalysistools>=1.2.0",  #", # @ file:///Users/mlkatz/Research/LISAanalysistools
+  "lisaanalysistools @ file:///Users/mlkatz/Research/LISAanalysistools",  # >=1.2.0",  #", # 
   "scikit_build_core",
-  "eryn",
+  "gpubackendtools @ file:///Users/mlkatz/Research/GPUBackendTools"
 ]
 build-backend = "scikit_build_core.build"
 
