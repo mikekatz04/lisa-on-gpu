@@ -113,26 +113,13 @@ message(STATUS "LISATOOLS Source files: ${MY_FILES}")
 message(STATUS "LISATOOLS version: ${LISATOOLS_VERSION}")
 
 # I. Process fastlisaresponse_utils_wrap.pyx into a C++ file
-add_custom_command(
-  OUTPUT "responselisa.cxx"
-  COMMENT "Cythonize responselisa.pyx into responselisa.cxx"
-  COMMAND
-    Python::Interpreter -m cython "${CMAKE_CURRENT_SOURCE_DIR}/responselisa.pyx"
-    --output-file "${CMAKE_CURRENT_BINARY_DIR}/responselisa.cxx" -3 -+ --module-name
-    "responselisa" -I "${CMAKE_CURRENT_SOURCE_DIR}"
-  DEPENDS "responselisa.pyx"
-  VERBATIM)
 
   message(STATUS "CHECKING: ${LISATOOLS_DIR}/cutils/global.hpp  ${CMAKE_CURRENT_SOURCE_DIR}/global.hpp")
-  
-
   
 set(FILES_TO_COPY 
   "${LISATOOLS_DIR}/cutils/global.hpp"
   "${LISATOOLS_DIR}/cutils/Detector.hpp"
   "${LISATOOLS_DIR}/cutils/Detector.cu"
-  # "${LISATOOLS_DIR}/cutils/pycppdetector.pyx"
-  #"${LISATOOLS_DIR}/cutils/pycppdetector.pxd"
 )
 # MY_LIST will be "string1;string2;another string"
 
@@ -163,7 +150,8 @@ if(FASTLISA_WITH_CPU)
     DEPENDS "Detector.cu"
     VERBATIM)
 
-  python_add_library(fastlisaresponse_cpu_responselisa MODULE WITH_SOABI Detector.cxx responselisa.cxx LISAResponse.cxx)
+  # python_add_library(fastlisaresponse_cpu_responselisa MODULE WITH_SOABI Detector.cxx responselisa.cxx LISAResponse.cxx)
+  pybind11_add_module(fastlisaresponse_cpu_responselisa Detector.cxx LISAResponse.cxx)
   apply_cpu_backend_common_options(responselisa)
 
   target_sources(fastlisaresponse_cpu_responselisa PUBLIC FILE_SET HEADERS FILES

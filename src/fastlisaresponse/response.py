@@ -163,9 +163,8 @@ class pyResponseTDI(FastLISAResponseParallelModule):
         self._init_TDI_delays()
 
         # initialize the cpp holders of orbit and other information
-        self.cpp_response = self.backend.pyLISAResponseWrap()
-        self.cpp_response.add_orbit_information(*self.check_add_orbit_args(*self.response_orbits.pycppdetector_args))
-
+        self.cpp_response = self.backend.LISAResponse(self.response_orbits.pycppdetector)
+        
     def check_add_orbit_args(self, *args):
         """Check orbit arguments for adherence to cpp Orbits class.
         
@@ -208,17 +207,13 @@ class pyResponseTDI(FastLISAResponseParallelModule):
     @property
     def response_gen(self) -> callable:
         """CPU/GPU function for generating the projections."""
-        return self.cpp_response.get_response_wrap
+        return self.cpp_response.get_response
 
     @property
     def tdi_gen(self) -> callable:
         """CPU/GPU function for generating tdi."""
-        return self.cpp_response.get_tdi_delays_wrap
+        return self.cpp_response.get_tdi_delays
     
-    @property
-    def pycppDetector_fastlisa(self):
-        return self.backend.pycppDetector_fastlisa
-
     @property
     def xp(self) -> object:
         return self.backend.xp

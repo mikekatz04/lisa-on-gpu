@@ -2,6 +2,10 @@
 #include "cuda_complex.hpp"
 #include "LISAResponse.hh"
 #include <iostream>
+#include <pybind11/pybind11.h>
+#include <pybind11/numpy.h>
+
+namespace py = pybind11;
 
 #ifdef __CUDACC__
 #define CUDA_CALLABLE_MEMBER __device__
@@ -412,9 +416,30 @@ void TDI_delay(double *delayed_links, double *input_links, int num_inputs, int n
     }
 }
 
-void LISAResponse::get_tdi_delays(double *delayed_links, double *input_links, int num_inputs, int num_delays, double *t_arr, int *unit_starts, int *unit_lengths, int *tdi_base_link, int *tdi_link_combinations, double *tdi_signs_in, int *channels, int num_units, int num_channels,
-                    int order, double sampling_frequency, int buffer_integer, double *A_in, double deps, int num_A, double *E_in, int tdi_start_ind)
+void LISAResponse::get_tdi_delays(py::array_t<double> delayed_links_, py::array_t<double> input_links_, int num_inputs, int num_delays, py::array_t<double> t_arr_, py::array_t<int> unit_starts_, py::array_t<int> unit_lengths_, py::array_t<int> tdi_base_link_, py::array_t<int> tdi_link_combinations_, py::array_t<double> tdi_signs_in_, py::array_t<int> channels_, int num_units, int num_channels,
+                    int order, double sampling_frequency, int buffer_integer, py::array_t<double> A_in_, double deps, int num_A, py::array_t<double> E_in_, int tdi_start_ind)
 {
+    double *delayed_links = return_pointer_and_check_length(delayed_links_, "delayed_links", num_delays, 3);
+    double *input_links = return_pointer_and_check_length(input_links_, "input_links", num_delays, 6);
+    double *t_arr = return_pointer_and_check_length(t_arr_, "t_arr", num_delays, 1);
+    int *unit_starts = return_pointer_and_check_length(unit_starts_, "unit_starts", num_units, 1);
+    int *unit_lengths = return_pointer_and_check_length(unit_lengths_, "unit_lengths", num_units, 1);
+    double *A_in = return_pointer_and_check_length(A_in_, "A_in", num_A, 1);
+    double *E_in = return_pointer_and_check_length(E_in_, "E_in", int((order + 1) / 2), 1);
+    
+    // tdi stuff is more complicated in terms of its length
+    py::buffer_info tdi_base_link_buf = tdi_base_link_.request();
+    int *tdi_base_link = (int*)tdi_base_link_buf.ptr;
+    
+    py::buffer_info tdi_link_combinations_buf = tdi_link_combinations_.request();
+    int *tdi_link_combinations = (int*)tdi_link_combinations_buf.ptr;
+    
+    py::buffer_info tdi_signs_in_buf = tdi_signs_in_.request();
+    double *tdi_signs_in = (double*)tdi_signs_in_buf.ptr;
+    
+    py::buffer_info channels_buf = channels_.request();
+    int *channels = (int*)channels_buf.ptr;
+    
     if (orbits == NULL)
     {
         throw std::invalid_argument("Must add orbits with add_orbit_information method.");
@@ -678,13 +703,22 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
     }
 }
 
-void LISAResponse::get_response(double *y_gw, double *t_data, double *k_in, double *u_in, double *v_in, double dt,
+void LISAResponse::get_response(py::array_t<double> y_gw_, py::array_t<double> t_data_, py::array_t<double> k_in_, py::array_t<double> u_in_, py::array_t<double> v_in_, double dt,
                   int num_delays,
-                  cmplx *input_in, int num_inputs, int order,
+                  py::array_t<std::complex<double>> input_in_, int num_inputs, int order,
                   double sampling_frequency, int buffer_integer,
-                  double *A_in, double deps, int num_A, double *E_in, int projections_start_ind)
+                  py::array_t<double> A_in_, double deps, int num_A, py::array_t<double> E_in_, int projections_start_ind)
 {
 
+    double *y_gw = return_pointer_and_check_length(y_gw_, "y_gw", num_delays, 6);
+    double *t_data = return_pointer_and_check_length(t_data_, "t_data", num_delays, 1);
+    double *k_in = return_pointer_and_check_length(k_in_, "k_in", 3, 1);
+    double *u_in = return_pointer_and_check_length(u_in_, "u_in", 3, 1);
+    double *v_in = return_pointer_and_check_length(v_in_, "v_in", 3, 1);
+    double *A_in = return_pointer_and_check_length(A_in_, "A_in", num_A, 1);
+    double *E_in = return_pointer_and_check_length(E_in_, "E_in", int((order + 1) / 2), 1);
+    cmplx *input_in = (cmplx*)return_pointer_and_check_length(input_in_, "input_in", num_delays, 1);
+    
     if (orbits == NULL)
     {
         throw std::invalid_argument("Must add orbits with add_orbit_information method.");
@@ -722,6 +756,22 @@ void LISAResponse::get_response(double *y_gw, double *t_data, double *k_in, doub
              A_in, deps, num_A, E_in, projections_start_ind,
              orbits);
 #endif
+}
+
+// PYBIND11_MODULE creates the entry point for the Python module
+// The module name here must match the one used in CMakeLists.txt
+PYBIND11_MODULE(responselisa, m) {
+    m.doc() = "Detector response."; // Optional module docstring
+
+    py::class_<LISAResponse>(m, "LISAResponse")
+    // Bind the constructor
+    .def(py::init<Orbits *>(), 
+         py::arg("orbits"))
+    // Bind member functions
+    .def("get_tdi_delays", &LISAResponse::get_tdi_delays, "Preform TDI combinations.")
+    .def("get_response", &LISAResponse::get_response, "Get detector projections.")
+    // You can also expose public data members directly using def_readwrite
+    ;
 }
 
 /*

@@ -12,15 +12,12 @@ from gpubackendtools.exceptions import *
 
 @dataclasses.dataclass
 class FastLISAResponseBackendMethods(BackendMethods):
-    # get_response_wrap: typing.Callable[(...), None]
-    # get_tdi_delays_wrap: typing.Callable[(...), None]
-    pyLISAResponseWrap: object
+    LISAResponse: object
+    
 
 class FastLISAResponseBackend:
-    # get_response_wrap: typing.Callable[(...), None]
-    # get_tdi_delays_wrap: typing.Callable[(...), None]
-    pyLISAResponseWrap: object
-
+    LISAResponse: object
+    
     def __init__(self, fastlisaresponse_backend_methods):
 
         # set direct fastlisaresponse methods
@@ -29,7 +26,8 @@ class FastLISAResponseBackend:
 
         # self.get_response_wrap = fastlisaresponse_backend_methods.get_response_wrap
         # self.get_tdi_delays_wrap = fastlisaresponse_backend_methods.get_tdi_delays_wrap
-        self.pyLISAResponseWrap = fastlisaresponse_backend_methods.pyLISAResponseWrap
+        self.LISAResponse = fastlisaresponse_backend_methods.LISAResponse
+        
 
 class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
     """Implementation of the CPU backend"""
@@ -53,9 +51,7 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
         numpy = FastLISAResponseCpuBackend.check_numpy()
 
         return FastLISAResponseBackendMethods(
-            # get_response_wrap=fastlisaresponse_backend_cpu.responselisa.get_response_wrap,
-            # get_tdi_delays_wrap=fastlisaresponse_backend_cpu.responselisa.get_tdi_delays_wrap,
-            pyLISAResponseWrap=fastlisaresponse_backend_cpu.responselisa.pyLISAResponseWrap,
+            LISAResponse=fastlisaresponse_backend_cpu.responselisa.LISAResponse,
             xp=numpy,
         )
 
@@ -74,7 +70,7 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
     def cuda11x_module_loader():
         try:
             import fastlisaresponse_backend_cuda11x.responselisa
-
+            
         except (ModuleNotFoundError, ImportError) as e:
             raise BackendUnavailableException(
                 "'cuda11x' backend could not be imported."
@@ -88,9 +84,7 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
             ) from e
 
         return FastLISAResponseBackendMethods(
-            # get_response_wrap=fastlisaresponse_backend_cuda11x.responselisa.get_response_wrap,
-            # get_tdi_delays_wrap=fastlisaresponse_backend_cuda11x.responselisa.get_tdi_delays_wrap,
-            pyLISAResponseWrap=fastlisaresponse_backend_cuda11x.responselisa.pyLISAResponseWrap,
+            LISAResponse=fastlisaresponse_backend_cuda11x.responselisa.LISAResponse,
             xp=cupy,
         )
 
@@ -107,7 +101,7 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
     def cuda12x_module_loader():
         try:
             import fastlisaresponse_backend_cuda12x.responselisa
-
+            
         except (ModuleNotFoundError, ImportError) as e:
             raise BackendUnavailableException(
                 "'cuda12x' backend could not be imported."
@@ -121,9 +115,7 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
             ) from e
 
         return FastLISAResponseBackendMethods(
-            # get_response_wrap=fastlisaresponse_backend_cuda12x.responselisa.get_response_wrap,
-            # get_tdi_delays_wrap=fastlisaresponse_backend_cuda12x.responselisa.get_tdi_delays_wrap,
-            pyLISAResponseWrap=fastlisaresponse_backend_cuda12x.responselisa.pyLISAResponseWrap,
+            LISAResponse=fastlisaresponse_backend_cuda12x.responselisa.LISAResponse,
             xp=cupy,
         )
 

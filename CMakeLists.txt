@@ -14,6 +14,7 @@ project(fastlisaresponse VERSION ${SKBUILD_PROJECT_VERSION} LANGUAGES CXX)
 
 # ---- Find required dependencies ----
 find_package(Python COMPONENTS Interpreter Development.Module NumPy REQUIRED)
+find_package(pybind11 CONFIG)
 
 # This line defines the install directory variables
 include(GNUInstallDirs)
