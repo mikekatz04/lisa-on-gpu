@@ -8,11 +8,8 @@ from gpubackendtools import wrapper
 
 assert sizeof(int) == sizeof(np.int32_t)
 
-cdef extern from "LISAResponse.hh":
-    ctypedef void* cmplx 'cmplx'
-    
 cdef extern from "TDIonTheFly.hh":
-
+    ctypedef void* cmplx 'cmplx'
     cdef cppclass GBTDIonTheFlyWrap "GBTDIonTheFly":
         GBTDIonTheFlyWrap(double T_) except+
         void dealloc() except+

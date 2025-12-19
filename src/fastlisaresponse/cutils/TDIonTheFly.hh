@@ -3,6 +3,7 @@
 
 #include "Detector.hpp"
 #include "Interpolate.hh"
+#include "LISAResponse.hh"
 
 #ifdef __CUDACC__
 #define CUDA_CALLABLE_MEMBER __device__
@@ -17,60 +18,10 @@
 #endif
 
 
-class TDIConfig{
-  public:
-    int *unit_starts;
-    int *unit_lengths;
-    int *tdi_base_link;
-    int *tdi_link_combinations;
-    double *tdi_signs_in;
-    int *channels;
-    int num_units;
-    int num_channels;
-
-    CUDA_CALLABLE_MEMBER 
-    TDIConfig(int *unit_starts_, int *unit_lengths_, int *tdi_base_link_, int *tdi_link_combinations_, double *tdi_signs_in_, int *channels_, int num_units_, int num_channels_)
-    {
-        unit_starts = unit_starts_;
-        unit_lengths = unit_lengths_;
-        tdi_base_link = tdi_base_link_;
-        tdi_link_combinations = tdi_link_combinations_;
-        tdi_signs_in = tdi_signs_in_;
-        channels = channels_;
-        num_units = num_units_;
-        num_channels = num_channels_;
-    };
-    CUDA_CALLABLE_MEMBER 
-    ~TDIConfig(){};
-    CUDA_CALLABLE_MEMBER 
-    void dealloc(){};
-};
-
-class AddTDIConfig{
-  public:
-    TDIConfig *tdi_config;
-
-    void add_tdi_config(int *unit_starts_, int *unit_lengths_, int *tdi_base_link_, int *tdi_link_combinations_, double *tdi_signs_in_, int *channels_, int num_units_, int num_channels_){
-        printf("new tdi config\n");
-        if (tdi_config != NULL)
-        {
-            printf("delete tdi config\n");
-            delete tdi_config;
-        }
-        tdi_config = new TDIConfig(unit_starts_,  unit_lengths_,  tdi_base_link_,  tdi_link_combinations_,  tdi_signs_in_,  channels_,  num_units_,  num_channels_);
-        printf("tdi config: %d\n", tdi_config->num_channels);
-    };
-    void dealloc(){
-        printf("dealloc tdi config\n");
-        if (tdi_config != NULL) 
-            delete tdi_config;
-    };
-};
-
-class LISATDIonTheFly{
+class LISATDIonTheFly: public AddTDIConfig, public AddOrbits {
     public:
-        Orbits *orbits;
-        TDIConfig *tdi_config;
+        // Orbits *orbits;
+        // TDIConfig *tdi_config;
 
         CUDA_CALLABLE_MEMBER 
         void run_wave_tdi(
@@ -83,7 +34,10 @@ class LISATDIonTheFly{
         CUDA_CALLABLE_MEMBER 
         ~LISATDIonTheFly();
         CUDA_CALLABLE_MEMBER
-        void dealloc(){};
+        void dealloc(){
+            AddOrbits::dealloc();
+            AddTDIConfig::dealloc();
+        };
         CUDA_CALLABLE_MEMBER
         void print_orbits_tdi();
         // CUDA_CALLABLE_MEMBER
@@ -132,40 +86,9 @@ class LISATDIonTheFly{
         virtual double get_amp(double t, double *params, int bin_i);
         CUDA_CALLABLE_MEMBER
         virtual double get_phase(double t, double *params, int bin_i);
-        void add_orbit_information(double dt_, int N_, double *n_arr_, double *L_arr_, double *x_arr_, int *links_, int *sc_r_, int *sc_e_, double armlength_)
-        {
-            // printf("new orbits 45454454\n");
-            if (orbits != NULL)
-            {
-                printf("deleting orbits\n");
-                delete orbits;
-            }
-            // printf("new orbits2\n");
-            orbits = new Orbits(dt_, N_, n_arr_, L_arr_, x_arr_, links_, sc_r_, sc_e_, armlength_);
-            // printf("new orbits3\n");
-            // printf("orbits: %e\n", orbits->armlength);
-        };
-        void add_tdi_config(int *unit_starts_, int *unit_lengths_, int *tdi_base_link_, int *tdi_link_combinations_, double *tdi_signs_in_, int *channels_, int num_units_, int num_channels_){
-            printf("new tdi config\n");
-            if (tdi_config != NULL)
-            {
-                printf("delete tdi config\n");
-                delete tdi_config;
-            }
-            
-            tdi_config = new TDIConfig(unit_starts_,  unit_lengths_,  tdi_base_link_,  tdi_link_combinations_,  tdi_signs_in_,  channels_,  num_units_,  num_channels_);
-            printf("tdi config: %d\n", tdi_config->num_channels);
-        };
-        void dealloc(){
-            printf("dealloc orbits\n");
-            if (orbits != NULL) 
-                delete orbits;
-            if (tdi_config != NULL) 
-                delete tdi_config;
-        };
 };
 
-class GBTDIonTheFly : public LISATDIonTheFly, public AddOrbits, public AddTDIConfig{
+class GBTDIonTheFly : public LISATDIonTheFly{
     public:
         double T;
 
@@ -190,8 +113,6 @@ class GBTDIonTheFly : public LISATDIonTheFly, public AddOrbits, public AddTDICon
         CUDA_CALLABLE_MEMBER
         void dealloc(){
             LISATDIonTheFly::dealloc();
-            AddOrbits::dealloc();
-            AddTDIConfig::dealloc();
         };
         CUDA_CALLABLE_MEMBER
         int get_amplitude_index();
@@ -217,7 +138,7 @@ class GBTDIonTheFly : public LISATDIonTheFly, public AddOrbits, public AddTDICon
 
 
 
-class TDSplineTDIWaveform : public LISATDIonTheFly, public AddOrbits, public AddTDIConfig{
+class TDSplineTDIWaveform : public LISATDIonTheFly, public AddCubicSpline {
   public:
     // Orbits *orbits;
     // TDIConfig *tdi_config;
@@ -231,8 +152,8 @@ class TDSplineTDIWaveform : public LISATDIonTheFly, public AddOrbits, public Add
     CUDA_CALLABLE_MEMBER
     void dealloc(){
         LISATDIonTheFly::dealloc();
-        AddOrbits::dealloc();
-        AddTDIConfig::dealloc();
+        AddCubicSpline::dealloc_spline(amp_spline);
+        AddCubicSpline::dealloc_spline(phase_spline);
     };
     void add_amp_spline(double *x0_, double *y0_, double *c1_, double *c2_, double *c3_, double ninterps_, int length_, int spline_type_);
     void add_phase_spline(double *x0_, double *y0_, double *c1_, double *c2_, double *c3_, double ninterps_, int length_, int spline_type_);
@@ -249,8 +170,6 @@ class TDSplineTDIWaveform : public LISATDIonTheFly, public AddOrbits, public Add
     CUDA_CALLABLE_MEMBER
     int get_td_spline_buffer_size(int N){return get_tdi_buffer_size(N);};
     CUDA_CALLABLE_MEMBER
-    void dealloc(){};
-    CUDA_CALLABLE_MEMBER
     void check_x();
     CUDA_CALLABLE_MEMBER
     double get_amp(double t, double *params, int spline_i);
@@ -264,10 +183,11 @@ class TDSplineTDIWaveform : public LISATDIonTheFly, public AddOrbits, public Add
     int get_psi_index(); 
     CUDA_CALLABLE_MEMBER
     int get_inc_index();
+
 };
 
 
-class FDSplineTDIWaveform : public LISATDIonTheFly, public AddOrbits, public AddTDIConfig{
+class FDSplineTDIWaveform : public LISATDIonTheFly, public AddCubicSpline {
     public:
         CubicSpline *amp_spline;
         CubicSpline *freq_spline;
@@ -280,8 +200,8 @@ class FDSplineTDIWaveform : public LISATDIonTheFly, public AddOrbits, public Add
     CUDA_CALLABLE_MEMBER
     void dealloc(){
         LISATDIonTheFly::dealloc();
-        AddOrbits::dealloc();
-        AddTDIConfig::dealloc();
+        AddCubicSpline::dealloc_spline(amp_spline);
+        AddCubicSpline::dealloc_spline(freq_spline);
     };
     // CUDA_CALLABLE_MEMBER
     // void get_amp_and_phase(double t_ssb, double *t, double *amp, double *phase, double *params, int N, int spline_i);
@@ -295,8 +215,6 @@ class FDSplineTDIWaveform : public LISATDIonTheFly, public AddOrbits, public Add
     int get_fd_spline_buffer_size(int N){return get_tdi_buffer_size(N);};
     CUDA_CALLABLE_MEMBER
     double get_phase_ref(double t, double *params, int bin_i);
-    CUDA_CALLABLE_MEMBER
-    void dealloc(){};
     CUDA_CALLABLE_MEMBER
     double get_amp(double t, double *params, int spline_i);
     CUDA_CALLABLE_MEMBER

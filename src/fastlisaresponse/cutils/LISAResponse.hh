@@ -21,7 +21,7 @@ void get_tdi_delays(double *delayed_links, double *input_links, int num_inputs, 
 
 
 
-class TDIConfig2{
+class TDIConfig{
   public:
     int *unit_starts;
     int *unit_lengths;
@@ -33,7 +33,7 @@ class TDIConfig2{
     int num_channels;
 
     CUDA_CALLABLE_MEMBER 
-    TDIConfig2(int *unit_starts_, int *unit_lengths_, int *tdi_base_link_, int *tdi_link_combinations_, double *tdi_signs_in_, int *channels_, int num_units_, int num_channels_)
+    TDIConfig(int *unit_starts_, int *unit_lengths_, int *tdi_base_link_, int *tdi_link_combinations_, double *tdi_signs_in_, int *channels_, int num_units_, int num_channels_)
     {
         unit_starts = unit_starts_;
         unit_lengths = unit_lengths_;
@@ -45,35 +45,22 @@ class TDIConfig2{
         num_channels = num_channels_;
     };
     CUDA_CALLABLE_MEMBER 
-    ~TDIConfig2(){};
+    ~TDIConfig(){};
     CUDA_CALLABLE_MEMBER 
     void dealloc(){};
 };
 
 
-class AddTDIConfig2{
+class AddTDIConfig{
   public:
-    TDIConfig2 *tdi_config;
+    TDIConfig *tdi_config;
 
-    void add_tdi_config(int *unit_starts_, int *unit_lengths_, int *tdi_base_link_, int *tdi_link_combinations_, double *tdi_signs_in_, int *channels_, int num_units_, int num_channels_){
-        printf("new tdi config\n");
-        if (tdi_config != NULL)
-        {
-            printf("delete tdi config\n");
-            delete tdi_config;
-        }
-        tdi_config = new TDIConfig2(unit_starts_,  unit_lengths_,  tdi_base_link_,  tdi_link_combinations_,  tdi_signs_in_,  channels_,  num_units_,  num_channels_);
-        printf("tdi config: %d\n", tdi_config->num_channels);
-    };
-    void dealloc(){
-        printf("dealloc tdi config\n");
-        if (tdi_config != NULL) 
-            delete tdi_config;
-    };
+    void add_tdi_config(int *unit_starts_, int *unit_lengths_, int *tdi_base_link_, int *tdi_link_combinations_, double *tdi_signs_in_, int *channels_, int num_units_, int num_channels_);
+    void dealloc();
 };
 
 
-class LISAResponse: public AddOrbits, public AddTDIConfig2{
+class LISAResponse: public AddOrbits, public AddTDIConfig{
   public:
     Orbits *orbits;
 
@@ -86,7 +73,7 @@ class LISAResponse: public AddOrbits, public AddTDIConfig2{
                   int projections_start_ind);
     void dealloc(){
         AddOrbits::dealloc();
-        AddTDIConfig2::dealloc();
+        AddTDIConfig::dealloc();
     }
 };
 #endif // __LISA_RESPONSE__

@@ -185,7 +185,9 @@ class TDIonTheFly(FastLISAResponseParallelModule):
                 tmp_out2.append(tmp.copy())
             except AttributeError:
                 tmp_out2.append(tmp)
+
         self.wave_gen.add_tdi_config(*tmp_out2)
+        breakpoint()
         self.wave_gen.add_amp_spline(*self.amp.cpp_class_args)
         self.wave_gen.add_phase_spline(*self.phase.cpp_class_args)
 

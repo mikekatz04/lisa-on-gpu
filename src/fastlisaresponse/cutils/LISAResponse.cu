@@ -127,6 +127,25 @@ void find_start_inds(int start_inds[], int unit_length[], double *t_arr, double 
     *length = i + 1;
 }
 
+void AddTDIConfig::add_tdi_config(int *unit_starts_, int *unit_lengths_, int *tdi_base_link_, int *tdi_link_combinations_, double *tdi_signs_in_, int *channels_, int num_units_, int num_channels_)
+{
+    printf("new tdi config\n");
+    if (tdi_config != NULL)
+    {
+        printf("delete tdi config\n");
+        delete tdi_config;
+    }
+    tdi_config = new TDIConfig(unit_starts_,  unit_lengths_,  tdi_base_link_,  tdi_link_combinations_,  tdi_signs_in_,  channels_,  num_units_,  num_channels_);
+    printf("tdi config: %d\n", tdi_config->num_channels);
+};
+
+void AddTDIConfig::dealloc()
+{
+    printf("dealloc tdi config\n");
+    if (tdi_config != NULL) 
+        delete tdi_config;
+};
+
 CUDA_CALLABLE_MEMBER
 void interp_single(double *result, double *input, int h, int d, double e, double *A_arr, double deps, double *E_arr, int start_input_ind)
 {

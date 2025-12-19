@@ -634,7 +634,7 @@ void LISATDIonTheFly::get_tdi(void *buffer, int buffer_length, cmplx *tdi_channe
         phi_ref[i] = get_phase_ref(t_arr[i], params, bin_i);
     }
     CUDA_SYNC_THREADS;
-     _extract_amplitude_and_phase(count, fix_count, flip, pjump, N, &tdi_amp[0], &tdi_phase[0], &tdi_channels_arr[0], &phi_ref[0]);
+    new_extract_amplitude_and_phase(count, fix_count, flip, pjump, N, &tdi_amp[0], &tdi_phase[0], &tdi_channels_arr[0], &phi_ref[0]);
     new_extract_amplitude_and_phase(count, fix_count, flip, pjump, N, &tdi_amp[N], &tdi_phase[N], &tdi_channels_arr[N], &phi_ref[0]);
     new_extract_amplitude_and_phase(count, fix_count, flip, pjump, N, &tdi_amp[2 * N], &tdi_phase[2 * N], &tdi_channels_arr[2 * N], &phi_ref[0]);
     
@@ -1138,11 +1138,11 @@ void LISATDIonTheFly::print_orbits_tdi()
     }
     printf("orbits inside: %e\n", orbits->armlength);
     
-    if (tdi_config == NULL)
+    if (this->tdi_config == NULL)
     {
         throw std::invalid_argument("Need to add tdi config.\n");
     }
-    printf("tdi_config inside: %d\n", tdi_config->num_channels);
+    printf("tdi_config inside: %d\n", this->tdi_config->num_channels);
 }
 
 CUDA_CALLABLE_MEMBER
@@ -1159,11 +1159,12 @@ void LISATDIonTheFly::run_wave_tdi(void *buffer, int buffer_length, cmplx *tdi_c
         throw std::invalid_argument("Need to add orbital information.\n");
     }
     printf("CHECK CHECK: %d\n", orbits->N);
-    if (tdi_config == NULL)
+    printf("CHECK CHECK: %e\n", orbits->x_arr[10]);
+    if (this->tdi_config == NULL)
     {
         throw std::invalid_argument("Need to add tdi config2.\n");
     }
-    printf("tdi_config inside: %d", tdi_config->num_channels);
+    printf("tdi_config inside: %d", this->tdi_config->num_channels);
 
 
      // TODO: CHECK THIS!!
@@ -1191,11 +1192,6 @@ int GBTDIonTheFly::get_gb_buffer_size(int N)
     return N * sizeof(double) + get_tdi_buffer_size(N);
 }
 
-CUDA_CALLABLE_MEMBER
-void GBTDIonTheFly::dealloc()
-{
-    return;
-}
 
 
 

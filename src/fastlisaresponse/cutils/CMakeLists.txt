@@ -521,6 +521,14 @@ if(FASTLISA_WITH_CPU)
     VERBATIM)
 
   add_custom_command(
+    OUTPUT "LISAResponse.cxx"
+    COMMENT "Copy LISAResponse.cu to LISAResponse.cxx"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/LISAResponse.cu"
+            "${CMAKE_CURRENT_BINARY_DIR}/LISAResponse.cxx"
+    DEPENDS "LISAResponse.cu"
+    VERBATIM)
+
+  add_custom_command(
     OUTPUT "Interpolate.cxx"
     COMMENT "Copy Interpolate.cu to Interpolate.cxx"
     COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/Interpolate.cu"
@@ -528,7 +536,7 @@ if(FASTLISA_WITH_CPU)
     DEPENDS "Interpolate.cu"
     VERBATIM)
   
-  python_add_library(fastlisaresponse_cpu_tdionthefly MODULE WITH_SOABI Interpolate.cxx Detector.cxx lisatdionthefly.cxx TDIonTheFly.cxx)
+  python_add_library(fastlisaresponse_cpu_tdionthefly MODULE WITH_SOABI Interpolate.cxx Detector.cxx lisatdionthefly.cxx LISAResponse.cxx TDIonTheFly.cxx)
   apply_cpu_backend_common_options(tdionthefly)
 
   target_sources(fastlisaresponse_cpu_tdionthefly PUBLIC FILE_SET HEADERS FILES

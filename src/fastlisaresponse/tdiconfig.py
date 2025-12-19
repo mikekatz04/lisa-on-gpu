@@ -93,13 +93,14 @@ class TDIConfig(FastLISAResponseParallelModule):
         
         self.tdi_combinations = tdi_combinations
         self.nchannels = 3
+
         self.pytdiconfig_args = [
-            self.unit_starts,
-            self.unit_lengths,
-            self.tdi_base_links,
-            self.tdi_link_combinations,
-            self.tdi_signs,
-            self.channels,
+            self.xp.asarray(self.unit_starts).copy(),
+            self.xp.asarray(self.unit_lengths).copy(),
+            self.xp.asarray(self.tdi_base_links).copy(),
+            self.xp.asarray(self.tdi_link_combinations).copy(),
+            self.xp.asarray(self.tdi_signs).copy(),
+            self.xp.asarray(self.channels).copy(),
             self.num_units,
             self.nchannels
         ]
