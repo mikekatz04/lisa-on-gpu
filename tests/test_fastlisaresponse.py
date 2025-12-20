@@ -80,7 +80,7 @@ class ResponseTest(unittest.TestCase):
         index_lambda = 6
         index_beta = 7
 
-        orbits = EqualArmlengthOrbits(use_gpu=use_gpu)
+        orbits = EqualArmlengthOrbits(force_backend=force_backend)
         orbits.configure(linear_interp_setup=True)
         tdi_kwargs_esa = dict(
             orbits=orbits,

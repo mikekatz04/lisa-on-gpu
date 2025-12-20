@@ -107,10 +107,18 @@ execute_process(
   OUTPUT_VARIABLE LISATOOLS_VERSION
   OUTPUT_STRIP_TRAILING_WHITESPACE)
 
+execute_process(
+COMMAND "${PYTHON_EXECUTABLE}" -c "if True:
+  from lisatools_backend_cpu import pycppdetector
+  print(pycppdetector.__file__)"
+OUTPUT_VARIABLE LISATOOLS_DETECTOR_CPU
+OUTPUT_STRIP_TRAILING_WHITESPACE)
+
 message(STATUS "LISATOOLS location is ${LISATOOLS_DIR}.")
 file(GLOB MY_FILES "${LISATOOLS_DIR}/cutils/*")
 message(STATUS "LISATOOLS Source files: ${MY_FILES}")
 message(STATUS "LISATOOLS version: ${LISATOOLS_VERSION}")
+message(STATUS "LISATOOLS_DETECTOR_CPU: ${LISATOOLS_DETECTOR_CPU}")
 
 # I. Process fastlisaresponse_utils_wrap.pyx into a C++ file
 
@@ -150,11 +158,43 @@ if(FASTLISA_WITH_CPU)
     DEPENDS "Detector.cu"
     VERBATIM)
 
-  # python_add_library(fastlisaresponse_cpu_responselisa MODULE WITH_SOABI Detector.cxx responselisa.cxx LISAResponse.cxx)
-  pybind11_add_module(fastlisaresponse_cpu_responselisa Detector.cxx LISAResponse.cxx)
-  apply_cpu_backend_common_options(responselisa)
+  get_filename_component(LISATOOLS_DETECTOR_CPU_DIR ${LISATOOLS_DETECTOR_CPU} DIRECTORY)
+  get_filename_component(LISATOOLS_DETECTOR_CPU_LIB_NAME ${LISATOOLS_DETECTOR_CPU} NAME)
+  message(STATUS "dir: ${LISATOOLS_DETECTOR_CPU_DIR}")
 
-  target_sources(fastlisaresponse_cpu_responselisa PUBLIC FILE_SET HEADERS FILES
+  #find_library(LISATOOLS_DETECTOR_CPU_LIB ${LISATOOLS_DETECTOR_CPU_LIB_NAME} PATHS ${LISATOOLS_DETECTOR_CPU_DIR} REQUIRED)
+
+  # Check if the library was found
+  #if(NOT LISATOOLS_DETECTOR_CPU_LIB)
+  #    message(FATAL_ERROR "Could not find pycppdetector shared library")
+  #endif()
+
+  # python_add_library(fastlisaresponse_cpu_responselisa MODULE WITH_SOABI Detector.cxx responselisa.cxx LISAResponse.cxx)
+  pybind11_add_module(fastlisaresponse_cpu_responselisa LISAResponse.cxx)
+  apply_cpu_backend_common_options(responselisa)
+  
+  file(GLOB MY_SHARED "${LISATOOLS_DETECTOR_CPU_DIR}/*.so")
+  message(STATUS "LISATOOLS lib files: ${MY_SHARED}")
+
+# Define an imported library target
+add_library(pycppdetector SHARED IMPORTED) # Or SHARED
+
+file(COPY_FILE ${LISATOOLS_DETECTOR_CPU} "${CMAKE_CURRENT_SOURCE_DIR}/${LISATOOLS_DETECTOR_CPU_LIB_NAME}"
+    RESULT copy_result)
+if(NOT copy_result EQUAL 0)
+    message(FATAL_ERROR "Failed to copy file: ${copy_result} (${FILE_TO_COPY})")
+endif()
+
+# Set properties for the imported target
+set_target_properties(pycppdetector PROPERTIES
+    IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/${LISATOOLS_DETECTOR_CPU_LIB_NAME}" # or .so, .lib, .dll
+    INTERFACE_INCLUDE_DIRECTORIES "${LISATOOLS_DIR}/cutils/"
+)
+
+# Link your target to the imported target name
+target_link_libraries(fastlisaresponse_cpu_responselisa PRIVATE pycppdetector ${CMAKE_DL_LIBS})
+set_property(TARGET fastlisaresponse_cpu_responselisa APPEND PROPERTY BUILD_RPATH "$ORIGIN/../lisatools_backend_cpu/${LISATOOLS_DETECTOR_CPU_LIB_NAME}")  
+target_sources(fastlisaresponse_cpu_responselisa PUBLIC FILE_SET HEADERS FILES
                                          global.hpp Detector.hpp cuda_complex.hpp LISAResponse.hh)
 
 
@@ -166,7 +206,8 @@ if(FASTLISA_WITH_GPU)
 
   message(STATUS "This is the cuda archs to be run: ${FASTLISA_CUDA_ARCH}")
   
-  python_add_library(fastlisaresponse_gpu_responselisa MODULE WITH_SOABI responselisa.cxx Detector.cu LISAResponse.cu)
+  # python_add_library(fastlisaresponse_gpu_responselisa MODULE WITH_SOABI Detector.cu LISAResponse.cu)
+  pybind11_add_module(fastlisaresponse_gpu_responselisa Detector.cu LISAResponse.cu)
   apply_gpu_backend_common_options(responselisa)
   target_sources(fastlisaresponse_gpu_responselisa PUBLIC FILE_SET HEADERS FILES
                                          global.hpp Detector.hpp cuda_complex.hpp LISAResponse.hh
