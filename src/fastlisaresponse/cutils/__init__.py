@@ -12,11 +12,13 @@ from gpubackendtools.exceptions import *
 
 @dataclasses.dataclass
 class FastLISAResponseBackendMethods(BackendMethods):
-    LISAResponse: object
+    LISAResponseWrap: object
+    LISAResponseBase: object
     
 
 class FastLISAResponseBackend:
-    LISAResponse: object
+    LISAResponseWrap: object
+    LISAResponseBase: object
     
     def __init__(self, fastlisaresponse_backend_methods):
 
@@ -26,7 +28,8 @@ class FastLISAResponseBackend:
 
         # self.get_response_wrap = fastlisaresponse_backend_methods.get_response_wrap
         # self.get_tdi_delays_wrap = fastlisaresponse_backend_methods.get_tdi_delays_wrap
-        self.LISAResponse = fastlisaresponse_backend_methods.LISAResponse
+        self.LISAResponseWrap = fastlisaresponse_backend_methods.LISAResponseWrap
+        self.LISAResponseBase = fastlisaresponse_backend_methods.LISAResponseBase
         
 
 class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
@@ -51,7 +54,8 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
         numpy = FastLISAResponseCpuBackend.check_numpy()
 
         return FastLISAResponseBackendMethods(
-            LISAResponse=fastlisaresponse_backend_cpu.responselisa.LISAResponse,
+            LISAResponseWrap=fastlisaresponse_backend_cpu.responselisa.LISAResponseWrapCPU,
+            LISAResponseBase=fastlisaresponse_backend_cpu.responselisa.LISAResponseBaseCPU,
             xp=numpy,
         )
 
@@ -84,7 +88,8 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
             ) from e
 
         return FastLISAResponseBackendMethods(
-            LISAResponse=fastlisaresponse_backend_cuda11x.responselisa.LISAResponse,
+            LISAResponseWrap=fastlisaresponse_backend_cuda11x.responselisa.LISAResponseWrapGPU,
+            LISAResponseBase=fastlisaresponse_backend_cuda11x.responselisa.LISAResponseBaseGPU,
             xp=cupy,
         )
 
@@ -115,7 +120,8 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
             ) from e
 
         return FastLISAResponseBackendMethods(
-            LISAResponse=fastlisaresponse_backend_cuda12x.responselisa.LISAResponse,
+            LISAResponseWrap=fastlisaresponse_backend_cuda12x.responselisa.LISAResponseWrapGPU,
+            LISAResponseBase=fastlisaresponse_backend_cuda12x.responselisa.LISAResponseBaseGPU,
             xp=cupy,
         )
 

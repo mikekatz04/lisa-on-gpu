@@ -9,8 +9,12 @@
 # ---- CMake related definitions ----
 cmake_minimum_required(VERSION 3.23...3.31)
 
+
+set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 # ---- Main project definition ----
-project(fastlisaresponse VERSION ${SKBUILD_PROJECT_VERSION} LANGUAGES CXX)
+project(fastlisaresponse VERSION ${SKBUILD_PROJECT_VERSION} LANGUAGES CXX CUDA)
 
 # ---- Find required dependencies ----
 find_package(Python COMPONENTS Interpreter Development.Module NumPy REQUIRED)
