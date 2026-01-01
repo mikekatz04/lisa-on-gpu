@@ -23,6 +23,14 @@ typedef gcmplx::complex<double> cmplx;
 #define CUDA_SYNC_THREADS
 #endif
 
+#if defined(__CUDACC__) || defined(__CUDA_COMPILATION__)
+#define LISAResponse LISAResponseGPU
+#define Orbits OrbitsGPU
+#else
+#define LISAResponse LISAResponseCPU
+#define Orbits OrbitsCPU
+#endif
+
 #ifdef __CUDACC__
 #define gpuErrchk(ans)                         \
     {                                          \

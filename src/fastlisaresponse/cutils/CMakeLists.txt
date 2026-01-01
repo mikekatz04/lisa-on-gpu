@@ -178,27 +178,41 @@ if(FASTLISA_WITH_CPU)
   get_filename_component(LISATOOLS_DETECTOR_CPU_LIB_NAME ${LISATOOLS_DETECTOR_CPU} NAME)
   message(STATUS "dir: ${LISATOOLS_DETECTOR_CPU_DIR}")
 
+  find_library(LISATOOLS_DETECTOR_STATIC_LIB_CPU
+      NAMES detector # The name of the library (without 'lib' prefix or '.a' extension)
+      PATHS ${LISATOOLS_DETECTOR_CPU_DIR} # The specific folder to check
+      NO_DEFAULT_PATH_LOGIC # Optional: Restricts search to only the provided PATHS
+  )
+
+  if(LISATOOLS_DETECTOR_STATIC_LIB_CPU)
+      message("Found static library at: ${LISATOOLS_DETECTOR_STATIC_LIB_CPU}")
+      # You can now use the library, e.g., add_library(MyImportedLib STATIC IMPORTED)
+      # and set its location property. Or link directly in target_link_libraries
+  else()
+      message(FATAL_ERROR "LISA Analysis Tools detector static library not found in the specified folder!")
+  endif()
+
   add_library(fastlisaresponse_cpu_response_static STATIC LISAResponse.cxx)
   apply_cpu_backend_common_options_static(response)
-  target_link_directories(fastlisaresponse_cpu_response_static PRIVATE ${LISATOOLS_DETECTOR_CPU_DIR})
-  target_include_directories(fastlisaresponse_cpu_response_static PRIVATE "${LISATOOLS_DIR}/cutils/")  
-  target_link_libraries(fastlisaresponse_cpu_response_static PUBLIC detector)
+  target_include_directories(fastlisaresponse_cpu_response_static PUBLIC "${LISATOOLS_DIR}/cutils/")  
+  target_link_libraries(fastlisaresponse_cpu_response_static PUBLIC ${LISATOOLS_DETECTOR_STATIC_LIB_CPU})
+  target_link_directories(fastlisaresponse_cpu_response_static PUBLIC ${LISATOOLS_DETECTOR_CPU_DIR})
   target_sources(fastlisaresponse_cpu_response_static PUBLIC FILE_SET HEADERS FILES
                                          cuda_complex.hpp LISAResponse.hh)
 
 
-  pybind11_add_module(fastlisaresponse_cpu_responselisa LISAResponse.cxx)
+  pybind11_add_module(fastlisaresponse_cpu_responselisa binding.cxx)
   apply_cpu_backend_common_options(responselisa)
   
   file(GLOB MY_SHARED "${LISATOOLS_DETECTOR_CPU_DIR}/*.a")
   message(STATUS "LISATOOLS lib files: ${MY_SHARED}")
 
   # Link your target to the imported target name
-  target_link_libraries(fastlisaresponse_cpu_responselisa PUBLIC detector fastlisaresponse_cpu_response_static)
-  target_link_directories(fastlisaresponse_cpu_responselisa PRIVATE ${LISATOOLS_DETECTOR_CPU_DIR})  
-  target_include_directories(fastlisaresponse_cpu_responselisa PRIVATE "${LISATOOLS_DIR}/cutils/")  
+  target_link_libraries(fastlisaresponse_cpu_responselisa PUBLIC fastlisaresponse_cpu_response_static ${LISATOOLS_DETECTOR_STATIC_LIB_CPU})
+  target_link_directories(fastlisaresponse_cpu_responselisa PUBLIC ${LISATOOLS_DETECTOR_CPU_DIR})  
+  target_include_directories(fastlisaresponse_cpu_responselisa PUBLIC "${LISATOOLS_DIR}/cutils/")  
   target_sources(fastlisaresponse_cpu_responselisa PUBLIC FILE_SET HEADERS FILES
-                                          cuda_complex.hpp LISAResponse.hh)
+                                          binding.hpp)
 
 
 endif()
@@ -222,30 +236,68 @@ if(FASTLISA_WITH_GPU)
   file(GLOB MY_SHARED_GPU "${LISATOOLS_DETECTOR_GPU_DIR}/*.a")
   message(STATUS "LISATOOLS lib files: ${MY_SHARED_GPU}")
 
+  find_library(LISATOOLS_DETECTOR_STATIC_LIB_GPU
+      NAMES detector_gpu # The name of the library (without 'lib' prefix or '.a' extension)
+      PATHS ${LISATOOLS_DETECTOR_GPU_DIR} # The specific folder to check
+      NO_DEFAULT_PATH_LOGIC # Optional: Restricts search to only the provided PATHS
+  )
+
+  if(LISATOOLS_DETECTOR_STATIC_LIB_GPU)
+      message("Found static library at: ${LISATOOLS_DETECTOR_STATIC_LIB_GPU}")
+      # You can now use the library, e.g., add_library(MyImportedLib STATIC IMPORTED)
+      # and set its location property. Or link directly in target_link_libraries
+  else()
+      message(FATAL_ERROR "LISA Analysis Tools detector (gpu) static library not found in the specified folder!")
+  endif()
+
+  set(DETECTOR_GPU_OBJ "${LISATOOLS_DETECTOR_GPU_DIR}/Detector.cu.o")
+
+  if(EXISTS "${DETECTOR_GPU_OBJ}")
+    message("INFO: The file ${DETECTOR_GPU_OBJ} exists.")
+    # Proceed with configuration, e.g., add the file to a target
+    # add_executable(MyTarget ${DETECTOR_GPU_OBJ})
+  else()
+    message(STATUS "The file ${DETECTOR_GPU_OBJ} does not exist. We will unpack the installed library.")
+    execute_process (
+      COMMAND bash -c "cd ${LISATOOLS_DETECTOR_GPU_DIR} && ar -x libdetector_gpu.a Detector.cu.o && cd -"
+    )
+    # Handle the missing file, e.g., set a variable, issue a warning, or a fatal error
+    # message(FATAL_ERROR "Required file not found!")
+    if(NOT EXISTS "${DETECTOR_GPU_OBJ}")
+      message(FATAL_ERROR "${DETECTOR_GPU_OBJ} creation not working.")
+    endif()
+  endif()
+
   add_library(fastlisaresponse_gpu_response_gpu_static STATIC LISAResponse.cu)
   apply_gpu_backend_common_options_static(response_gpu)
   target_sources(fastlisaresponse_gpu_response_gpu_static PUBLIC FILE_SET HEADERS FILES
                                          LISAResponse.hh)
 
   target_link_libraries(fastlisaresponse_gpu_response_gpu_static PUBLIC CUDA::cudart CUDA::cublas
-                                              CUDA::cusparse)
-  target_link_directories(fastlisaresponse_gpu_response_gpu_static PRIVATE ${LISATOOLS_DETECTOR_GPU_DIR})
-  target_include_directories(fastlisaresponse_gpu_response_gpu_static PRIVATE "${LISATOOLS_DIR}/cutils/")  
-  target_link_libraries(fastlisaresponse_gpu_response_gpu_static PUBLIC detector_gpu)
+                                              CUDA::cusparse)  # ${LISATOOLS_DETECTOR_STATIC_LIB_GPU}
+  # target_link_directories(fastlisaresponse_gpu_response_gpu_static PUBLIC ${LISATOOLS_DETECTOR_GPU_DIR})
+  target_include_directories(fastlisaresponse_gpu_response_gpu_static PUBLIC "${LISATOOLS_DIR}/cutils/")
+  target_compile_definitions(fastlisaresponse_gpu_response_gpu_static PUBLIC __CUDA_COMPILATION__) 
+  target_link_libraries(fastlisaresponse_gpu_response_gpu_static PUBLIC ${DETECTOR_GPU_OBJ}) 
+  set_property(TARGET fastlisaresponse_gpu_response_gpu_static PROPERTY CUDA_ARCHITECTURES ${FASTLISA_CUDA_ARCH})
+  set_property(TARGET fastlisaresponse_gpu_response_gpu_static PROPERTY CUDA_SEPARABLE_COMPILATION ON)
+  set_property(TARGET fastlisaresponse_gpu_response_gpu_static PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+  set_property(TARGET fastlisaresponse_gpu_response_gpu_static PROPERTY POSITION_INDEPENDENT_CODE ON)
   
   message(STATUS "This is the cuda archs to be run: ${FASTLISA_CUDA_ARCH}")
   
-  pybind11_add_module(fastlisaresponse_gpu_responselisa LISAResponse.cu)
+  pybind11_add_module(fastlisaresponse_gpu_responselisa binding.cxx)
   apply_gpu_backend_common_options(responselisa)
   target_sources(fastlisaresponse_gpu_responselisa PUBLIC FILE_SET HEADERS FILES
-                                         cuda_complex.hpp LISAResponse.hh
+                                         LISAResponse.hh
                                          )
   target_link_libraries(fastlisaresponse_gpu_responselisa PUBLIC CUDA::cudart CUDA::cublas
                                               CUDA::cusparse)
-  target_link_libraries(fastlisaresponse_gpu_responselisa PUBLIC detector_gpu fastlisaresponse_gpu_response_static)
-  target_link_directories(fastlisaresponse_gpu_responselisa PRIVATE ${LISATOOLS_DETECTOR_GPU_DIR})  
-  target_include_directories(fastlisaresponse_gpu_responselisa PRIVATE "${LISATOOLS_DIR}/cutils/")  
-  
+  target_link_libraries(fastlisaresponse_gpu_responselisa PUBLIC ${LISATOOLS_DETECTOR_STATIC_LIB_GPU} fastlisaresponse_gpu_response_gpu_static)
+  target_link_directories(fastlisaresponse_gpu_responselisa PUBLIC ${LISATOOLS_DETECTOR_GPU_DIR})  
+  target_include_directories(fastlisaresponse_gpu_responselisa PUBLIC "${LISATOOLS_DIR}/cutils/")  
+  target_compile_definitions(fastlisaresponse_gpu_responselisa PUBLIC __CUDA_COMPILATION__)  
+  # target_link_options(fastlisaresponse_gpu_response_gpu PUBLIC ${DETECTOR_GPU_OBJ}) 
   #set_target_properties(fastlisaresponse_gpu_responselisa PROPERTIES
   #                    CUDA_ARCHITECTURES ${FASTLISA_CUDA_ARCH}
   #                    CUDA_RESOLVE_DEVICE_SYMBOLS ON # <=================== Magic happens here <|

@@ -4,6 +4,14 @@
 #include "Detector.hpp"
 #include <iostream>
 
+#if defined(__CUDACC__) || defined(__CUDA_COMPILATION__)
+#define LISAResponse LISAResponseGPU
+#define Orbits OrbitsGPU
+#else
+#define LISAResponse LISAResponseCPU
+#define Orbits OrbitsCPU
+#endif
+
 CUDA_CALLABLE_MEMBER
 void get_basis_vecs(double lam, double beta, double u[], double v[], double k[])
 {
