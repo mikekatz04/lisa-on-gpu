@@ -3,7 +3,7 @@ requires = [
   "Cython",
   "numpy",
   "astropy",  # TODO: remove astropy?
-  "gpubackendtools @ file:///home/mlkatz/GPUBackendTools", 
+  "gpubackendtools", # @ file:///home/mlkatz/GPUBackendTools", 
   "lisaanalysistools @ file:///home/mlkatz/LISAanalysistools",  # /Users/mlkatz/Research/LISAanalysistools
   "scikit_build_core",
 ]
@@ -19,12 +19,12 @@ authors = [
 ]
 readme = "README.md"
 
-requires-python = ">= 3.9"
+requires-python = ">= 3.10"
 
 dependencies = [
   "lisaanalysistools>=1.1.16",
   "exceptiongroup; python_version<'3.11'", # To access ExceptionGroup with Python 3.9 and 3.10
-  "h5py<3.15",
+  "h5py",
   "matplotlib",
   "gpubackendtools",
   "jsonschema",                            # To validate content of file registry
