@@ -10,42 +10,12 @@
 typedef gcmplx::complex<double> cmplx;
 
 
-
-#ifdef __CUDACC__
-#define CUDA_CALLABLE_MEMBER __device__
-#define CUDA_KERNEL __global__
-#define CUDA_SHARED __shared__
-#define CUDA_SYNC_THREADS __syncthreads()
-#else
-#define CUDA_CALLABLE_MEMBER
-#define CUDA_KERNEL
-#define CUDA_SHARED
-#define CUDA_SYNC_THREADS
-#endif
-
 #if defined(__CUDACC__) || defined(__CUDA_COMPILATION__)
 #define LISAResponse LISAResponseGPU
 #define Orbits OrbitsGPU
 #else
 #define LISAResponse LISAResponseCPU
 #define Orbits OrbitsCPU
-#endif
-
-#ifdef __CUDACC__
-#define gpuErrchk(ans)                         \
-    {                                          \
-        gpuAssert2((ans), __FILE__, __LINE__); \
-    }
-inline void gpuAssert2(cudaError_t code, const char *file, int line, bool abort = true)
-{
-    if (code != cudaSuccess)
-    {
-        fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
-        if (abort)
-            exit(code);
-    }
-}
-
 #endif
 
 
