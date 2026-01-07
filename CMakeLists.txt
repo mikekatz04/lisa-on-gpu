@@ -14,7 +14,7 @@ set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # ---- Main project definition ----
-project(fastlisaresponse VERSION ${SKBUILD_PROJECT_VERSION} LANGUAGES CXX CUDA)
+project(fastlisaresponse VERSION ${SKBUILD_PROJECT_VERSION} LANGUAGES CXX)
 
 # ---- Find required dependencies ----
 find_package(Python COMPONENTS Interpreter Development.Module NumPy REQUIRED)
