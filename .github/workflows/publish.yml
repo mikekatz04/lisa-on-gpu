@@ -169,6 +169,10 @@ jobs:
         if: matrix.kind == 'core' && needs.select.outputs.core-suffix == 'true'
         run: |
           sed -i'' -e 's|" #@NAMESUFFIX@|-${{ matrix.release }}"|g' pyproject.toml
+      - name: Add cuda1xx python dependency for lisatools.
+        if: matrix.kind != 'cuda_plugin'
+        run: |
+          sed -i'' -e 's|" #@LISATOOLS_CUDA@|lisaanalysistools-${{ matrix.release }}"|g' pyproject.toml
       # Add CuPy dependency
       - name: Add Cupy dependency
         if: matrix.kind == 'cuda_plugin'
