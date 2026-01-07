@@ -124,14 +124,12 @@ jobs:
           - release: cuda11x
             os: ubuntu-latest
             arch: aarch64
-            target: manylinux
             kind: cuda_plugin
             cuda_major: 11
             cuda_minor: 8
           - release: cuda12x
             os: ubuntu-latest
             arch: aarch64
-            target: manylinux
             kind: cuda_plugin
             cuda_major: 12
             cuda_minor: 6
@@ -243,6 +241,7 @@ jobs:
           CIBW_PROJECT_REQUIRES_PYTHON: ${{ matrix.reqpython }}
           CIBW_ARCHS_LINUX: ${{ matrix.arch }}
           CIBW_SKIP: pp* *musllinux*
+          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28  
           CIBW_CONFIG_SETTINGS: >
             cmake.define.FASTLISA_WITH_GPU=ONLY
             cmake.define.FASTLISA_CUDA_ARCH="60;70;75;80;86;90"
