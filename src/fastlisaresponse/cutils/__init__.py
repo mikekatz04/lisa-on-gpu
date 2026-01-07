@@ -14,11 +14,13 @@ from gpubackendtools.exceptions import *
 class FastLISAResponseBackendMethods(BackendMethods):
     LISAResponseWrap: object
     LISAResponseBase: object
+    OrbitsWrap: object
     
 
 class FastLISAResponseBackend:
     LISAResponseWrap: object
     LISAResponseBase: object
+    OrbitsWrap: object
     
     def __init__(self, fastlisaresponse_backend_methods):
 
@@ -30,6 +32,7 @@ class FastLISAResponseBackend:
         # self.get_tdi_delays_wrap = fastlisaresponse_backend_methods.get_tdi_delays_wrap
         self.LISAResponseWrap = fastlisaresponse_backend_methods.LISAResponseWrap
         self.LISAResponseBase = fastlisaresponse_backend_methods.LISAResponseBase
+        self.OrbitsWrap = fastlisaresponse_backend_methods.OrbitsWrap
         
 
 class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
@@ -52,10 +55,10 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
             ) from e
 
         numpy = FastLISAResponseCpuBackend.check_numpy()
-
         return FastLISAResponseBackendMethods(
             LISAResponseWrap=fastlisaresponse_backend_cpu.responselisa.LISAResponseWrapCPU,
             LISAResponseBase=fastlisaresponse_backend_cpu.responselisa.LISAResponseBaseCPU,
+            OrbitsWrap=fastlisaresponse_backend_cpu.responselisa.OrbitsWrapCPU_responselisa,
             xp=numpy,
         )
 
@@ -90,6 +93,7 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
         return FastLISAResponseBackendMethods(
             LISAResponseWrap=fastlisaresponse_backend_cuda11x.responselisa.LISAResponseWrapGPU,
             LISAResponseBase=fastlisaresponse_backend_cuda11x.responselisa.LISAResponseBaseGPU,
+            OrbitsWrap=fastlisaresponse_backend_cuda11x.responselisa.OrbitsWrapGPU_responselisa,
             xp=cupy,
         )
 
@@ -118,10 +122,10 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
             raise MissingDependencies(
                 "'cuda12x' backend requires cupy", pip_deps=["cupy-cuda12x"]
             ) from e
-
         return FastLISAResponseBackendMethods(
             LISAResponseWrap=fastlisaresponse_backend_cuda12x.responselisa.LISAResponseWrapGPU,
             LISAResponseBase=fastlisaresponse_backend_cuda12x.responselisa.LISAResponseBaseGPU,
+            OrbitsWrap=fastlisaresponse_backend_cuda12x.responselisa.OrbitsWrapGPU_responselisa,
             xp=cupy,
         )
 

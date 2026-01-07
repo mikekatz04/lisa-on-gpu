@@ -163,7 +163,8 @@ class pyResponseTDI(FastLISAResponseParallelModule):
         self._init_TDI_delays()
 
         # initialize the cpp holders of orbit and other information
-        self.cpp_response = self.backend.LISAResponseWrap(self.response_orbits.pycppdetector.orbits)
+        self.cpp_orbits = self.backend.OrbitsWrap(*self.response_orbits.pycppdetector_args)
+        self.cpp_response = self.backend.LISAResponseWrap(self.cpp_orbits)
         
     def check_add_orbit_args(self, *args):
         """Check orbit arguments for adherence to cpp Orbits class.

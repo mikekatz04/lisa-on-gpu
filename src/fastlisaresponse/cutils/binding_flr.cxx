@@ -3,6 +3,7 @@
 #include <iostream>
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
+#include "binding_flr.hpp"
 #include "binding.hpp"
 
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
@@ -64,7 +65,7 @@ void check_response(LISAResponse *response)
 
 
 
-std::string get_module_path() {
+std::string get_module_path_responselisa() {
     // Acquire the GIL if it's not already held (safe to call multiple times)
     py::gil_scoped_acquire acquire;
 
@@ -83,14 +84,6 @@ std::string get_module_path() {
     }
 }
 
-void check_12()
-{
-#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
-    printf("CHECK 12 GOOD\n");
-#else
-    printf("CHECK 12 BAD\n");
-#endif 
-}
 
 // PYBIND11_MODULE creates the entry point for the Python module
 // The module name here must match the one used in CMakeLists.txt
@@ -103,7 +96,7 @@ void response_part(py::module &m) {
 #endif 
 
     // Bind the constructor
-    .def(py::init<Orbits *>(), 
+    .def(py::init<OrbitsWrap_responselisa *>(), 
          py::arg("orbits"))
     // Bind member functions
     .def("get_tdi_delays_wrap", &LISAResponseWrap::get_tdi_delays_wrap, "Preform TDI combinations.")
@@ -123,6 +116,27 @@ void response_part(py::module &m) {
     .def(py::init<Orbits *>(), 
          py::arg("orbits"))
     ;
+
+#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
+    py::class_<OrbitsWrap_responselisa>(m, "OrbitsWrapGPU_responselisa")
+#else
+    py::class_<OrbitsWrap_responselisa>(m, "OrbitsWrapCPU_responselisa")
+#endif
+
+    // Bind the constructor
+    .def(py::init<double, int, array_type<double>, array_type<double>, array_type<double>, array_type<int>, array_type<int>, array_type<int>, double>(),
+         py::arg("dt"), py::arg("N"), py::arg("n_arr"), py::arg("ltt_arr"), py::arg("x_arr"), py::arg("links"), py::arg("sc_r"), py::arg("sc_e"), py::arg("armlength"))
+    // Bind member functions
+    // .def("get_light_travel_time_wrap", &OrbitsWrap::get_light_travel_time_wrap, "Get the light travel time.")
+    // .def("get_pos_wrap", &OrbitsWrap::get_pos_wrap, "Get spacecraft position.")
+    // .def("get_normal_unit_vec_wrap", &OrbitsWrap::get_normal_unit_vec_wrap, "Get link normal vector.")
+    // You can also expose public data members directly using def_readwrite
+    .def_readwrite("orbits", &OrbitsWrap_responselisa::orbits)
+    // .def("get_link_ind", &OrbitsWrap::get_link_ind, "Get link index.")
+    ;
+
+
+    
 }
 
 
@@ -132,11 +146,11 @@ PYBIND11_MODULE(responselisa, m) {
 
     // Call initialization functions from other files
     response_part(m);
+    
     m.def("check_response", &check_response, "Make sure that we can insert response properly.");
 
-    m.def("get_module_path_cpp", &get_module_path, "Returns the file path of the module");
+    m.def("get_module_path_cpp", &get_module_path_responselisa, "Returns the file path of the module");
 
-    m.def("check_12", &check_12, "Check12");
     // Optionally, get the path during module initialization and store it
     // This can cause an AttributeError if not handled carefully, as m.attr("__file__")
     // might not be fully set during the initial call if the module is loaded in

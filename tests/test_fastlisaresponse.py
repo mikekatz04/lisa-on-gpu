@@ -1,3 +1,8 @@
+import sys
+import os
+# Set flags to allow symbol resolution across modules
+sys.setdlopenflags(os.RTLD_GLOBAL | os.RTLD_LAZY)
+
 import unittest
 import numpy as np
 import warnings
