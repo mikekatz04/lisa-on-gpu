@@ -243,7 +243,7 @@ jobs:
           CIBW_SKIP: pp* *musllinux*
           CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28  
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
-g         CIBW_CONFIG_SETTINGS: >
+          CIBW_CONFIG_SETTINGS: >
             cmake.define.FASTLISA_WITH_GPU=ONLY
             cmake.define.FASTLISA_CUDA_ARCH="60;70;75;80;86;90"
           CIBW_BEFORE_ALL: >
