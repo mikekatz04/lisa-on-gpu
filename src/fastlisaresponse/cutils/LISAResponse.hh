@@ -9,16 +9,16 @@
 
 typedef gcmplx::complex<double> cmplx;
 
-void get_response(double *y_gw, double *t_data, double *k_in, double *u_in, double *v_in, double dt,
-                  int num_delays,
-                  cmplx *input_in, int num_inputs, int order,
-                  double sampling_frequency, int buffer_integer, double *A_in, double deps, int num_A, double *E_in,
-                  int projections_start_ind,
-                  Orbits *orbits);
 
-void get_tdi_delays(double *delayed_links, double *input_links, int num_inputs, int num_delays, double *t_arr, int *unit_starts, int *unit_lengths, int *tdi_base_link, int *tdi_link_combinations, double *tdi_signs_in, int *channels, int num_units, int num_channels,
-                    int order, double sampling_frequency, int buffer_integer, double *A_in, double deps, int num_A, double *E_in, int tdi_start_ind, Orbits *orbits);
-
+#if defined(__CUDACC__) || defined(__CUDA_COMPILATION__)
+#define LISAResponse LISAResponseGPU
+#define Orbits OrbitsGPU
+#define TDIConfig TDIConfigGPU
+#else
+#define LISAResponse LISAResponseCPU
+#define Orbits OrbitsCPU
+#define TDIConfig TDIConfigCPU
+#endif
 
 
 class TDIConfig{
@@ -46,34 +46,26 @@ class TDIConfig{
     };
     CUDA_CALLABLE_MEMBER 
     ~TDIConfig(){};
-    CUDA_CALLABLE_MEMBER 
-    void dealloc(){};
 };
 
 
-class AddTDIConfig{
-  public:
-    TDIConfig *tdi_config;
-
-    void add_tdi_config(int *unit_starts_, int *unit_lengths_, int *tdi_base_link_, int *tdi_link_combinations_, double *tdi_signs_in_, int *channels_, int num_units_, int num_channels_);
-    void dealloc();
-};
-
-
-class LISAResponse: public AddOrbits, public AddTDIConfig{
+class LISAResponse{
   public:
     Orbits *orbits;
-
-    void get_tdi_delays(double *delayed_links, double *input_links, int num_inputs, int num_delays, double *t_arr, int *unit_starts, int *unit_lengths, int *tdi_base_link, int *tdi_link_combinations, double *tdi_signs_in, int *channels, int num_units, int num_channels,
-                    int order, double sampling_frequency, int buffer_integer, double *A_in, double deps, int num_A, double *E_in, int tdi_start_ind);
-    void get_response(double *y_gw, double *t_data, double *k_in, double *u_in, double *v_in, double dt,
+    TDIConfig *tdi_config;
+    LISAResponse(Orbits *orbits_, TDIConfig *tdi_config_){
+      orbits = orbits_;
+      tdi_config = tdi_config_;
+      // TODO: add GPU orbits now?
+    };
+    ~LISAResponse(){};
+    void get_tdi_delays(double *delayed_links_, double *input_links_, int num_inputs, int num_delays, double *t_arr_, int *unit_starts_, int *unit_lengths_, int *tdi_base_link_, int *tdi_link_combinations_, double *tdi_signs_in_, int *channels_, int num_units, int num_channels,
+                    int order, double sampling_frequency, int buffer_integer, double *A_in_, double deps, int num_A, double *E_in_, int tdi_start_ind);
+                    
+    void get_response(double *y_gw_, double *t_data_, double *k_in_, double *u_in_, double *v_in_, double dt,
                   int num_delays,
-                  cmplx *input_in, int num_inputs, int order,
-                  double sampling_frequency, int buffer_integer, double *A_in, double deps, int num_A, double *E_in,
-                  int projections_start_ind);
-    void dealloc(){
-        AddOrbits::dealloc();
-        AddTDIConfig::dealloc();
-    }
+                  cmplx* input_in_, int num_inputs, int order,
+                  double sampling_frequency, int buffer_integer,
+                  double *A_in_, double deps, int num_A, double *E_in_, int projections_start_ind);
 };
 #endif // __LISA_RESPONSE__

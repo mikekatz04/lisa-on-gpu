@@ -101,58 +101,56 @@ jobs:
             os: ubuntu-latest
             arch: x86_64
             kind: core
-            reqpython: '>=3.9'
+            reqpython: '>=3.10'
           - release: cuda11x
             os: ubuntu-latest
             arch: x86_64
             kind: cuda_plugin
             cuda_major: 11
             cuda_minor: 8
-            reqpython: '>=3.9'
+            reqpython: '>=3.10'
           - release: cuda12x
             os: ubuntu-latest
             arch: x86_64
             kind: cuda_plugin
             cuda_major: 12
             cuda_minor: 4
-            reqpython: '>=3.9'
+            reqpython: '>=3.10'
           - release: cpu
-            os: ubuntu-24.04-arm
+            os: ubuntu-latest
             arch: aarch64
             kind: core
             reqpython: '>=3.10'
           - release: cuda11x
             os: ubuntu-latest
             arch: aarch64
-            target: manylinux
             kind: cuda_plugin
             cuda_major: 11
             cuda_minor: 8
           - release: cuda12x
             os: ubuntu-latest
             arch: aarch64
-            target: manylinux
             kind: cuda_plugin
             cuda_major: 12
             cuda_minor: 6
-          # - release: cpu
-          #   os: macos-15-intel
-          #   kind: core
-          #   reqpython: '>=3.9'
-          #   arch: x86_64
-          #   macos_ver: 15.0
           - release: cpu
-            os: macos-14
+            os: macos-15-intel
             kind: core
-            reqpython: '>=3.9'
-            arch: arm64
-            macos_ver: 14.0
+            reqpython: '>=3.10'
+            arch: x86_64
+            macos_ver: 15.0
           - release: cpu
             os: macos-15
             kind: core
-            reqpython: '>=3.9'
+            reqpython: '>=3.10'
             arch: arm64
             macos_ver: 15.0
+          - release: cpu
+            os: macos-14
+            kind: core
+            reqpython: '>=3.10'
+            arch: arm64
+            macos_ver: 14.0
     steps:
       # =========================
       # = I - Retrieve sources  =
@@ -169,6 +167,11 @@ jobs:
         if: matrix.kind == 'core' && needs.select.outputs.core-suffix == 'true'
         run: |
           sed -i'' -e 's|" #@NAMESUFFIX@|-${{ matrix.release }}"|g' pyproject.toml
+      - name: Add cuda1xx python dependency for lisatools.
+        if: matrix.kind != 'cuda_plugin'
+        run: |
+          sed -i'' -e 's|" #@LISATOOLS_CUDA@|lisaanalysistools-${{ matrix.release }}"|g' pyproject.toml
+          sed -i 's/) #@ADDCUDAHERE@/ CUDA)/g' CMakeLists.txt
       # Add CuPy dependency
       - name: Add Cupy dependency
         if: matrix.kind == 'cuda_plugin'
@@ -227,6 +230,7 @@ jobs:
           CIBW_ARCHS_LINUX: ${{ matrix.arch }}
           CIBW_SKIP: pp* *musllinux*
           CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           CIBW_CONFIG_SETTINGS: >
             cmake.define.FASTLISA_WITH_GPU=OFF
           CIBW_ENVIRONMENT: >
@@ -239,14 +243,24 @@ jobs:
           CIBW_PROJECT_REQUIRES_PYTHON: ${{ matrix.reqpython }}
           CIBW_ARCHS_LINUX: ${{ matrix.arch }}
           CIBW_SKIP: pp* *musllinux*
+          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28 
           CIBW_CONFIG_SETTINGS: >
             cmake.define.FASTLISA_WITH_GPU=ONLY
             cmake.define.FASTLISA_CUDA_ARCH="60;70;75;80;86;90"
+          # Use dnf to install cuda-toolkit and gcc inside the manylinux container
           CIBW_BEFORE_ALL: >
-            yum install -y devtoolset-11-gcc-c++ &&
-            yum-config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel7/x86_64/cuda-rhel7.repo &&
-            yum install -y cuda-compiler-${{ matrix.cuda_major }}-${{ matrix.cuda_minor }}.${{ matrix.arch }} cuda-libraries-${{ matrix.cuda_major }}-${{ matrix.cuda_minor }} cuda-libraries-devel-${{ matrix.cuda_major }}-${{ matrix.cuda_minor }}
-          CIBW_BEFORE_BUILD: source /opt/rh/devtoolset-11/enable
+            dnf install -y scl-utils &&
+            dnf install -y gcc-toolset-11-toolchain &&
+            source scl_source enable gcc-toolset-11 &&
+            dnf -y install epel-release &&
+            dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel7/x86_64/cuda-rhel7.repo &&
+            dnf clean all &&
+            dnf -y install cuda-toolkit &&
+            ls -al /usr/local &&
+            export PATH=$PATH:/usr/local/cuda/bin &&
+            nvcc --version
+          CIBW_BEFORE_BUILD: source scl_source enable gcc-toolset-11
           CIBW_ENVIRONMENT: >
             PATH="/usr/local/cuda/bin:${PATH}"
             LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH}"

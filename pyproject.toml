@@ -6,7 +6,9 @@ requires = [
   "eryn",
   "lisaanalysistools @ file:///Users/mlkatz/Research/LISAanalysistools",  # >=1.2.0",  #", # 
   "scikit_build_core",
-  "gpubackendtools @ file:///Users/mlkatz/Research/GPUBackendTools"
+  "gpubackendtools @ file:///Users/mlkatz/Research/GPUBackendTools",
+  "pybind11",
+  #@FASTLISA_CUDA@,
 ]
 build-backend = "scikit_build_core.build"
 
@@ -20,14 +22,12 @@ authors = [
 ]
 readme = "README.md"
 
-requires-python = ">= 3.9"
+requires-python = ">= 3.10"
 
 dependencies = [
-  "lisaanalysistools>=1.1.16",
   "exceptiongroup; python_version<'3.11'", # To access ExceptionGroup with Python 3.9 and 3.10
-  "h5py<3.15",
+  "h5py",
   "matplotlib",
-  "gpubackendtools",
   "jsonschema",                            # To validate content of file registry
   "lisaconstants",
   "multispline",
@@ -54,7 +54,6 @@ classifiers = [
   "Programming Language :: C++",
   "Programming Language :: Cython",
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",

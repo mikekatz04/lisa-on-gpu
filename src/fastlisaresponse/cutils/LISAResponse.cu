@@ -1,35 +1,15 @@
 #include "stdio.h"
 #include "cuda_complex.hpp"
 #include "LISAResponse.hh"
+#include "Detector.hpp"
 #include <iostream>
 
-#ifdef __CUDACC__
-#define CUDA_CALLABLE_MEMBER __device__
-#define CUDA_KERNEL __global__
-#define CUDA_SHARED __shared__
-#define CUDA_SYNC_THREADS __syncthreads()
+#if defined(__CUDACC__) || defined(__CUDA_COMPILATION__)
+#define LISAResponse LISAResponseGPU
+#define Orbits OrbitsGPU
 #else
-#define CUDA_CALLABLE_MEMBER
-#define CUDA_KERNEL
-#define CUDA_SHARED
-#define CUDA_SYNC_THREADS
-#endif
-
-#ifdef __CUDACC__
-#define gpuErrchk(ans)                         \
-    {                                          \
-        gpuAssert2((ans), __FILE__, __LINE__); \
-    }
-inline void gpuAssert2(cudaError_t code, const char *file, int line, bool abort = true)
-{
-    if (code != cudaSuccess)
-    {
-        fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
-        if (abort)
-            exit(code);
-    }
-}
-
+#define LISAResponse LISAResponseCPU
+#define Orbits OrbitsCPU
 #endif
 
 CUDA_CALLABLE_MEMBER
@@ -434,6 +414,7 @@ void TDI_delay(double *delayed_links, double *input_links, int num_inputs, int n
 void LISAResponse::get_tdi_delays(double *delayed_links, double *input_links, int num_inputs, int num_delays, double *t_arr, int *unit_starts, int *unit_lengths, int *tdi_base_link, int *tdi_link_combinations, double *tdi_signs_in, int *channels, int num_units, int num_channels,
                     int order, double sampling_frequency, int buffer_integer, double *A_in, double deps, int num_A, double *E_in, int tdi_start_ind)
 {
+    
     if (orbits == NULL)
     {
         throw std::invalid_argument("Must add orbits with add_orbit_information method.");
@@ -699,7 +680,7 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
 
 void LISAResponse::get_response(double *y_gw, double *t_data, double *k_in, double *u_in, double *v_in, double dt,
                   int num_delays,
-                  cmplx *input_in, int num_inputs, int order,
+                  cmplx* input_in, int num_inputs, int order,
                   double sampling_frequency, int buffer_integer,
                   double *A_in, double deps, int num_A, double *E_in, int projections_start_ind)
 {
@@ -742,6 +723,7 @@ void LISAResponse::get_response(double *y_gw, double *t_data, double *k_in, doub
              orbits);
 #endif
 }
+
 
 /*
 int main()
