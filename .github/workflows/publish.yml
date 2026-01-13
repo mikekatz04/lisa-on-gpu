@@ -171,6 +171,7 @@ jobs:
         if: matrix.kind != 'cuda_plugin'
         run: |
           sed -i'' -e 's|" #@LISATOOLS_CUDA@|lisaanalysistools-${{ matrix.release }}"|g' pyproject.toml
+          sed -i 's/) #@ADDCUDAHERE@/ CUDA)/g' CMakeLists.txt
       # Add CuPy dependency
       - name: Add Cupy dependency
         if: matrix.kind == 'cuda_plugin'
@@ -228,8 +229,8 @@ jobs:
           CIBW_PROJECT_REQUIRES_PYTHON: ${{ matrix.reqpython }}
           CIBW_ARCHS_LINUX: ${{ matrix.arch }}
           CIBW_SKIP: pp* *musllinux*
-          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_27
-          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_27
+          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           CIBW_CONFIG_SETTINGS: >
             cmake.define.FASTLISA_WITH_GPU=OFF
           CIBW_ENVIRONMENT: >
@@ -242,8 +243,8 @@ jobs:
           CIBW_PROJECT_REQUIRES_PYTHON: ${{ matrix.reqpython }}
           CIBW_ARCHS_LINUX: ${{ matrix.arch }}
           CIBW_SKIP: pp* *musllinux*
-          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_27
-          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_27 
+          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28 
           CIBW_CONFIG_SETTINGS: >
             cmake.define.FASTLISA_WITH_GPU=ONLY
             cmake.define.FASTLISA_CUDA_ARCH="60;70;75;80;86;90"
@@ -251,7 +252,7 @@ jobs:
           CIBW_BEFORE_ALL: >
             dnf install -y scl-utils &&
             dnf install -y gcc-toolset-11-toolchain &&
-            scl enable gcc-toolset-11 bash &&
+            source scl_source enable gcc-toolset-11 &&
             dnf -y install epel-release &&
             dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel7/x86_64/cuda-rhel7.repo &&
             dnf clean all &&
@@ -259,7 +260,7 @@ jobs:
             ls -al /usr/local &&
             export PATH=$PATH:/usr/local/cuda/bin &&
             nvcc --version
-          CIBW_BEFORE_BUILD: scl enable gcc-toolset-11 bash
+          CIBW_BEFORE_BUILD: source scl_source enable gcc-toolset-11
           CIBW_ENVIRONMENT: >
             PATH="/usr/local/cuda/bin:${PATH}"
             LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH}"
