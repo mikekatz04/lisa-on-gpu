@@ -14,7 +14,7 @@ set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # ---- Main project definition ----
-project(fastlisaresponse VERSION ${SKBUILD_PROJECT_VERSION} LANGUAGES CXX)
+project(fastlisaresponse VERSION ${SKBUILD_PROJECT_VERSION} LANGUAGES CXX Fortran)
 
 # ---- Find required dependencies ----
 find_package(Python COMPONENTS Interpreter Development.Module NumPy REQUIRED)
@@ -71,7 +71,10 @@ set(
 set(FASTLISA_LAPACKE_DETECT_WITH "AUTO" CACHE STRING "Tool used to locate LAPACKE.")
 set_property(CACHE FASTLISA_LAPACKE_DETECT_WITH PROPERTY STRINGS "AUTO" "CMAKE"
                                                     "PKGCONFIG" "DISABLE")
+
+set(GBT_LAPACKE_DETECT_WITH ${FASTLISA_LAPACKE_DETECT_WITH})                                
 set_property(GLOBAL APPEND PROPERTY FASTLISA_OPTION_NAMES FASTLISA_LAPACKE_DETECT_WITH)
+set_property(GLOBAL APPEND PROPERTY FASTLISA_OPTION_NAMES GBT_LAPACKE_DETECT_WITH)
 
 # FASTLISA_LAPACKE_FETCH controls whether LAPACKE sources will be downloaded and
 # compiled with fast LISA response backends. Possible values are:

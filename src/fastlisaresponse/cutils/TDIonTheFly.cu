@@ -8,13 +8,6 @@
 // TODO: GET RID OF THIS ??!!!
 double C_SI = 299792458.;
 
-// CUDA_CALLABLE_MEMBER
-// LISATDIonTheFly::LISATDIonTheFly(Orbits *orbits_, TDIConfig *tdi_config_)
-// {
-//     orbits = orbits_;
-//     tdi_config = tdi_config_;
-// }
-
 CUDA_CALLABLE_MEMBER
 LISATDIonTheFly::~LISATDIonTheFly()
 {
@@ -1089,12 +1082,6 @@ double GBTDIonTheFly::ucb_amplitude(double t, double *params)
     return A0 * ( 1.0 + 2.0/3.0*fdot/f0*t );
 }
 
-CUDA_CALLABLE_MEMBER
-GBTDIonTheFly::GBTDIonTheFly(double T_) : LISATDIonTheFly()
-{
-    T = T_;
-}
-
 // CUDA_CALLABLE_MEMBER
 // void GBTDIonTheFly::get_amp_and_phase(double t_ssb, double *t, double *amp, double *phase, double *params, int N, int bin_i)
 // {
@@ -1204,17 +1191,6 @@ int GBTDIonTheFly::get_gb_buffer_size(int N)
 //     // check_x();
 // }
 
-CUDA_CALLABLE_MEMBER
-void TDSplineTDIWaveform::add_amp_spline(double *x0_, double *y0_, double *c1_, double *c2_, double *c3_, double ninterps_, int length_, int spline_type_)
-{
-    add_cubic_spline(amp_spline, x0_, y0_, c1_, c2_, c3_, ninterps_, length_, spline_type_);
-}
-
-CUDA_CALLABLE_MEMBER
-void TDSplineTDIWaveform::add_phase_spline(double *x0_, double *y0_, double *c1_, double *c2_, double *c3_, double ninterps_, int length_, int spline_type_)
-{
-    add_cubic_spline(phase_spline, x0_, y0_, c1_, c2_, c3_, ninterps_, length_, spline_type_);
-}
 
 CUDA_CALLABLE_MEMBER
 void TDSplineTDIWaveform::check_x()
@@ -1385,17 +1361,6 @@ double TDSplineTDIWaveform::get_phase(double t, double *params, int spline_i)
 //     }
 // }
 
-CUDA_CALLABLE_MEMBER
-void FDSplineTDIWaveform::add_amp_spline(double *x0_, double *y0_, double *c1_, double *c2_, double *c3_, double ninterps_, int length_, int spline_type_)
-{
-    add_cubic_spline(amp_spline, x0_, y0_, c1_, c2_, c3_, ninterps_, length_, spline_type_);
-}
-
-CUDA_CALLABLE_MEMBER
-void FDSplineTDIWaveform::add_freq_spline(double *x0_, double *y0_, double *c1_, double *c2_, double *c3_, double ninterps_, int length_, int spline_type_)
-{
-    add_cubic_spline(freq_spline, x0_, y0_, c1_, c2_, c3_, ninterps_, length_, spline_type_);
-}
 
 CUDA_CALLABLE_MEMBER
 double FDSplineTDIWaveform::get_amp(double t, double *params, int spline_i)

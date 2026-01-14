@@ -4,24 +4,13 @@
 #include "Detector.hpp"
 #include "Interpolate.hh"
 #include "LISAResponse.hh"
-
-#ifdef __CUDACC__
-#define CUDA_CALLABLE_MEMBER __device__
-#define CUDA_KERNEL __global__
-#define CUDA_SHARED __shared__
-#define CUDA_SYNC_THREADS __syncthreads()
-#else
-#define CUDA_CALLABLE_MEMBER
-#define CUDA_KERNEL
-#define CUDA_SHARED
-#define CUDA_SYNC_THREADS
-#endif
+#include "gbt_global.h"
 
 
-class LISATDIonTheFly: public AddTDIConfig, public AddOrbits {
+class LISATDIonTheFly{
     public:
-        // Orbits *orbits;
-        // TDIConfig *tdi_config;
+        Orbits *orbits;
+        TDIConfig *tdi_config;
 
         CUDA_CALLABLE_MEMBER 
         void run_wave_tdi(
@@ -30,14 +19,13 @@ class LISATDIonTheFly: public AddTDIConfig, public AddOrbits {
             double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels
         );
         CUDA_CALLABLE_MEMBER 
-        // LISATDIonTheFly(Orbits *orbits_, TDIConfig *tdi_config_);
+        LISATDIonTheFly(Orbits *orbits_, TDIConfig *tdi_config_)
+        {
+            orbits = orbits_;
+            tdi_config = tdi_config_;
+        };
         CUDA_CALLABLE_MEMBER 
         ~LISATDIonTheFly();
-        CUDA_CALLABLE_MEMBER
-        void dealloc(){
-            AddOrbits::dealloc();
-            AddTDIConfig::dealloc();
-        };
         CUDA_CALLABLE_MEMBER
         void print_orbits_tdi();
         // CUDA_CALLABLE_MEMBER
@@ -93,7 +81,10 @@ class GBTDIonTheFly : public LISATDIonTheFly{
         double T;
 
         CUDA_CALLABLE_MEMBER
-        GBTDIonTheFly(double T_);
+        GBTDIonTheFly(Orbits *orbits_, TDIConfig *tdi_config_, double T_) : LISATDIonTheFly(orbits_, tdi_config_)
+        {
+            T = T_;
+        };
         CUDA_CALLABLE_MEMBER
         ~GBTDIonTheFly();
         // CUDA_CALLABLE_MEMBER
@@ -110,10 +101,6 @@ class GBTDIonTheFly : public LISATDIonTheFly{
         //     double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double *phi_ref, 
         //     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels
         // );
-        CUDA_CALLABLE_MEMBER
-        void dealloc(){
-            LISATDIonTheFly::dealloc();
-        };
         CUDA_CALLABLE_MEMBER
         int get_amplitude_index();
         CUDA_CALLABLE_MEMBER
@@ -138,7 +125,7 @@ class GBTDIonTheFly : public LISATDIonTheFly{
 
 
 
-class TDSplineTDIWaveform : public LISATDIonTheFly, public AddCubicSpline {
+class TDSplineTDIWaveform : public LISATDIonTheFly{
   public:
     // Orbits *orbits;
     // TDIConfig *tdi_config;
@@ -147,16 +134,11 @@ class TDSplineTDIWaveform : public LISATDIonTheFly, public AddCubicSpline {
     CubicSpline *phase_spline;
     int binary_index_storage;
 
-    // CUDA_CALLABLE_MEMBER
-    // TDSplineTDIWaveform();
     CUDA_CALLABLE_MEMBER
-    void dealloc(){
-        LISATDIonTheFly::dealloc();
-        AddCubicSpline::dealloc_spline(amp_spline);
-        AddCubicSpline::dealloc_spline(phase_spline);
+    TDSplineTDIWaveform(Orbits* orbits_, TDIConfig *tdi_config_, CubicSpline *amp_spline_, CubicSpline *phase_spline_): LISATDIonTheFly(orbits_, tdi_config_){
+        amp_spline = amp_spline_;
+        phase_spline = phase_spline_;
     };
-    void add_amp_spline(double *x0_, double *y0_, double *c1_, double *c2_, double *c3_, double ninterps_, int length_, int spline_type_);
-    void add_phase_spline(double *x0_, double *y0_, double *c1_, double *c2_, double *c3_, double ninterps_, int length_, int spline_type_);
     CUDA_CALLABLE_MEMBER
     ~TDSplineTDIWaveform(){};
     // CUDA_CALLABLE_MEMBER
@@ -187,25 +169,25 @@ class TDSplineTDIWaveform : public LISATDIonTheFly, public AddCubicSpline {
 };
 
 
-class FDSplineTDIWaveform : public LISATDIonTheFly, public AddCubicSpline {
+class FDSplineTDIWaveform : public LISATDIonTheFly {
     public:
         CubicSpline *amp_spline;
         CubicSpline *freq_spline;
-        double *phase_ref_store;
+        // double *phase_ref_store;
+
+    FDSplineTDIWaveform(Orbits* orbits_, TDIConfig *tdi_config_, CubicSpline *amp_spline_, CubicSpline *freq_spline_): LISATDIonTheFly(orbits_, tdi_config_)
+    {
+        amp_spline = amp_spline_;
+        freq_spline = freq_spline_;
+    };
 
     // CUDA_CALLABLE_MEMBER
     // FDSplineTDIWaveform(Orbits *orbits_, TDIConfig *tdi_config_, CubicSpline *amp_spline_, CubicSpline *freq_spline_, double *phase_ref_);
     CUDA_CALLABLE_MEMBER
     ~FDSplineTDIWaveform(){};
-    CUDA_CALLABLE_MEMBER
-    void dealloc(){
-        LISATDIonTheFly::dealloc();
-        AddCubicSpline::dealloc_spline(amp_spline);
-        AddCubicSpline::dealloc_spline(freq_spline);
-    };
     // CUDA_CALLABLE_MEMBER
     // void get_amp_and_phase(double t_ssb, double *t, double *amp, double *phase, double *params, int N, int spline_i);
-    CUDA_CALLABLE_MEMBER
+    // CUDA_CALLABLE_MEMBER
     // void run_wave_tdi(
     //     cmplx *tdi_channels_arr, 
     //     double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double *phi_ref, 
@@ -231,8 +213,6 @@ class FDSplineTDIWaveform : public LISATDIonTheFly, public AddCubicSpline {
     void get_tdi(void *buffer, int buffer_length, cmplx *tdi_channels_arr, double *tdi_amp, double *tdi_phase, double* phi_ref, double *params, double *t_arr, int N, int bin_i, int nchannels);
     CUDA_CALLABLE_MEMBER
     double get_amp_f(double t, double *params, int spline_i);
-    void add_amp_spline(double *x0_, double *y0_, double *c1_, double *c2_, double *c3_, double ninterps_, int length_, int spline_type_);
-    void add_freq_spline(double *x0_, double *y0_, double *c1_, double *c2_, double *c3_, double ninterps_, int length_, int spline_type_);
 };
 
 // class LagrangeInterpolant{

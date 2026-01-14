@@ -5,6 +5,7 @@
 #include <pybind11/numpy.h>
 #include "binding_flr.hpp"
 #include "binding.hpp"
+#include "gbt_binding.hpp"
 
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
 #include "pybind11_cuda_array_interface.hpp"
@@ -13,7 +14,7 @@
 namespace py = pybind11;
 
 
-void LISAResponseWrap::get_tdi_delays_wrap(array_type<double> delayed_links_, array_type<double> input_links_, int num_inputs, int num_delays, array_type<double> t_arr_, array_type<int> unit_starts_, array_type<int> unit_lengths_, array_type<int> tdi_base_link_, array_type<int> tdi_link_combinations_, array_type<double> tdi_signs_in_, array_type<int> channels_, int num_units, int num_channels,
+void LISAResponseWrap::get_tdi_delays_wrap(array_type<double> delayed_links_, array_type<double> input_links_, int num_inputs, int num_delays, array_type<double> t_arr_,
                     int order, double sampling_frequency, int buffer_integer, array_type<double> A_in_, double deps, int num_A, array_type<double> E_in_, int tdi_start_ind)
 {
     response->get_tdi_delays(
@@ -21,13 +22,7 @@ void LISAResponseWrap::get_tdi_delays_wrap(array_type<double> delayed_links_, ar
         return_pointer_and_check_length(input_links_, "input_links", num_inputs, 6),
         num_inputs, num_delays,
         return_pointer_and_check_length(t_arr_, "t_arr", num_delays, 1),
-        return_pointer_and_check_length(unit_starts_, "unit_starts", num_units, 1),
-        return_pointer_and_check_length(unit_lengths_, "unit_lengths", num_units, 1),
-        return_pointer(tdi_base_link_, "tdi_base_link"),
-        return_pointer(tdi_link_combinations_, "tdi_link_combinations"),
-        return_pointer(tdi_signs_in_, "tdi_signs_in"),
-        return_pointer(channels_, "channels"),
-        num_units, num_channels, order, sampling_frequency, buffer_integer, 
+        order, sampling_frequency, buffer_integer, 
         return_pointer_and_check_length(A_in_, "A_in", num_A, 1),
         deps, num_A,
         return_pointer(E_in_, "E_in"), 
@@ -96,8 +91,8 @@ void response_part(py::module &m) {
 #endif 
 
     // Bind the constructor
-    .def(py::init<OrbitsWrap_responselisa *>(), 
-         py::arg("orbits"))
+    .def(py::init<OrbitsWrap_responselisa *, TDIConfigWrap *>(), 
+         py::arg("orbits"), py::arg("tdi_config"))
     // Bind member functions
     .def("get_tdi_delays_wrap", &LISAResponseWrap::get_tdi_delays_wrap, "Preform TDI combinations.")
     .def("get_response_wrap", &LISAResponseWrap::get_response_wrap, "Get detector projections.")
@@ -107,14 +102,37 @@ void response_part(py::module &m) {
     ;
 
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
-    py::class_<LISAResponse>(m, "LISAResponseBaseGPU")
+    py::class_<LISAResponse>(m, "LISAResponseGPU")
 #else
-    py::class_<LISAResponse>(m, "LISAResponseBaseCPU")
+    py::class_<LISAResponse>(m, "LISAResponseCPU")
 #endif
 
     // Bind the constructor
-    .def(py::init<Orbits *>(), 
-         py::arg("orbits"))
+    .def(py::init<Orbits *, TDIConfig *>(), 
+         py::arg("orbits"), py::arg("tdi_config"))
+    ;
+
+
+#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
+    py::class_<TDIConfigWrap>(m, "TDIConfigWrapGPU")
+#else
+    py::class_<TDIConfigWrap>(m, "TDIConfigWrapCPU")
+#endif
+
+    // Bind the constructor
+    .def(py::init<array_type<int>, array_type<int>, array_type<int>, array_type<int>, array_type<double>, array_type<int>, int, int>(), 
+         py::arg("unit_starts"), py::arg("unit_lengths"), py::arg("tdi_base_link"), py::arg("tdi_link_combinations"), py::arg("tdi_signs_in"), py::arg("channels"), py::arg("num_units"), py::arg("num_channels"))
+    ;
+
+#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
+    py::class_<TDIConfig>(m, "TDIConfigGPU")
+#else
+    py::class_<TDIConfig>(m, "TDIConfigCPU")
+#endif
+
+    // Bind the constructor
+    .def(py::init<int*, int*, int*, int*, double*, int*, int, int>(), 
+         py::arg("unit_starts"), py::arg("unit_lengths"), py::arg("tdi_base_link"), py::arg("tdi_link_combinations"), py::arg("tdi_signs_in"), py::arg("channels"), py::arg("num_units"), py::arg("num_channels"))
     ;
 
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
@@ -135,6 +153,21 @@ void response_part(py::module &m) {
     // .def("get_link_ind", &OrbitsWrap::get_link_ind, "Get link index.")
     ;
 
+#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
+    py::class_<CubicSplineWrap_responselisa>(m, "CubicSplineWrapGPU_responselisa")
+#else
+    py::class_<CubicSplineWrap_responselisa>(m, "CubicSplineWrapCPU_responselisa")
+#endif 
+
+    // Bind the constructor
+    .def(py::init<array_type<double>, array_type<double>, array_type<double>, array_type<double>, array_type<double>, int, int, int>(), 
+         py::arg("x0"), py::arg("y0"), py::arg("c1"), py::arg("c2"), py::arg("c3"), py::arg("ninterps"), py::arg("length"), py::arg("spline_type"))
+    // Bind member functions
+    
+    // You can also expose public data members directly using def_readwrite
+    .def_readwrite("spline", &CubicSplineWrap_responselisa::spline)
+    // .def("get_link_ind", &CubicSplineWrap::get_link_ind, "Get link index.")
+    ;
 
     
 }

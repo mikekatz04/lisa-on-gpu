@@ -164,7 +164,6 @@ class pyResponseTDI(FastLISAResponseParallelModule):
         # setup TDI info
         self._init_TDI_delays()
 
-        breakpoint()
         # initialize the cpp holders of orbit and other information
         # self.cpp_response.add_orbit_information(*self.check_add_orbit_args(*self.response_orbits.pycppdetector_args))
         # self.cpp_response.add_tdi_config(*self.tdi_config.pytdiconfig_args)
@@ -565,14 +564,6 @@ class pyResponseTDI(FastLISAResponseParallelModule):
             self.y_gw_length,
             self.num_pts,
             t_data,
-            unit_starts,
-            unit_lengths,
-            self.tdi.tdi_base_links,
-            self.tdi.tdi_link_combinations,
-            self.tdi.tdi_signs,
-            self.tdi.channels,
-            num_units,
-            3,  # num channels
             self.order,
             self.sampling_frequency,
             self.buffer_integer,

@@ -107,25 +107,6 @@ void find_start_inds(int start_inds[], int unit_length[], double *t_arr, double 
     *length = i + 1;
 }
 
-void AddTDIConfig::add_tdi_config(int *unit_starts_, int *unit_lengths_, int *tdi_base_link_, int *tdi_link_combinations_, double *tdi_signs_in_, int *channels_, int num_units_, int num_channels_)
-{
-    printf("new tdi config\n");
-    if (tdi_config != NULL)
-    {
-        printf("delete tdi config\n");
-        delete tdi_config;
-    }
-    tdi_config = new TDIConfig(unit_starts_,  unit_lengths_,  tdi_base_link_,  tdi_link_combinations_,  tdi_signs_in_,  channels_,  num_units_,  num_channels_);
-    printf("tdi config: %d\n", tdi_config->num_channels);
-};
-
-void AddTDIConfig::dealloc()
-{
-    printf("dealloc tdi config\n");
-    if (tdi_config != NULL) 
-        delete tdi_config;
-};
-
 CUDA_CALLABLE_MEMBER
 void interp_single(double *result, double *input, int h, int d, double e, double *A_arr, double deps, double *E_arr, int start_input_ind)
 {
@@ -235,10 +216,12 @@ void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, do
 #define MAX_ORDER 40
 
 CUDA_KERNEL
-void TDI_delay(double *delayed_links, double *input_links, int num_inputs, int num_delays, double *t_arr, int *unit_starts, int *unit_lengths, int *tdi_base_link, int *tdi_link_combinations, double *tdi_signs_in, int *channels, int num_units, int num_channels,
-               int order, double sampling_frequency, int buffer_integer, double *A_in, double deps, int num_A, double *E_in, int tdi_start_ind, Orbits *orbits_in)
+void TDI_delay(double *delayed_links, double *input_links, int num_inputs, int num_delays, double *t_arr,
+               int order, double sampling_frequency, int buffer_integer, double *A_in, double deps, int num_A, double *E_in, int tdi_start_ind, Orbits *orbits_in, TDIConfig *tdi_config_in)
 {
     Orbits orbits = *orbits_in;
+    TDIConfig tdi_config = *tdi_config_in;
+
     int start, end, increment;
 #ifdef __CUDACC__
     CUDA_SHARED double input[BUFFER_SIZE];
@@ -317,21 +300,21 @@ void TDI_delay(double *delayed_links, double *input_links, int num_inputs, int n
          i < num_delays - tdi_start_ind;
          i += increment2)
     {
-
+        
         t = t_arr[i];
-        for (int unit_i = start1; unit_i < num_units; unit_i += increment1)
+        for (int unit_i = start1; unit_i < tdi_config.num_units; unit_i += increment1)
         {
-            int unit_start = unit_starts[unit_i];
-            int unit_length = unit_lengths[unit_i];
-            int base_link = tdi_base_link[unit_i];
+            int unit_start = tdi_config.unit_starts[unit_i];
+            int unit_length = tdi_config.unit_lengths[unit_i];
+            int base_link = tdi_config.tdi_base_link[unit_i];
             int base_link_index = orbits.get_link_ind(base_link);
-            int channel = channels[unit_i];
-            double sign = tdi_signs_in[unit_i];
+            int channel = tdi_config.channels[unit_i];
+            double sign = tdi_config.tdi_signs_in[unit_i];
             delay = t;
             for (int sub_i = 0; sub_i < unit_length; sub_i += 1)
             {
                 int combination_index = unit_start + sub_i;
-                int combination_link = tdi_link_combinations[combination_index];
+                int combination_link = tdi_config.tdi_link_combinations[combination_index];
                 int combination_link_index;
                 if (combination_link == -11)
                 {
@@ -411,7 +394,7 @@ void TDI_delay(double *delayed_links, double *input_links, int num_inputs, int n
     }
 }
 
-void LISAResponse::get_tdi_delays(double *delayed_links, double *input_links, int num_inputs, int num_delays, double *t_arr, int *unit_starts, int *unit_lengths, int *tdi_base_link, int *tdi_link_combinations, double *tdi_signs_in, int *channels, int num_units, int num_channels,
+void LISAResponse::get_tdi_delays(double *delayed_links, double *input_links, int num_inputs, int num_delays, double *t_arr,
                     int order, double sampling_frequency, int buffer_integer, double *A_in, double deps, int num_A, double *E_in, int tdi_start_ind)
 {
     
@@ -424,21 +407,15 @@ void LISAResponse::get_tdi_delays(double *delayed_links, double *input_links, in
 
     dim3 gridDim(num_blocks, num_units * num_channels);
 
-    Orbits *orbits_gpu;
-    gpuErrchk(cudaMalloc(&orbits_gpu, sizeof(Orbits)));
-    gpuErrchk(cudaMemcpy(orbits_gpu, orbits, sizeof(Orbits), cudaMemcpyHostToDevice));
-
     // printf("RUNNING: %d\n", i);
-    TDI_delay<<<gridDim, NUM_THREADS>>>(delayed_links, input_links, num_inputs, num_delays, t_arr, unit_starts, unit_lengths, tdi_base_link, tdi_link_combinations, tdi_signs_in, channels, num_units, num_channels,
-                                        order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind, orbits_gpu);
-
+    TDI_delay<<<gridDim, NUM_THREADS>>>(delayed_links, input_links, num_inputs, num_delays, t_arr,
+                                        order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind, orbits_gpu, tdi_config_gpu);
     cudaDeviceSynchronize();
     gpuErrchk(cudaGetLastError());
-    gpuErrchk(cudaFree(orbits_gpu));
 
 #else
-    TDI_delay(delayed_links, input_links, num_inputs, num_delays, t_arr, unit_starts, unit_lengths, tdi_base_link, tdi_link_combinations, tdi_signs_in, channels, num_units, num_channels,
-              order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind, orbits);
+    TDI_delay(delayed_links, input_links, num_inputs, num_delays, t_arr,
+              order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind, orbits, tdi_config);
 
 #endif
 }
