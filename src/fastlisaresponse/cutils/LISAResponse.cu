@@ -12,6 +12,9 @@
 #define Orbits OrbitsCPU
 #endif
 
+
+
+
 CUDA_CALLABLE_MEMBER
 void get_basis_vecs(double lam, double beta, double u[], double v[], double k[])
 {
@@ -389,6 +392,9 @@ void TDI_delay(double *delayed_links, double *input_links, int num_inputs, int n
             // #pragma  omp atomic
             delayed_links[channel * num_delays + i] += link_delayed_out;
 #endif
+            if ((t > 1.556335e+06 - 2e1) && (t < 1.556335e+06 + 2e1))
+                printf("BASE: %d %.12e %d %d %d %.12e %.12e\n", i, t, channel, base_link_index, base_link, link_delayed_out, delay);
+            
             CUDA_SYNC_THREADS;
         }
     }
@@ -647,13 +653,12 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
 
             pre_factor = 1. / (1. - k_dot_n);
             large_factor = (hp_del0 - hp_del1) * xi_p + (hc_del0 - hc_del1) * xi_c;
-            if ((t > 1e6) && (t < 1e6 + 1e2))
-                printf("BASE: %d %d %e %e %e %e %e %e %e\n", i, link_i, t, pre_factor, large_factor, delay0, delay1, L, xi_p);
             y_gw[link_i * num_delays + i] = pre_factor * large_factor;
             CUDA_SYNC_THREADS;
         }
     }
 }
+
 
 void LISAResponse::get_response(double *y_gw, double *t_data, double *k_in, double *u_in, double *v_in, double dt,
                   int num_delays,

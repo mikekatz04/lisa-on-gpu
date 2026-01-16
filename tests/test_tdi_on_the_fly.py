@@ -90,7 +90,17 @@ class TDIonTheFlyTest(unittest.TestCase):
         orbits = EqualArmlengthOrbits(force_backend=force_backend)
         orbits.configure(linear_interp_setup=True)
 
-        tdi_config = TDIConfig("1st generation")
+        tdi_combinations = "1st generation"  # [
+        #     {"link": 13, "links_for_delay": [], "sign": +1},
+        #     {"link": 31, "links_for_delay": [13], "sign": +1},
+        #     {"link": 12, "links_for_delay": [13, 31], "sign": +1},
+        #     {"link": 21, "links_for_delay": [13, 31, 12], "sign": +1},
+        #     {"link": 12, "links_for_delay": [], "sign": -1},
+        #     {"link": 21, "links_for_delay": [12], "sign": -1},
+        #     {"link": 13, "links_for_delay": [12, 21], "sign": -1},
+        #     {"link": 31, "links_for_delay": [12, 21, 13], "sign": -1},
+        # ]
+        tdi_config = TDIConfig(tdi_combinations)  # "1st generation")
         
         # define GB parameters
         f = 6.000000000000e-03
@@ -104,12 +114,18 @@ class TDIonTheFlyTest(unittest.TestCase):
         psi = 8.000000000000e-01
         phi0 = 1.200000000000e+00
         fdot = 1.590872976087e-15
+        
+        import fastlisaresponse
+        _backend = fastlisaresponse.get_backend(force_backend)
 
+        cpp_orbits = _backend.OrbitsWrap(*orbits.pycppdetector_args)
+        cpp_tdi_config = _backend.TDIConfigWrap(*tdi_config.pytdiconfig_args)
 
-        gb_tdi_on_fly = tdionthefly.pyGBTDIonTheFly(orbits.ptr, tdi_config.ptr, T)
+        gb_tdi_on_fly = _backend.GBTDIonTheFlyWrap(cpp_orbits, cpp_tdi_config, T)
 
         t_arr = np.linspace(0.0, T, 4096, endpoint=False)
         t_tdi_in = t_arr[1:-1]
+        t_tdi_in[100] = 1.556340000000e+06
         # t_tdi_in = np.array([0.000000000000e+00, 1.588751515152e+07])
         
         N = len(t_tdi_in)
@@ -159,7 +175,7 @@ class TDIonTheFlyTest(unittest.TestCase):
         # bool is 1 byte
         buffer = np.zeros(buffer_length, dtype=bool)
 
-        gb_tdi_on_fly.run_wave_tdi(
+        gb_tdi_on_fly.run_wave_tdi_wrap(
             buffer, buffer_length,
             tdi_channels_arr,
             tdi_amp, tdi_phase,
@@ -167,7 +183,7 @@ class TDIonTheFlyTest(unittest.TestCase):
             _params, _t_tdi_in,
             N, num_sub, n_params, tdi_config.nchannels
         )
-
+        
         tdi_out_fly = TDTDIOutput(
             t_tdi_tmp, 
             tdi_amp.reshape(num_sub, tdi_config.nchannels, N), 
@@ -232,13 +248,20 @@ class TDIonTheFlyTest(unittest.TestCase):
         
         import matplotlib.pyplot as plt
         
-        plt.plot(t_new[0], chans_fly[0, 0])
-        plt.plot(t_new[0], chans_fly[0, 1])
-        plt.plot(t_new[0], chans_fly[0, 2])
-        plt.plot(t_new[0], chans[0], '--')
-        
-        plt.show()
-        gb_check = gb(A, f, fdot, iota, phi0, psi, T=T, dt=dt, t_vals = np.array([6.30857402730072e+07, 6.30857388146307e+07]))
+        # fig, ax = plt.subplots(3, 1)
+        # ax[0].plot(t_new[0], chans_fly[0, 0], color="C0")
+        # ax[1].plot(t_new[0], chans_fly[0, 1], color="C0")
+        # ax[2].plot(t_new[0], chans_fly[0, 2], color="C0")
+
+        # ax[0].plot(t_new[0], chans[0], ls='--', color="C1")
+        # ax[1].plot(t_new[0], chans[1], ls='--', color="C1")
+        # ax[2].plot(t_new[0], chans[2], ls='--', color="C1")
+
+        # plt.show()
+        chans_fft = np.fft.rfft(np.asarray(chans)[:, keep], axis=-1)
+        chans_fly_fft = np.fft.rfft(chans_fly[0][:, keep], axis=-1)
+
+        overlap = np.sum(chans_fly_fft.conj() * chans_fft) / np.sqrt(np.sum(chans_fft.conj() * chans_fft) * np.sum(chans_fly_fft.conj() * chans_fly_fft))
         breakpoint()
 
     def test_td_spline_tdi(self):

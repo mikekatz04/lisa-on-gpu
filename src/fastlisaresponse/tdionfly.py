@@ -116,6 +116,8 @@ class TDIonTheFly(FastLISAResponseParallelModule):
             raise ValueError("TDI Config needs to be a string or an instnace of TDIConfig.")
         self._tdi_config = tdi_config
 
+        self.cpp_tdi_config = self.backend.TDIConfigWrap(*self._tdi_config.pytdiconfig_args)
+       
     @property
     def xp(self) -> object:
         return self.backend.xp
@@ -143,6 +145,8 @@ class TDIonTheFly(FastLISAResponseParallelModule):
         if not self._orbits.configured:
             self._orbits.configure(linear_interp_setup=True)
 
+        self.cpp_orbits = self.backend.OrbitsWrap(*self._orbits.pycppdetector_args)
+    
     @property
     def citation(self):
         """Get citations for use of this code"""
@@ -167,37 +171,11 @@ class TDIonTheFly(FastLISAResponseParallelModule):
         phase_ref = np.zeros((self.N * self.num_sub), dtype=float)
         assert int(np.prod(self.t_arr.shape)) == self.N * self.num_sub
 
-        
-        self.wave_gen = self.backend.pyTDSplineTDIWaveform()
-
-        tmp_out = []
-        for tmp in list(self.orbits.pycppdetector_args):
-            try:
-                tmp_out.append(tmp.copy())
-            except AttributeError:
-                tmp_out.append(tmp)
-
-        self.wave_gen.add_orbit_information(*tmp_out)
-
-        tmp_out2 = []
-        for tmp in list(self.tdi_config.pytdiconfig_args):
-            try:
-                tmp_out2.append(tmp.copy())
-            except AttributeError:
-                tmp_out2.append(tmp)
-
-        self.wave_gen.add_tdi_config(*tmp_out2)
-        breakpoint()
-        self.wave_gen.add_amp_spline(*self.amp.cpp_class_args)
-        self.wave_gen.add_phase_spline(*self.phase.cpp_class_args)
-
         buffer_length = self.wave_gen.get_buffer_size(self.N)
         # bool is 1 byte
         buffer = np.zeros(buffer_length, dtype=bool)
 
-        
-        breakpoint()
-        self.wave_gen.run_wave_tdi(
+        self.wave_gen.run_wave_tdi_wrap(
             buffer, buffer_length,
             tdi_channels_arr,
             tdi_amp, tdi_phase,
@@ -587,8 +565,9 @@ class FDTDIonTheFly(TDIonTheFly):
 
     @property
     def wave_gen(self) -> callable:
-        args_in, _ = wrapper(self.orbits, self.tdi_config, self.amp.cpp_class, self.freq.cpp_class, self.phase_ref)
-        self._wave_gen = self.backend.pyFDSplineTDIWaveform(*args_in)
+        self.cpp_amp = self.backend.CubicSplineWrap(*self.amp.cpp_class_args)
+        self.cpp_freq = self.backend.CubicSplineWrap(*self.freq.cpp_class_args)
+        self._wave_gen = self.backend.FDSplineTDIWaveformWrap(self.cpp_orbits, self.cpp_tdi_config, self.cpp_amp, self.cpp_freq)
         return self._wave_gen
     
     @property

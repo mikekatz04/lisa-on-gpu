@@ -481,7 +481,7 @@ void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double
         CUDA_SYNC_THREADS;
         t = t_data[i];
         temp_output = 0.0;
-        for (int unit_i = 0; unit_i < tdi_config->num_units; unit_i += increment)
+        for (int unit_i = 0; unit_i < tdi_config->num_units; unit_i += 1)
         {
             int unit_start = tdi_config->unit_starts[unit_i];
             int unit_length = tdi_config->unit_lengths[unit_i];
@@ -495,19 +495,19 @@ void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double
             {
                 int combination_index = unit_start + sub_i;
                 int combination_link = tdi_config->tdi_link_combinations[combination_index];
-                int combination_link_index;
-                if (combination_link == -11)
-                {
-                    combination_link_index = -1;
-                }
-                else
-                {
-                    combination_link_index = orbits->get_link_ind(combination_link);
-                }
+                // int combination_link_index;
+                // if (combination_link == -11)
+                // {
+                //     combination_link_index = -1;
+                // }
+                // else
+                // {
+                //     combination_link_index = orbits->get_link_ind(combination_link);
+                // }
 
                 if (combination_link != -11)
                 {
-                    total_delay -= orbits->get_light_travel_time(t, combination_link);
+                    total_delay += orbits->get_light_travel_time(t, combination_link);
                 }
             }
             
@@ -526,12 +526,12 @@ void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double
             k_dot_x0 = k.dot(x0); // receiver
             k_dot_x1 = k.dot(x1); // emitter
 
-            L = orbits->get_light_travel_time(t, base_link);
+            L = orbits->get_light_travel_time(time_eval, base_link);
             
             pre_factor = 1. / (1. - k_dot_n);
             
-            delay0 = t - k_dot_x0 * C_inv;
-            delay1 = t - L - k_dot_x1 * C_inv;
+            delay0 = time_eval - k_dot_x0 * C_inv;
+            delay1 = time_eval - L - k_dot_x1 * C_inv;
 
             xi_projections(&xi_p, &xi_c, u, v, n);
 
@@ -546,13 +546,20 @@ void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double
             get_hp_hc(&hp_del1, &hc_del1, delay1, params, phase_change, bin_i);
             
             large_factor_imag = (hp_del0 - hp_del1) * xi_p + (hc_del0 - hc_del1) * xi_c;
-            tdi_channels_arr[channel * N + i] += pre_factor * (large_factor_real + I * large_factor_imag);
-            if ((t > 1e6) && (t < 1e6 + 1e4))
-                printf("FLY: %d %d %e %e %e %e %e %e %e\n", i, unit_i, t, pre_factor, large_factor_real, delay0, delay1, L, xi_p);
+            if ((i % 100 == 0) && (i < 200))
+                printf("FLY: %d %.12e %d %d %d %.12e %.12e\n", i, t, channel, base_link_index, base_link, pre_factor * large_factor_real, time_eval);
+            
+            tdi_channels_arr[channel * N + i] += sign * pre_factor * (large_factor_real + I * large_factor_imag);
             CUDA_SYNC_THREADS;
         }
     }
 }
+
+// FLY: 100 1.556340000000e+06 0 3 13 9.221909979440e-23 1.556340000000e+06
+// FLY: 100 1.556340000000e+06 0 2 31 9.120999116182e-23 1.556331661075e+06
+
+// BASE: 155634 1.556340000000e+06 0 3 13 9.221909189436e-23 1.556340000000e+06
+// BASE: 155634 1.556340000000e+06 0 2 31 8.403496674567e-23 1.556331661075e+06
 
 CUDA_CALLABLE_MEMBER
 double LISATDIonTheFly::get_amp(double t, double *params, int bin_i)
@@ -587,8 +594,8 @@ void LISATDIonTheFly::get_hp_hc(double *hp, double *hc, double t, double *params
     double sin2psi = sin(2.0 * psi);
     double cosiota = cos(inc);
 
-    double hSp = -cos(phase) * amp * (1.0 + cosiota * cosiota);
-    double hSc = -sin(phase) * 2.0 * amp * cosiota;
+    double hSp = -cos(phase + phase_change) * amp * (1.0 + cosiota * cosiota);
+    double hSc = -sin(phase + phase_change) * 2.0 * amp * cosiota;
 
     *hp = hSp * cos2psi - hSc * sin2psi;
     *hc = hSp * sin2psi + hSc * cos2psi;
@@ -1137,22 +1144,16 @@ void LISATDIonTheFly::run_wave_tdi(void *buffer, int buffer_length, cmplx *tdi_c
     double *tdi_amp, double *tdi_phase, double *phi_ref, 
     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels)
 {
-    printf("INSIDE\n");
-    printf("OUTSIDE\n");
-    printf("ahead of check22\n");
     // printf("orbits inside: %e", orbits->armlength);
     if (orbits == NULL)
     {
         throw std::invalid_argument("Need to add orbital information.\n");
     }
-    printf("CHECK CHECK: %d\n", orbits->N);
-    printf("CHECK CHECK: %e\n", orbits->x_arr[10]);
+
     if (this->tdi_config == NULL)
     {
         throw std::invalid_argument("Need to add tdi config2.\n");
     }
-    printf("tdi_config inside: %d", this->tdi_config->num_channels);
-
 
      // TODO: CHECK THIS!!
     for (int bin_i = 0; bin_i < num_bin; bin_i += 1)
