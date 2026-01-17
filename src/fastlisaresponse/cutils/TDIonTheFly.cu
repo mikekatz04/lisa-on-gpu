@@ -546,8 +546,8 @@ void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double
             get_hp_hc(&hp_del1, &hc_del1, delay1, params, phase_change, bin_i);
             
             large_factor_imag = (hp_del0 - hp_del1) * xi_p + (hc_del0 - hc_del1) * xi_c;
-            if ((i % 100 == 0) && (i < 200))
-                printf("FLY: %d %.12e %d %d %d %.12e %.12e\n", i, t, channel, base_link_index, base_link, pre_factor * large_factor_real, time_eval);
+            // if ((i % 100 == 0) && (i < 200))
+            //     printf("FLY: %d %.12e %d %d %d %.12e %.12e\n", i, t, channel, base_link_index, base_link, pre_factor * large_factor_real, time_eval);
             
             tdi_channels_arr[channel * N + i] += sign * pre_factor * (large_factor_real + I * large_factor_imag);
             CUDA_SYNC_THREADS;

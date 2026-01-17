@@ -262,7 +262,7 @@ class TDIonTheFlyTest(unittest.TestCase):
         chans_fly_fft = np.fft.rfft(chans_fly[0][:, keep], axis=-1)
 
         overlap = np.sum(chans_fly_fft.conj() * chans_fft) / np.sqrt(np.sum(chans_fft.conj() * chans_fft) * np.sum(chans_fly_fft.conj() * chans_fly_fft))
-        breakpoint()
+        assert overlap.real > 0.9999
 
     def test_td_spline_tdi(self):
 

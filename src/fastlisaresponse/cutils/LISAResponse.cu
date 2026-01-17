@@ -392,8 +392,8 @@ void TDI_delay(double *delayed_links, double *input_links, int num_inputs, int n
             // #pragma  omp atomic
             delayed_links[channel * num_delays + i] += link_delayed_out;
 #endif
-            if ((t > 1.556335e+06 - 2e1) && (t < 1.556335e+06 + 2e1))
-                printf("BASE: %d %.12e %d %d %d %.12e %.12e\n", i, t, channel, base_link_index, base_link, link_delayed_out, delay);
+            // if ((t > 1.556335e+06 - 2e1) && (t < 1.556335e+06 + 2e1))
+            //     printf("BASE: %d %.12e %d %d %d %.12e %.12e\n", i, t, channel, base_link_index, base_link, link_delayed_out, delay);
             
             CUDA_SYNC_THREADS;
         }
