@@ -199,61 +199,12 @@ endif()
 # III. Declare the GPU backend
 if(FASTLISA_WITH_GPU)
 
-  execute_process(
-  COMMAND "${PYTHON_EXECUTABLE}" -c "if True:
-    from lisatools_backend_cuda12x import pycppdetector
-    print(pycppdetector.__file__)"
-  OUTPUT_VARIABLE LISATOOLS_DETECTOR_GPU
-  OUTPUT_STRIP_TRAILING_WHITESPACE)
-
-  message(STATUS "LISATOOLS_DETECTOR_GPU: ${LISATOOLS_DETECTOR_GPU}")
-
-  get_filename_component(LISATOOLS_DETECTOR_GPU_DIR ${LISATOOLS_DETECTOR_GPU} DIRECTORY)
-  get_filename_component(LISATOOLS_DETECTOR_GPU_LIB_NAME ${LISATOOLS_DETECTOR_GPU} NAME)
-  message(STATUS "dir: ${LISATOOLS_DETECTOR_GPU_DIR}")
-  
-  file(GLOB MY_SHARED_GPU "${LISATOOLS_DETECTOR_GPU_DIR}/*.a")
-  message(STATUS "LISATOOLS lib files: ${MY_SHARED_GPU}")
-
-  find_library(LISATOOLS_DETECTOR_STATIC_LIB_GPU
-      NAMES detector_gpu # The name of the library (without 'lib' prefix or '.a' extension)
-      PATHS ${LISATOOLS_DETECTOR_GPU_DIR} # The specific folder to check
-      NO_DEFAULT_PATH_LOGIC # Optional: Restricts search to only the provided PATHS
-  )
-
-  if(LISATOOLS_DETECTOR_STATIC_LIB_GPU)
-      message("Found static library at: ${LISATOOLS_DETECTOR_STATIC_LIB_GPU}")
-      # You can now use the library, e.g., add_library(MyImportedLib STATIC IMPORTED)
-      # and set its location property. Or link directly in target_link_libraries
-  else()
-      message(FATAL_ERROR "LISA Analysis Tools detector (gpu) static library not found in the specified folder!")
-  endif()
-
-  set(DETECTOR_GPU_OBJ "${LISATOOLS_DETECTOR_GPU_DIR}/Detector.cu.o")
-
-  if(EXISTS "${DETECTOR_GPU_OBJ}")
-    message("INFO: The file ${DETECTOR_GPU_OBJ} exists.")
-    # Proceed with configuration, e.g., add the file to a target
-    # add_executable(MyTarget ${DETECTOR_GPU_OBJ})
-  else()
-    message(STATUS "The file ${DETECTOR_GPU_OBJ} does not exist. We will unpack the installed library.")
-    execute_process (
-      COMMAND bash -c "cd ${LISATOOLS_DETECTOR_GPU_DIR} && ar -x libdetector_gpu.a Detector.cu.o && cd -"
-    )
-    # Handle the missing file, e.g., set a variable, issue a warning, or a fatal error
-    # message(FATAL_ERROR "Required file not found!")
-    if(NOT EXISTS "${DETECTOR_GPU_OBJ}")
-      message(FATAL_ERROR "${DETECTOR_GPU_OBJ} creation not working.")
-    endif()
-  endif()
-
   add_library(fastlisaresponse_gpu_response_gpu_static STATIC "${LISATOOLS_DIR}/cutils/Detector.cu" LISAResponse.cu)
   apply_gpu_backend_common_options(response_gpu fastlisaresponse fastlisaresponse true)
   target_sources(fastlisaresponse_gpu_response_gpu_static PUBLIC FILE_SET HEADERS FILES
                                          LISAResponse.hh)
 
   target_include_directories(fastlisaresponse_gpu_response_gpu_static PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})
-  # target_link_libraries(fastlisaresponse_gpu_response_gpu_static PUBLIC ${DETECTOR_GPU_OBJ}) 
   
   pybind11_add_module(fastlisaresponse_gpu_responselisa "${LISATOOLS_DIR}/cutils/binding.cxx" binding_flr.cxx)
   apply_gpu_backend_common_options(responselisa fastlisaresponse fastlisaresponse false)

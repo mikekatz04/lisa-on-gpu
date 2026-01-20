@@ -17,15 +17,51 @@
 
 namespace py = pybind11;
 
-void LISATDIonTheFlyWrap::run_wave_tdi_wrap(
-    array_type<bool>buffer, int buffer_length, array_type<std::complex<double>>tdi_channels_arr, 
+void GBTDIonTheFlyWrap::run_wave_tdi_wrap(
+    array_type<std::complex<double>>tdi_channels_arr, 
     array_type<double>tdi_amp, array_type<double>tdi_phase, array_type<double>phi_ref, 
     array_type<double>params, array_type<double>t_arr, int N, int num_bin, int n_params, int nchannels
 )
 {
-    waveform->run_wave_tdi(
-        (void*)return_pointer_and_check_length(buffer, "buffer", buffer_length, 1),
-        buffer_length,
+    gb_run_wave_tdi_wrap(
+        waveform,
+        (cmplx*)return_pointer_and_check_length(tdi_channels_arr, "tdi_channels_arr", N, num_bin * nchannels), // TODO: add length check
+        return_pointer_and_check_length(tdi_amp, "tdi_amp", N, num_bin * nchannels),
+        return_pointer_and_check_length(tdi_phase, "tdi_phase", N, num_bin * nchannels),
+        return_pointer_and_check_length(phi_ref, "phi_ref", N, num_bin),
+        return_pointer_and_check_length(params, "params", n_params, num_bin),
+        return_pointer_and_check_length(t_arr, "t_arr", N, num_bin),
+        N, num_bin, n_params, nchannels
+    );
+}
+
+
+void TDSplineTDIWaveformWrap::run_wave_tdi_wrap(
+    array_type<std::complex<double>>tdi_channels_arr, 
+    array_type<double>tdi_amp, array_type<double>tdi_phase, array_type<double>phi_ref, 
+    array_type<double>params, array_type<double>t_arr, int N, int num_bin, int n_params, int nchannels
+)
+{
+    td_spline_run_wave_tdi_wrap(
+        waveform,
+        (cmplx*)return_pointer_and_check_length(tdi_channels_arr, "tdi_channels_arr", N, num_bin * nchannels), // TODO: add length check
+        return_pointer_and_check_length(tdi_amp, "tdi_amp", N, num_bin * nchannels),
+        return_pointer_and_check_length(tdi_phase, "tdi_phase", N, num_bin * nchannels),
+        return_pointer_and_check_length(phi_ref, "phi_ref", N, num_bin),
+        return_pointer_and_check_length(params, "params", n_params, num_bin),
+        return_pointer_and_check_length(t_arr, "t_arr", N, num_bin),
+        N, num_bin, n_params, nchannels
+    );
+}
+
+void FDSplineTDIWaveformWrap::run_wave_tdi_wrap(
+    array_type<std::complex<double>>tdi_channels_arr, 
+    array_type<double>tdi_amp, array_type<double>tdi_phase, array_type<double>phi_ref, 
+    array_type<double>params, array_type<double>t_arr, int N, int num_bin, int n_params, int nchannels
+)
+{
+    fd_spline_run_wave_tdi_wrap(
+        waveform,
         (cmplx*)return_pointer_and_check_length(tdi_channels_arr, "tdi_channels_arr", N, num_bin * nchannels), // TODO: add length check
         return_pointer_and_check_length(tdi_amp, "tdi_amp", N, num_bin * nchannels),
         return_pointer_and_check_length(tdi_phase, "tdi_phase", N, num_bin * nchannels),
