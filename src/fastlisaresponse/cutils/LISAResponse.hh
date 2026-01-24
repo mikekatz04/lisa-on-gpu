@@ -6,7 +6,7 @@
 #include "gbt_global.h"
 
 #define C_inv 3.3356409519815204e-09
-#define NUM_THREADS 256
+#define NUM_THREADS_RESPONSE 256
 
 typedef gcmplx::complex<double> cmplx;
 
@@ -57,21 +57,8 @@ class LISAResponse{
     LISAResponse(Orbits *orbits_, TDIConfig *tdi_config_){
       orbits = orbits_;
       tdi_config = tdi_config_;
-
-#ifdef __CUDACC__
-      gpuErrchk(cudaMalloc(&orbits_gpu, sizeof(Orbits)));
-      gpuErrchk(cudaMemcpy(orbits_gpu, orbits, sizeof(Orbits), cudaMemcpyHostToDevice));
-
-      gpuErrchk(cudaMalloc(&tdi_config_gpu, sizeof(TDIConfig)));
-      gpuErrchk(cudaMemcpy(tdi_config_gpu, tdi_config, sizeof(TDIConfig), cudaMemcpyHostToDevice));
-#endif
     };
-    ~LISAResponse(){
-#ifdef __CUDACC__
-      gpuErrchk(cudaFree(orbits_gpu));
-      gpuErrchk(cudaFree(tdi_config_gpu));
-#endif
-    };
+    ~LISAResponse(){};
     void get_tdi_delays(double *delayed_links_, double *input_links_, int num_inputs, int num_delays, double *t_arr_,
                     int order, double sampling_frequency, int buffer_integer, double *A_in_, double deps, int num_A, double *E_in_, int tdi_start_ind);
                     

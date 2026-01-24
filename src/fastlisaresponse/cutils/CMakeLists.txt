@@ -283,12 +283,25 @@ if(FASTLISA_WITH_CPU)
 
 endif()
 
-# IV. Remove downloaded files. 
-# file(REMOVE "./src/fastlisaresponse/cutils/Detector.cu")
-# file(REMOVE "./src/fastlisaresponse/cutils/Detector.hpp")
-# file(REMOVE "./src/fastlisaresponse/cutils/global.hpp")
-# file(REMOVE "./src/fastlisaresponse/cutils/Interpolate.cu")
-# file(REMOVE "./src/fastlisaresponse/cutils/interpolate.hh")
+
+# II. Declare the CPU backend
+if(FASTLISA_WITH_GPU)
+  add_library(fastlisaresponse_gpu_tdionthefly_gpu_static STATIC ${GBT_DIR}/cutils/Interpolate.cu ${LISATOOLS_DIR}/cutils/Detector.cu LISAResponse.cu TDIonTheFly.cu)
+  apply_gpu_backend_common_options(tdionthefly_gpu fastlisaresponse fastlisaresponse true )
+  target_include_directories(fastlisaresponse_gpu_tdionthefly_gpu_static PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})  
+  target_sources(fastlisaresponse_gpu_tdionthefly_gpu_static PUBLIC FILE_SET HEADERS FILES
+                                        TDIonTheFly.hh)
+
+  pybind11_add_module(fastlisaresponse_gpu_tdionthefly "${LISATOOLS_DIR}/cutils/binding.cxx" "${GBT_DIR}/cutils/gbt_binding.cxx" binding_flr.cxx binding_tof.cxx)
+  apply_gpu_backend_common_options(tdionthefly fastlisaresponse fastlisaresponse false)
+
+  # Link your target to the imported target name
+  target_link_libraries(fastlisaresponse_gpu_tdionthefly PUBLIC fastlisaresponse_gpu_tdionthefly_gpu_static)  #  ${LISATOOLS_DETECTOR_STATIC_LIB_CPU})
+  target_include_directories(fastlisaresponse_gpu_tdionthefly PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})  
+  target_sources(fastlisaresponse_gpu_tdionthefly PUBLIC FILE_SET HEADERS FILES
+                                          binding_tof.hpp)
+
+endif()
 
 
 

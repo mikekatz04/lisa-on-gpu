@@ -161,29 +161,24 @@ class TDIonTheFly(FastLISAResponseParallelModule):
 
     def __call__(self, inc, psi, lam, beta, return_spline: bool =False) -> TDIOutput:
         
-        params = np.array([inc, psi, lam, beta]).T.flatten().copy()
+        params = self.xp.asarray([inc, psi, lam, beta]).T.flatten().copy()
 
         assert len(params) == 4 * self.num_sub
 
-        tdi_channels_arr = np.zeros((self.N * self.tdi_config.nchannels * self.num_sub), dtype=complex)
-        tdi_amp = np.zeros((self.N * self.tdi_config.nchannels * self.num_sub), dtype=float)
-        tdi_phase = np.zeros((self.N * self.tdi_config.nchannels * self.num_sub), dtype=float)
-        phase_ref = np.zeros((self.N * self.num_sub), dtype=float)
+        tdi_channels_arr = self.xp.zeros((self.N * self.tdi_config.nchannels * self.num_sub), dtype=complex)
+        tdi_amp = self.xp.zeros((self.N * self.tdi_config.nchannels * self.num_sub), dtype=float)
+        tdi_phase = self.xp.zeros((self.N * self.tdi_config.nchannels * self.num_sub), dtype=float)
+        phase_ref = self.xp.zeros((self.N * self.num_sub), dtype=float)
         assert int(np.prod(self.t_arr.shape)) == self.N * self.num_sub
 
-        buffer_length = self.wave_gen.get_buffer_size(self.N)
-        # bool is 1 byte
-        buffer = np.zeros(buffer_length, dtype=bool)
-
         self.wave_gen.run_wave_tdi_wrap(
-            buffer, buffer_length,
             tdi_channels_arr,
             tdi_amp, tdi_phase,
             phase_ref,
             params, self.t_arr.flatten().copy(),
             self.N, self.num_sub, self.n_params, self.tdi_config.nchannels
         )
-
+        
         breakpoint()
         reshape_shape = (self.num_sub, self.tdi_config.nchannels, self.N)
         return self.from_tdi_output(TDIOutput(
@@ -297,7 +292,7 @@ class TDTDIonTheFly(TDIonTheFly):
         self._wave_gen = wave_gen
     
     def from_tdi_output(self, tdi_output: TDIOutput, fill_splines: Optional[bool] = False) -> FDTDIOutput:
-        assert np.allclose(tdi_output.x, self.t_arr)
+        assert self.xp.allclose(tdi_output.x, self.t_arr)
         return TDTDIOutput(
             tdi_output.x, tdi_output.tdi_amp, tdi_output.tdi_phase, tdi_output.phase_ref, fill_splines=fill_splines
         )
@@ -328,10 +323,10 @@ class TDIOutput(FastLISAResponseParallelModule):
     
     def build_spline(self, x, y, **kwargs) -> CubicSplineInterpolant:
         if x.ndim == 2 and y.ndim == 3:
-            x_in =  np.repeat(x[:, None, :], y.shape[1], axis=1)
+            x_in =  self.xp.repeat(x[:, None, :], y.shape[1], axis=1)
         else:
             x_in = x.copy()
-        return CubicSplineInterpolant(x_in, y, **kwargs)
+        return CubicSplineInterpolant(x_in, y, **kwargs, force_backend=self.backend.name.split("_")[-1])
     
     @property
     def num_bin(self) -> int:
@@ -435,10 +430,10 @@ class TDIOutput(FastLISAResponseParallelModule):
     def eval_spline_vals(self, x_new: np.ndarray, **kwargs) -> np.ndarray:
 
         if x_new.ndim == 1:
-            t_amp_phase = np.tile(x_new, (self.num_bin, 3, 1))
-            t_phase_ref = np.tile(x_new, (self.num_bin, 1))
+            t_amp_phase = self.xp.tile(x_new, (self.num_bin, 3, 1))
+            t_phase_ref = self.xp.tile(x_new, (self.num_bin, 1))
         elif x_new.ndim == 2:
-            t_amp_phase = np.repeat(x_new[:, None, :], 3, axis=1)
+            t_amp_phase = self.xp.repeat(x_new[:, None, :], 3, axis=1)
             t_phase_ref = x_new
 
         tdi_amp_new = self.tdi_amp_spl(t_amp_phase, **kwargs)
@@ -458,7 +453,7 @@ class TDTDIOutput(TDIOutput):
 
     def eval_tdi(self, t_new: np.ndarray, **kwargs) -> np.ndarray:
         tdi_amp_new, tdi_phase_new, phase_ref_new = self.eval_spline_vals(t_new, **kwargs)
-        tdi_output = np.real(tdi_amp_new * np.exp(-1j * (tdi_phase_new + phase_ref_new)))
+        tdi_output = self.xp.real(tdi_amp_new * self.xp.exp(-1j * (tdi_phase_new + phase_ref_new)))
         return tdi_output
     
     @property
@@ -469,7 +464,7 @@ class TDTDIOutput(TDIOutput):
 class FDTDIOutput(TDIOutput):
     def eval_tdi(self, f_new: np.ndarray, **kwargs) -> np.ndarray:
         tdi_amp_new, tdi_phase_new, phase_ref_new = self.eval_spline_vals(f_new, **kwargs)
-        tdi_output = tdi_amp_new * np.exp(-1j * (tdi_phase_new + phase_ref_new[:, None, :]))
+        tdi_output = tdi_amp_new * self.xp.exp(-1j * (tdi_phase_new + phase_ref_new[:, None, :]))
         return tdi_output
     
     @property

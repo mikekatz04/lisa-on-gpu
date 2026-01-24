@@ -23,6 +23,7 @@ void GBTDIonTheFlyWrap::run_wave_tdi_wrap(
     array_type<double>params, array_type<double>t_arr, int N, int num_bin, int n_params, int nchannels
 )
 {
+    printf("CHECKing33\n");
     gb_run_wave_tdi_wrap(
         waveform,
         (cmplx*)return_pointer_and_check_length(tdi_channels_arr, "tdi_channels_arr", N, num_bin * nchannels), // TODO: add length check

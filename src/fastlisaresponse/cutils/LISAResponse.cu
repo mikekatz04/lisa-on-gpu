@@ -346,7 +346,7 @@ void TDI_delay(double *delayed_links, double *input_links, int num_inputs, int n
             min_integer_delay = integer_delay;
 
 #ifdef __CUDACC__
-            int max_thread_num = ((num_delays - 2 * tdi_start_ind) - blockDim.x * blockIdx.x > NUM_THREADS) ? NUM_THREADS : (num_delays - 2 * tdi_start_ind) - blockDim.x * blockIdx.x;
+            int max_thread_num = ((num_delays - 2 * tdi_start_ind) - blockDim.x * blockIdx.x > NUM_THREADS_RESPONSE) ? NUM_THREADS_RESPONSE : (num_delays - 2 * tdi_start_ind) - blockDim.x * blockIdx.x;
             CUDA_SYNC_THREADS;
             if (threadIdx.x == 0)
             {
@@ -409,15 +409,27 @@ void LISAResponse::get_tdi_delays(double *delayed_links, double *input_links, in
         throw std::invalid_argument("Must add orbits with add_orbit_information method.");
     }
 #ifdef __CUDACC__
-    int num_blocks = std::ceil((num_delays - 2 * tdi_start_ind + NUM_THREADS - 1) / NUM_THREADS);
+    int num_blocks = std::ceil((num_delays - 2 * tdi_start_ind + NUM_THREADS_RESPONSE - 1) / NUM_THREADS_RESPONSE);
 
-    dim3 gridDim(num_blocks, num_units * num_channels);
+    dim3 gridDim(num_blocks, tdi_config->num_units);
+
+    Orbits *orbits_gpu;
+    gpuErrchk(cudaMalloc(&orbits_gpu, sizeof(Orbits)));
+    gpuErrchk(cudaMemcpy(orbits_gpu, orbits, sizeof(Orbits), cudaMemcpyHostToDevice));
+
+    TDIConfig *tdi_config_gpu;
+    gpuErrchk(cudaMalloc(&tdi_config_gpu, sizeof(TDIConfig)));
+    gpuErrchk(cudaMemcpy(tdi_config_gpu, tdi_config, sizeof(TDIConfig), cudaMemcpyHostToDevice));
 
     // printf("RUNNING: %d\n", i);
-    TDI_delay<<<gridDim, NUM_THREADS>>>(delayed_links, input_links, num_inputs, num_delays, t_arr,
+    TDI_delay<<<gridDim, NUM_THREADS_RESPONSE>>>(delayed_links, input_links, num_inputs, num_delays, t_arr,
                                         order, sampling_frequency, buffer_integer, A_in, deps, num_A, E_in, tdi_start_ind, orbits_gpu, tdi_config_gpu);
     cudaDeviceSynchronize();
     gpuErrchk(cudaGetLastError());
+
+    gpuErrchk(cudaFree(orbits_gpu));
+    gpuErrchk(cudaFree(tdi_config_gpu));
+
 
 #else
     TDI_delay(delayed_links, input_links, num_inputs, num_delays, t_arr,
@@ -451,9 +463,9 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
     CUDA_SHARED int links[NLINKS];
 
 #ifdef __CUDACC__
-    CUDA_SHARED double x0_all[NUM_THREADS * 3];
-    CUDA_SHARED double x1_all[NUM_THREADS * 3];
-    CUDA_SHARED double n_all[NUM_THREADS * 3];
+    CUDA_SHARED double x0_all[NUM_THREADS_RESPONSE * 3];
+    CUDA_SHARED double x1_all[NUM_THREADS_RESPONSE * 3];
+    CUDA_SHARED double n_all[NUM_THREADS_RESPONSE * 3];
 
     double *x0 = &x0_all[3 * threadIdx.x];
     double *x1 = &x1_all[3 * threadIdx.x];
@@ -616,7 +628,7 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
             min_integer_delay = (integer_delay0 < integer_delay1) ? integer_delay0 : integer_delay1;
 
 #ifdef __CUDACC__
-            int max_thread_num = ((num_delays - 2 * projections_start_ind) - blockDim.x * blockIdx.x > NUM_THREADS) ? NUM_THREADS : (num_delays - 2 * projections_start_ind) - blockDim.x * blockIdx.x;
+            int max_thread_num = ((num_delays - 2 * projections_start_ind) - blockDim.x * blockIdx.x > NUM_THREADS_RESPONSE) ? NUM_THREADS_RESPONSE : (num_delays - 2 * projections_start_ind) - blockDim.x * blockIdx.x;
 
             if (threadIdx.x == 0)
             {
@@ -675,7 +687,7 @@ void LISAResponse::get_response(double *y_gw, double *t_data, double *k_in, doub
 #ifdef __CUDACC__
 
     int num_delays_here = (num_delays - 2 * projections_start_ind);
-    int num_blocks = std::ceil((num_delays_here + NUM_THREADS - 1) / NUM_THREADS);
+    int num_blocks = std::ceil((num_delays_here + NUM_THREADS_RESPONSE - 1) / NUM_THREADS_RESPONSE);
 
     // copy self to GPU
     Orbits *orbits_gpu;
@@ -685,7 +697,7 @@ void LISAResponse::get_response(double *y_gw, double *t_data, double *k_in, doub
     dim3 gridDim(num_blocks, 1);
 
     // printf("RUNNING: %d\n", i);
-    response<<<gridDim, NUM_THREADS>>>(y_gw, t_data, k_in, u_in, v_in, dt,
+    response<<<gridDim, NUM_THREADS_RESPONSE>>>(y_gw, t_data, k_in, u_in, v_in, dt,
                                        num_delays,
                                        input_in, num_inputs, order, sampling_frequency, buffer_integer,
                                        A_in, deps, num_A, E_in, projections_start_ind,

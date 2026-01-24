@@ -27,9 +27,10 @@ using array_type = py::array_t<T>;
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
 #define OrbitsWrap_responselisa OrbitsWrapGPU_responselisa
 #define CubicSplineWrap_responselisa CubicSplineWrapGPU_responselisa
+#define TDIConfigWrap TDIConfigWrapGPU
 #else
 #define OrbitsWrap_responselisa OrbitsWrapCPU_responselisa
-#define CubicSplineWrap_responselisa CubicSplineWrapCPU_responselisa
+#define TDIConfigWrap TDIConfigWrapCPU
 #endif
 
 

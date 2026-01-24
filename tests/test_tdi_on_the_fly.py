@@ -14,6 +14,7 @@ from fastlisaresponse.tdiconfig import TDIConfig
 from fastlisaresponse import ResponseWrapper
 
 try:
+    # raise ModuleNotFoundError
     import cupy as cp
 
     gpu_available = True
@@ -100,7 +101,7 @@ class TDIonTheFlyTest(unittest.TestCase):
         #     {"link": 13, "links_for_delay": [12, 21], "sign": -1},
         #     {"link": 31, "links_for_delay": [12, 21, 13], "sign": -1},
         # ]
-        tdi_config = TDIConfig(tdi_combinations)  # "1st generation")
+        tdi_config = TDIConfig(tdi_combinations, force_backend=force_backend)  # "1st generation")
         
         # define GB parameters
         f = 6.000000000000e-03
@@ -123,9 +124,8 @@ class TDIonTheFlyTest(unittest.TestCase):
 
         gb_tdi_on_fly = _backend.GBTDIonTheFlyWrap(cpp_orbits, cpp_tdi_config, T)
 
-        t_arr = np.linspace(0.0, T, 4096, endpoint=False)
+        t_arr = _backend.xp.linspace(0.0, T, 155, endpoint=False)
         t_tdi_in = t_arr[1:-1]
-        t_tdi_in[100] = 1.556340000000e+06
         # t_tdi_in = np.array([0.000000000000e+00, 1.588751515152e+07])
         
         N = len(t_tdi_in)
@@ -136,7 +136,7 @@ class TDIonTheFlyTest(unittest.TestCase):
 
         buffer = np.zeros(num_points)
         
-        params = np.zeros((num_bin, 9))
+        params = _backend.xp.zeros((num_bin, 9))
         fddot = 0.0
         params[:, 0] = A
         params[:, 1] = f
@@ -153,8 +153,8 @@ class TDIonTheFlyTest(unittest.TestCase):
         n_params = 9
         num_sub = num_bin
         
-        _t_tdi_in = np.tile(t_tdi_in, (num_bin, 1)).flatten().copy()
-        t_tdi_tmp = np.tile(t_tdi_in, (num_bin, 1))
+        _t_tdi_in = _backend.xp.tile(t_tdi_in, (num_bin, 1)).flatten().copy()
+        t_tdi_tmp = _backend.xp.tile(t_tdi_in, (num_bin, 1))
         
         # time_sc = np.zeros_like(phase_ref)
         # gb_tdi_on_fly.run_wave_tdi(
@@ -165,34 +165,34 @@ class TDIonTheFlyTest(unittest.TestCase):
 
         assert len(_params) == n_params * num_sub
 
-        tdi_channels_arr = np.zeros((N * tdi_config.nchannels * num_sub), dtype=complex)
-        tdi_amp = np.zeros((N * tdi_config.nchannels * num_sub), dtype=float)
-        tdi_phase = np.zeros((N * tdi_config.nchannels * num_sub), dtype=float)
-        phase_ref = np.zeros((N * num_sub), dtype=float)
+        tdi_channels_arr = _backend.xp.zeros((N * tdi_config.nchannels * num_sub), dtype=complex)
+        tdi_amp = _backend.xp.zeros((N * tdi_config.nchannels * num_sub), dtype=float)
+        tdi_phase = _backend.xp.zeros((N * tdi_config.nchannels * num_sub), dtype=float)
+        phase_ref = _backend.xp.zeros((N * num_sub), dtype=float)
         assert int(np.prod(t_tdi_tmp.shape)) == N * num_sub
 
         buffer_length = gb_tdi_on_fly.get_buffer_size(N)
         # bool is 1 byte
         buffer = np.zeros(buffer_length, dtype=bool)
-
+        breakpoint()
         gb_tdi_on_fly.run_wave_tdi_wrap(
-            buffer, buffer_length,
             tdi_channels_arr,
             tdi_amp, tdi_phase,
             phase_ref,
             _params, _t_tdi_in,
             N, num_sub, n_params, tdi_config.nchannels
         )
-        
+
         tdi_out_fly = TDTDIOutput(
             t_tdi_tmp, 
             tdi_amp.reshape(num_sub, tdi_config.nchannels, N), 
             tdi_phase.reshape(num_sub, tdi_config.nchannels, N), 
             phase_ref.reshape(num_sub, N), 
-            fill_splines=True
+            fill_splines=True,
+            force_backend=force_backend
         )
 
-        force_backend = "cpu"  #  if not use_gpu else "gpu"
+        force_backend = "cpu" if not gpu_available else "gpu"
         gb = GBWave(force_backend=force_backend)
 
         T = 2.0  # years
@@ -236,33 +236,42 @@ class TDIonTheFlyTest(unittest.TestCase):
         # define GB parameters
         chans = gb_lisa_esa(A, f, fdot, iota, phi0, psi, lam, beta)
 
-        t_new = np.tile(np.arange(chans[0].shape[-1]) * dt, (num_bin, 1))
+        t_new = _backend.xp.tile(_backend.xp.arange(chans[0].shape[-1]) * dt, (num_bin, 1))
         
-        keep = (np.sum(
+        keep = (_backend.xp.sum(
             (t_new > tdi_out_fly.t_arr.min(axis=-1).max()[None, None])
             & (t_new < tdi_out_fly.t_arr.max(axis=-1).min()[None, None])
         , axis=0) > 0)
 
-        chans_fly = np.zeros((num_bin, tdi_config.nchannels, t_new.shape[-1]))
+        chans_fly = _backend.xp.zeros((num_bin, tdi_config.nchannels, t_new.shape[-1]))
         chans_fly[:, :, keep] = tdi_out_fly.eval_tdi(t_new[:, keep])
         
+        chans_fft = _backend.xp.fft.rfft(_backend.xp.asarray(chans)[:, keep], axis=-1)
+        chans_fly_fft = _backend.xp.fft.rfft(chans_fly[0][:, keep], axis=-1)
+
+        overlap = _backend.xp.sum(chans_fly_fft.conj() * chans_fft) / _backend.xp.sqrt(_backend.xp.sum(chans_fft.conj() * chans_fft) * _backend.xp.sum(chans_fly_fft.conj() * chans_fly_fft))
+        mismatch = 1.0 - overlap.real
         import matplotlib.pyplot as plt
         
-        # fig, ax = plt.subplots(3, 1)
-        # ax[0].plot(t_new[0], chans_fly[0, 0], color="C0")
-        # ax[1].plot(t_new[0], chans_fly[0, 1], color="C0")
-        # ax[2].plot(t_new[0], chans_fly[0, 2], color="C0")
+        fig, ax = plt.subplots(3, 1, sharex=True)
+        ax[0].plot(t_new[0].get(), chans_fly[0, 0].get(), color="C0")
+        ax[1].plot(t_new[0].get(), chans_fly[0, 1].get(), color="C0")
+        ax[2].plot(t_new[0].get(), chans_fly[0, 2].get(), color="C0")
 
-        # ax[0].plot(t_new[0], chans[0], ls='--', color="C1")
-        # ax[1].plot(t_new[0], chans[1], ls='--', color="C1")
-        # ax[2].plot(t_new[0], chans[2], ls='--', color="C1")
-
-        # plt.show()
-        chans_fft = np.fft.rfft(np.asarray(chans)[:, keep], axis=-1)
-        chans_fly_fft = np.fft.rfft(chans_fly[0][:, keep], axis=-1)
-
-        overlap = np.sum(chans_fly_fft.conj() * chans_fft) / np.sqrt(np.sum(chans_fft.conj() * chans_fft) * np.sum(chans_fly_fft.conj() * chans_fly_fft))
+        ax[0].plot(t_new[0].get(), chans[0].get(), ls='--', color="C1")
+        ax[1].plot(t_new[0].get(), chans[1].get(), ls='--', color="C1")
+        ax[2].plot(t_new[0].get(), chans[2].get(), ls='--', color="C1")
+        
+        ax[0].set_xlim(1e6, 1e6 + 3e3)
+        ax[0].set_title(f"Mismatch: {mismatch:.2e}")
+        ax[2].set_xlabel("Time (s)")
+        ax[0].set_ylabel("X")
+        ax[1].set_ylabel("Y")
+        ax[2].set_ylabel("Z")
+        plt.savefig("tdi_on_fly_test_gpu_zoom.png")
+        breakpoint()
         assert overlap.real > 0.9999
+        
 
     def test_td_spline_tdi(self):
 

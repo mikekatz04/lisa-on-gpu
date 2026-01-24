@@ -4,9 +4,14 @@
 #include "Interpolate.hh"
 #include <string>
 #include <unistd.h>
+#ifdef __CUDACC__
+#include <cub/cub.cuh> 
+#endif
 
 // TODO: GET RID OF THIS ??!!!
 double C_SI = 299792458.;
+
+#define NUM_THREADS_HERE 64
 
 CUDA_DEVICE
 LISATDIonTheFly::~LISATDIonTheFly()
@@ -357,38 +362,111 @@ LISATDIonTheFly::~LISATDIonTheFly()
     
 // }
 
+
+/*
+
+class WDMDomain{
+  public:
+    int num_n;
+    int num_m;
+    double *wdm_data;
+    double *wdm_noise;
+    CUDA_DEVICE
+    WDMDomain(double *wdm_data_, double *wdm_noise_, num_n_, num_m_)
+    {
+        num_n = num_n_;
+        num_m = num_m_;
+        wdm_data = wdm_data_;
+        wdm_noise = wdm_noise_;
+    };
+    int get_pixel_index(int n, int m, int channel);
+    int get_pixel_index_noise(int n, int m, int channel);
+    double get_pixel_value(int n, int m, int channel);
+};
+// WILL PROBABLY HAVE TO BE SPLINE
+int WDMDomain::get_pixel_index(int n, int m, int channel)
+{
+    return (channel * num_m + m) * num_n + n;
+}
+
+int WDMDomain::get_pixel_index_noise(int n, int m, int channel)
+{
+    return (channel * num_m + m) * num_n + n;
+}
+
+int WDMDomain::get_pixel_index_noise(int n, int m, int channel_i, int channel_j)
+{
+    return ((channel_i * 3 + channel_j) * num_m + m) * num_n + n;
+}
+
+double WDMDomain::get_pixel_data_value(int n, int m, int channel)
+{
+    return wdm_data[get_pixel_index(n, m, channel)];
+}
+
+double WDMDomain::get_pixel_noise_value(int n, int m, int channel)
+{
+    return wdm_noise[get_pixel_index_noise(n, m, channel)];
+}
+
+double WDMDomain::get_pixel_noise_value(int n, int m, int channel_i, int channel_j)
+{
+    return wdm_noise[get_pixel_index_noise(n, m, channel_i, channel_j)];
+}
+
+double WDMDomain::get_inner_product_value(double wdm_template_nm, int n, int m, int channel)
+{
+    double wdm_data_nm = get_pixel_data_value(n, m, channel);
+    double wdm_noise_nm = get_pixel_noise_value(n, m, channel);
+    double val = wdm_template_nm * wdm_data_nm * wdm_noise_nm;
+    return val;
+}
+
+double WDMDomain::get_inner_product_value(double wdm_template_nm, int n, int m, int channel_i, int channel_j)
+{
+    // assume data is channel_i, template is channel_j
+    double wdm_data_nm = get_pixel_data_value(n, m, channel_i)];
+    double wdm_noise_nm = get_pixel_noise_value(n, m, channel_i, channel_j)];
+    double val = wdm_template_nm * wdm_data_nm * wdm_noise_nm;
+    return val;
+}
+
+class WaveletLookupTable : public WDMDomain{
+  public:
+    double *c_nm_all;
+    double *s_nm_all;
+    
+    int num_f;
+    int num_fdot;
+    WaveletLookupTable(double *c_nm_all_, double *s_nm_all_, int num_f_, int num_fdot_, int num_n_, int num_m_) : WDMDomain(num_n_, num_m_) {
+        // n * num_m + m 
+        c_all_nm = c_all_nm_;
+        s_all_nm = s_all_nm_;
+        num_f = num_f_;
+        num_fdot = num_fdot_;
+    };
+    double get_w_mn_lookup(double A, double f, double fdot, double Psi, int n, int m);
+};
+
+double WaveletLookupTable::get_w_mn_lookup(double A, double f, double fdot, double Psi, int n, int m)
+{
+    double c_nm = c_nm_all[n * num_m + m];
+    double s_nm = s_nm_all[n * num_m + m];
+
+    double w_nm = A * (c_nm * cos(Psi) - s_nm * sin(Psi));
+    return w_nm;
+}
+
+*/
+
 #define NLINKS 6
-
-CUDA_DEVICE
-int LISATDIonTheFly::get_beta_index()
-{
-    throw std::invalid_argument("Not implemented.");
-}
-
-CUDA_DEVICE
-int LISATDIonTheFly::get_lam_index()
-{
-    throw std::invalid_argument("Not implemented.");
-}
-
-CUDA_DEVICE
-int LISATDIonTheFly::get_psi_index()
-{
-    throw std::invalid_argument("Not implemented.");
-}
-
-CUDA_DEVICE
-int LISATDIonTheFly::get_inc_index()
-{
-    throw std::invalid_argument("Not implemented.");
-}
 
 CUDA_DEVICE
 void LISATDIonTheFly::get_sky_vectors(Vec *k, Vec *u, Vec *v, double *params)
 {
 
-    double beta = params[get_beta_index()];
-    double lam = params[get_lam_index()];
+    double beta = params[beta_index];
+    double lam = params[lam_index];
     double cosbeta = cos(beta);
     double sinbeta = sin(beta);
 
@@ -404,6 +482,7 @@ void LISATDIonTheFly::get_sky_vectors(Vec *k, Vec *u, Vec *v, double *params)
     k->x = -cosbeta * coslam;
     k->y = -cosbeta * sinlam;
     k->z = -sinbeta;
+    
 }
 
 CUDA_DEVICE
@@ -420,10 +499,11 @@ CUDA_DEVICE
 void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double *t_data, int N, int bin_i)
 {
 
+    printf("CHECKCHECK3\n");
     CUDA_SHARED int link_space_craft_0[NLINKS];
     CUDA_SHARED int link_space_craft_1[NLINKS];
     CUDA_SHARED int links[NLINKS];
-
+    printf("CHECKCHECK171717\n");
     double k_dot_n, k_dot_x0, k_dot_x1;
     double t, L;
     double hp_del0, hp_del1, hc_del0, hc_del1;
@@ -452,12 +532,18 @@ void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double
     increment = 1;
 #endif
 
-    CUDA_SHARED Vec k(0.0, 0.0, 0.0);
-    CUDA_SHARED Vec u(0.0, 0.0, 0.0);
-    CUDA_SHARED Vec v(0.0, 0.0, 0.0);
+    Vec k(0.0, 0.0, 0.0);
+    Vec u(0.0, 0.0, 0.0);
+    Vec v(0.0, 0.0, 0.0);
+    
+    printf("CHECKCHECK172828 %e\n", params[0]);
+    printf("HAHA1\n");
+    printf("CHECKCHECK172828 %e %e %e\n", k.x, u.x, v.x);
+    printf("HAHA2\n");
     get_sky_vectors(&k, &u, &v, params);
     CUDA_SYNC_THREADS;
-
+    printf("CHECKCHECK99\n");
+    
     for (int i = start; i < NLINKS; i += increment)
     {
         link_space_craft_0[i] = orbits->sc_r[i];
@@ -467,6 +553,7 @@ void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double
         // printf("%d %d %d %d\n", orbits->sc_r[i], orbits->sc_e[i], link_space_craft_1[i], link_space_craft_0[i]);
     }
     CUDA_SYNC_THREADS;
+    printf("CHECKCHECK111\n");
     double t_delay, total_delay;
     double time_eval;
     int delay_link;
@@ -477,15 +564,17 @@ void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double
     double temp_output;
     double phase_change;
 
+    printf("CHECKCHECK4 %d\n", bin_i);
     for (int i = start; i < N; i += increment)
     {
         for (int channel = 0; channel < tdi_config->num_channels; channel += 1)
         {
             tdi_channels_arr[channel * N + i] = 0.0;
         }
-        CUDA_SYNC_THREADS;
+
         t = t_data[i];
         temp_output = 0.0;
+        printf("CHECKCHECK5 %d %d\n", bin_i, i);
         for (int unit_i = 0; unit_i < tdi_config->num_units; unit_i += 1)
         {
             int unit_start = tdi_config->unit_starts[unit_i];
@@ -495,9 +584,12 @@ void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double
             int channel = tdi_config->channels[unit_i];
             double sign = tdi_config->tdi_signs_in[unit_i];
 
+            printf("CHECKCHECK6 %d %d %d\n", bin_i, i, unit_i);
             total_delay = 0.0;
             for (int sub_i = 0; sub_i < unit_length; sub_i += 1)
             {
+                printf("CHECKCHECK7 %d %d %d %d %d\n", bin_i, i, unit_i, sub_i, unit_length);
+            
                 int combination_index = unit_start + sub_i;
                 int combination_link = tdi_config->tdi_link_combinations[combination_index];
                 // int combination_link_index;
@@ -515,6 +607,7 @@ void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double
                     total_delay += orbits->get_light_travel_time(t, combination_link);
                 }
             }
+            printf("CHECKCHECK8 %d %d %d %d %d\n", bin_i, i, unit_i);
             
             time_eval = t - total_delay;
 
@@ -551,11 +644,8 @@ void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double
             get_hp_hc(&hp_del1, &hc_del1, delay1, params, phase_change, bin_i);
             
             large_factor_imag = (hp_del0 - hp_del1) * xi_p + (hc_del0 - hc_del1) * xi_c;
-            // if ((i % 100 == 0) && (i < 200))
-            //     printf("FLY: %d %.12e %d %d %d %.12e %.12e\n", i, t, channel, base_link_index, base_link, pre_factor * large_factor_real, time_eval);
-            
+            printf("FLY: %d %.12e %d %d %d %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e\n", i, t, channel, base_link_index, base_link, pre_factor, large_factor_real, time_eval, hp_del0, hp_del1, delay0, params[0], params[1], params[2]);
             tdi_channels_arr[channel * N + i] += sign * pre_factor * (large_factor_real + I * large_factor_imag);
-            CUDA_SYNC_THREADS;
         }
     }
 }
@@ -570,8 +660,10 @@ CUDA_DEVICE
 double LISATDIonTheFly::get_amp(double t, double *params, int bin_i)
 {
     // TD is based on sc1 time
+#ifdef __CUDACC__
+#else
     throw std::invalid_argument("Not implemented.");
-
+#endif
 
 }
 
@@ -579,7 +671,10 @@ CUDA_DEVICE
 double LISATDIonTheFly::get_phase(double t, double *params, int bin_i)
 {
     // TD is based on sc1 time
+#ifdef __CUDACC__
+#else
     throw std::invalid_argument("Not implemented.");
+#endif
 }
 
 CUDA_DEVICE
@@ -587,8 +682,8 @@ void LISATDIonTheFly::get_hp_hc(double *hp, double *hc, double t, double *params
 {
     double amp = get_amp(t, params, bin_i);
     double phase = get_phase(t, params, bin_i);
-    double psi = params[get_psi_index()];
-    double inc = params[get_inc_index()];
+    double psi = params[psi_index];
+    double inc = params[inc_index];
     
     double inc_p = (1. + cos(inc) * cos(inc)) / 2.;
     double inc_c = cos(inc);
@@ -604,6 +699,8 @@ void LISATDIonTheFly::get_hp_hc(double *hp, double *hc, double t, double *params
 
     *hp = hSp * cos2psi - hSc * sin2psi;
     *hc = hSp * sin2psi + hSc * cos2psi;
+    printf("FLYIN: %.12e %.12e %.12e %.12e\n", amp, phase, inc, psi);
+            
 
 }
 
@@ -612,10 +709,13 @@ CUDA_DEVICE
 void LISATDIonTheFly::get_tdi(void *buffer, int buffer_length, cmplx *tdi_channels_arr, double *tdi_amp, double *tdi_phase, double* phi_ref, double *params, double *t_arr, int N, int bin_i, int nchannels)
 {   
 
+#ifdef __CUDACC__
+#else
     if (buffer_length < 2 * N * sizeof(double) + 1 * N * sizeof(int) + 1 * N * sizeof(bool))
     {
         throw std::invalid_argument("Buffer length not long enough.");
     }
+#endif
 
     get_tdi_Xf(tdi_channels_arr, params, t_arr, N, bin_i);
     CUDA_SYNC_THREADS;
@@ -761,6 +861,121 @@ void LISATDIonTheFly::unwrap_phase(int N, double *phase)
 }
 
 
+template<typename T>
+CUDA_DEVICE void cumsum(T *sdata, int N)
+{
+    // cumsum
+#ifdef __CUDACC__
+    // Specialize BlockScan for a 1D block of 128 threads of type int
+    using BlockScan = cub::BlockScan<T, NUM_THREADS_HERE>;
+
+    // Allocate shared memory for BlockScan
+    CUDA_SHARED typename BlockScan::TempStorage temp_storage;
+
+    // Obtain input item for each thread
+    int tid = threadIdx.x;
+    int total_run = 0;
+    int index;
+    T thread_data;
+    while (total_run < N)
+    {
+        index = total_run + threadIdx.x;
+        if (index < N)
+        {
+            thread_data = sdata[index];
+        }
+        else
+        {
+            thread_data = 0.0;
+        }
+
+        CUDA_SYNC_THREADS;
+        // Collectively compute the block-wide exclusive prefix sum
+        // This is the cummulative sum over the width of the block 
+        // (sometimes the array is longer which we adjust for with total_run)
+        BlockScan(temp_storage).InclusiveSum(thread_data, thread_data);
+        CUDA_SYNC_THREADS;
+    //         // Perform the parallel prefix sum (Blelloch algorithm)
+    //     __syncthreads();    
+    //     for (unsigned int stride = 1; stride < blockDim.x; stride *= 2) 
+    //     {
+    //         if ((tid >= stride) && (total_run + tid < N)) 
+    //         {
+    //             sdata[total_run + tid] += sdata[total_run + tid - stride];
+    //         }
+    //         __syncthreads(); // Synchronize threads within the block
+    //     }
+    //     __syncthreads();
+        CUDA_SYNC_THREADS;
+        if (index < N)
+        {
+            sdata[index] = thread_data;
+        }
+        CUDA_SYNC_THREADS;
+        // -1 is here because the first element of the next step will be the last element of the previous step
+        // this means the first element of the new step is the cummulative sum of the previous step.
+        total_run += (NUM_THREADS_HERE - 1);
+    }
+    // __syncthreads();
+    // //     
+    // // }
+    // // CUDA_SYNC_THREADS;
+
+    /*
+    extern __shared__ float temp[];
+    // allocated on invocation int thid = threadIdx.x; int offset = 1;
+
+    // build sum in place up the tree
+    for (int d = n >> 1; d > 0; d >> = 1)
+    {
+        __syncthreads();
+        if (thid < d)
+        {
+            int ai = offset * (2 * thid + 1) - 1;
+            int bi = offset * (2 * thid + 2) - 1;
+            temp[bi] += temp[ai];
+        }
+        offset *= 2;
+    }
+
+    if (thid == 0)
+    {
+        temp[n - 1] = 0;
+    } // clear the last element
+    __syncthreads();
+    for (int d = 1; d < n; d *= 2) // traverse down tree & build scan
+    {
+        offset >> = 1;
+        __syncthreads();
+        if (thid < d)
+        {
+            int ai = offset * (2 * thid + 1) - 1;
+            int bi = offset * (2 * thid + 2) - 1;
+            float t = temp[ai];
+            temp[ai] = temp[bi];
+            temp[bi] += t;
+        }
+    }
+__syncthreads();
+    */
+
+    // if (threadIdx.x == 0)
+    // {
+    //     for (int i = 1; i < N; i += 1)
+    //     {
+    //         sdata[i] += sdata[i - 1];
+    //     }
+    // }
+    // CUDA_SYNC_THREADS;
+#else
+    for (int i = 1; i < N; i += 1)
+    {
+        sdata[i] += sdata[i - 1];
+    }
+#endif
+}
+
+
 CUDA_DEVICE
 void LISATDIonTheFly::new_unwrap_phase(double *ph_correct_buffer, int N, double *phase)
 {
@@ -770,8 +985,15 @@ void LISATDIonTheFly::new_unwrap_phase(double *ph_correct_buffer, int N, double 
     double interval_low = -interval_high;
     double ph_tmp;
     double discont = period / 2.;
+#ifdef __CUDACC__
+    int start = threadIdx.x;
+    int incr = blockDim.x;
+#else // __CUDACC__
+    int start = 0;
+    int incr = 1;
+#endif // __CUDACC__
 
-    for (int i = 0; i < N; i += 1)
+    for (int i = start; i < N; i += incr)
     {
         ph_correct_buffer[i] = 0.0;
     }
@@ -779,7 +1001,7 @@ void LISATDIonTheFly::new_unwrap_phase(double *ph_correct_buffer, int N, double 
     CUDA_SYNC_THREADS;
     double tmp_remainder;
     // std::cout << "start phase[0]: " << phase[0] << std::endl;
-    for(int i=1; i<N ;i++)
+    for(int i= start + 1; i<N ; i += incr)
     {
         dd = phase[i] - phase[i - 1]; 
         tmp_remainder = remainder(dd - interval_low, period);
@@ -801,15 +1023,11 @@ void LISATDIonTheFly::new_unwrap_phase(double *ph_correct_buffer, int N, double 
     }
     CUDA_SYNC_THREADS;
 
-    // cumsum
-    for (int i = 1; i < N; i += 1)
-    {
-        ph_correct_buffer[i] += ph_correct_buffer[i - 1];
-    }
+    cumsum(ph_correct_buffer, N);
     CUDA_SYNC_THREADS;
 
     double tmp;
-    for (int i = 1; i < N; i += 1)
+    for (int i = start + 1; i < N; i += incr)
     {
         tmp = phase[i] + ph_correct_buffer[i];
         // printf("CHANGE: %d %e %e %e \n", i, phase[i], ph_correct_buffer[i], tmp);
@@ -828,7 +1046,15 @@ void LISATDIonTheFly::new_extract_amplitude_and_phase(int *count, bool *fix_coun
 {
     bool is_min;
     double dA1, dA2, dA3, test1, test2;
-    for (int i = 0; i < Ns; i += 1)
+
+#ifdef __CUDACC__
+    int start = threadIdx.x;
+    int incr = blockDim.x;
+#else // __CUDACC__
+    int start = 0;
+    int incr = 1;
+#endif // __CUDACC__
+    for (int i = start; i < Ns; i += incr)
     {
         count[i] = 0;
         pjump[i] = 0.0;
@@ -837,7 +1063,7 @@ void LISATDIonTheFly::new_extract_amplitude_and_phase(int *count, bool *fix_coun
         As[i] = gcmplx::abs(M[i]);
     }
     CUDA_SYNC_THREADS;
-    for (int i = 1; i < Ns - 1; i += 1)
+    for (int i = (start + 1); i < Ns - 1; i += incr)
     {   
         is_min = (As[i] < As[i - 1]) && (As[i] < As[i + 1]);
 
@@ -865,7 +1091,9 @@ void LISATDIonTheFly::new_extract_amplitude_and_phase(int *count, bool *fix_coun
     CUDA_SYNC_THREADS;
 
     // cumsum
-    for (int i = 1; i < Ns; i += 1)
+    cumsum(count, Ns);
+    CUDA_SYNC_THREADS;
+    for (int i = (start + 1); i < Ns; i += 1)
     {
         count[i] += count[i - 1];
     }
@@ -873,7 +1101,7 @@ void LISATDIonTheFly::new_extract_amplitude_and_phase(int *count, bool *fix_coun
 
 
     // 
-    for (int i = 0; i < Ns - 1; i += 1)
+    for (int i = start; i < Ns - 1; i += 1)
     {
         flip[i] = pow(-1., count[i]);
         pjump[i] = count[i] * M_PI;
@@ -888,7 +1116,7 @@ void LISATDIonTheFly::new_extract_amplitude_and_phase(int *count, bool *fix_coun
     CUDA_SYNC_THREADS;
 
     double v;
-    for(int i=0; i<Ns ;i++)
+    for(int i=start; i<Ns ; i += incr)
     {
         As[i] = flip[i]*As[i];
         // printf("HUH: %e %e\n", flip[i], As[i]);
@@ -898,6 +1126,7 @@ void LISATDIonTheFly::new_extract_amplitude_and_phase(int *count, bool *fix_coun
         // printf("INIT new: %d %e %e %e %e %e %e\n", i, -atan2(Mf[i],M[i]), flip[i], pjump[i], As[i], Dphi[i], v);
     
     }
+    CUDA_SYNC_THREADS;
 }
 
 
@@ -1006,7 +1235,6 @@ void LISATDIonTheFly::new_extract_phase(cmplx *M, double *phiR, int N, double *t
     // fclose(fp);
 }
 
-CUDA_DEVICE
 int LISATDIonTheFly::get_tdi_buffer_size(int N)
 {
     return 2 * N * sizeof(double) + 1 * N * sizeof(bool) + 1 * N * sizeof(int);
@@ -1014,72 +1242,18 @@ int LISATDIonTheFly::get_tdi_buffer_size(int N)
 
 
 CUDA_DEVICE
-int GBTDIonTheFly::get_amplitude_index()
-{
-    return 0;
-}
-
-CUDA_DEVICE
-int GBTDIonTheFly::get_f0_index()
-{
-    return 1;
-}
-
-CUDA_DEVICE
-int GBTDIonTheFly::get_fdot0_index()
-{
-    return 2;
-}
-
-CUDA_DEVICE
-int GBTDIonTheFly::get_fddot0_index()
-{
-    return 3;
-}
-
-CUDA_DEVICE
-int GBTDIonTheFly::get_phi0_index()
-{
-    return 4;
-}
-
-int GBTDIonTheFly::get_inc_index()
-{
-    // ndim = 2; lam first
-    return 5;
-}
-
-int GBTDIonTheFly::get_psi_index()
-{
-    // ndim = 2; beta second
-    return 6;
-}
-
-
-int GBTDIonTheFly::get_lam_index()
-{
-    // ndim = 2; lam first
-    return 7;
-}
-
-int GBTDIonTheFly::get_beta_index()
-{
-    // ndim = 2; beta second
-    return 8;
-}
-
-CUDA_DEVICE
 double GBTDIonTheFly::ucb_phase(double t, double *params)
 {
-    double f0    = params[get_f0_index()];
-    double phi0  = params[get_phi0_index()];
-    double fdot  = params[get_fdot0_index()];
-    double fddot = params[get_fddot0_index()];
+    double f0    = params[f0_index];
+    double phi0  = params[phi0_index];
+    double fdot  = params[fdot0_index];
+    double fddot = params[fddot0_index];
     
     /*
      * LDC phase parameter in key files is
      * -phi0
      */
+    
     return -phi0 + 2 * M_PI *( f0*t + 0.5*fdot*t*t + 1.0/6.0*fddot*t*t*t );
 }
 
@@ -1087,10 +1261,9 @@ double GBTDIonTheFly::ucb_phase(double t, double *params)
 CUDA_DEVICE
 double GBTDIonTheFly::ucb_amplitude(double t, double *params)
 {
-    double A0    = params[get_amplitude_index()];
-    double f0    = params[get_f0_index()];
-    double fdot  = params[get_fdot0_index()];
-
+    double A0    = params[amplitude_index];
+    double f0    = params[f0_index];
+    double fdot  = params[fdot0_index];
     return A0 * ( 1.0 + 2.0/3.0*fdot/f0*t );
 }
 
@@ -1143,7 +1316,7 @@ GBTDIonTheFly::~GBTDIonTheFly()
 //     }
 //     printf("tdi_config inside: %d\n", this->tdi_config->num_channels);
 // }
-
+#define N_PARAMS_MAX 20
 CUDA_DEVICE
 void LISATDIonTheFly::run_wave_tdi(void *buffer, int buffer_length, cmplx *tdi_channels_arr, 
     double *tdi_amp, double *tdi_phase, double *phi_ref, 
@@ -1180,13 +1353,22 @@ void LISATDIonTheFly::run_wave_tdi(void *buffer, int buffer_length, cmplx *tdi_c
     int increment2 = 1;
 #endif
 
-    double params_here[n_params];  // TODO: maybe shared? only if registers are filled up
+// TODO: make this better?
+#ifdef __CUDACC__
+#else
+    if (n_params > N_PARAMS_MAX)
+    {
+        throw std::invalid_argument("n_params is too long, need to recompile and increase N_PARAMS_MAX.");
+    }
+#endif
+    CUDA_SHARED double params_here[N_PARAMS_MAX];  // TODO: maybe shared? only if registers are filled up
 
      // TODO: CHECK THIS!!
     for (int bin_i = start; bin_i < num_bin; bin_i += increment)
     {
+        CUDA_SYNC_THREADS;
         // read params into faster memory for gpu / cpu does not matter really
-        for (int i = start2; i < params_here; i += increment2)
+        for (int i = start2; i < n_params; i += increment2)
         {
             params_here[i] = params[bin_i * n_params + i];
         }
@@ -1207,25 +1389,29 @@ void LISATDIonTheFly::run_wave_tdi(void *buffer, int buffer_length, cmplx *tdi_c
 
 
 
-#define NUM_THREADS_HERE 256
-
+#ifdef __CUDACC__
 CUDA_KERNEL
 void gb_run_wave_tdi_kernel(GBTDIonTheFly *tdi_on_fly, int buffer_length, cmplx *tdi_channels_arr, 
     double *tdi_amp, double *tdi_phase, double *phi_ref, 
     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels)
 {
-    extern __shared__ char shared_mem[];
+    extern CUDA_SHARED char shared_mem[];
     void *buffer = (void*)shared_mem;
-    tdi_on_fly->run_wave_tdi(buffer, buffer_length, tdi_channels_arr, tdi_amp, tdi_phase, phi_ref,
+
+    GBTDIonTheFly tdi_on_fly_here(tdi_on_fly->orbits, tdi_on_fly->tdi_config, tdi_on_fly->T);
+    tdi_on_fly_here.run_wave_tdi(buffer, buffer_length, tdi_channels_arr, tdi_amp, tdi_phase, phi_ref,
         params, t_arr, N, num_bin, n_params, nchannels);
 }
+#endif 
 
 void gb_run_wave_tdi_wrap(GBTDIonTheFly *tdi_on_fly, cmplx *tdi_channels_arr, 
     double *tdi_amp, double *tdi_phase, double *phi_ref, 
     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels)
 {
+    printf("CHECK44\n");
 #ifdef __CUDACC__
-    GBTDIonTheFly *gb_here = new GBTDIonTheFly(orbits, tdi_config, T);
+    printf("CHECK55\n");
+    GBTDIonTheFly *gb_here = new GBTDIonTheFly(tdi_on_fly->orbits, tdi_on_fly->tdi_config, tdi_on_fly->T);
     Orbits *d_orbits;
     cudaMalloc(&d_orbits, sizeof(Orbits));
     gpuErrchk(cudaMemcpy(d_orbits, tdi_on_fly->orbits, sizeof(Orbits), cudaMemcpyHostToDevice));
@@ -1242,14 +1428,18 @@ void gb_run_wave_tdi_wrap(GBTDIonTheFly *tdi_on_fly, cmplx *tdi_channels_arr,
     gpuErrchk(cudaMemcpy(d_gb_here, gb_here, sizeof(GBTDIonTheFly), cudaMemcpyHostToDevice));
 
     int buffer_length = tdi_on_fly->get_gb_buffer_size(N); 
-    
+    printf("%d\n", buffer_length);
     gb_run_wave_tdi_kernel<<<num_bin, NUM_THREADS_HERE, buffer_length>>>(d_gb_here, buffer_length, tdi_channels_arr, tdi_amp, tdi_phase, phi_ref,
         params, t_arr, N, num_bin, n_params, nchannels);
 
-    cudaFree(d_orbits);
-    cudaFree(d_tdi_config);
-    cudaFree(d_gb_here);
+    cudaDeviceSynchronize();
+    gpuErrchk(cudaGetLastError());
+
+    gpuErrchk(cudaFree(d_orbits));
+    gpuErrchk(cudaFree(d_tdi_config));
+    gpuErrchk(cudaFree(d_gb_here));
     delete gb_here;
+    printf("CHECK66\n");
 #else
 
     // make buffer 
@@ -1257,7 +1447,7 @@ void gb_run_wave_tdi_wrap(GBTDIonTheFly *tdi_on_fly, cmplx *tdi_channels_arr,
     char *buffer = new char[buffer_length];
     tdi_on_fly->run_wave_tdi((void*)buffer, buffer_length, tdi_channels_arr, tdi_amp, tdi_phase, phi_ref,
         params, t_arr, N, num_bin, n_params, nchannels);
-    delete buffer[];
+    delete[] buffer;
 #endif
 }
 
@@ -1289,38 +1479,6 @@ int GBTDIonTheFly::get_gb_buffer_size(int N)
 //     }
 // }
 
-CUDA_DEVICE
-int TDSplineTDIWaveform::get_psi_index()
-{
-    return 1;
-}
-
-CUDA_DEVICE
-int TDSplineTDIWaveform::get_inc_index()
-{
-    return 0;
-}
-
-CUDA_DEVICE
-int TDSplineTDIWaveform::get_beta_index()
-{
-    // ndim = 2; beta second
-    return 3;
-}
-
-CUDA_DEVICE
-int TDSplineTDIWaveform::get_lam_index()
-{
-    // ndim = 2; lam first
-    return 2;
-}
-
-CUDA_DEVICE
-int FDSplineTDIWaveform::get_beta_index()
-{
-    // ndim = 2; beta second
-    return 3;
-}
 
 CUDA_DEVICE
 void FDSplineTDIWaveform::get_tdi(void *buffer, int buffer_length, cmplx *tdi_channels_arr, double *tdi_amp, double *tdi_phase, double* phi_ref, double *params, double *t_arr, int N, int bin_i, int nchannels)
@@ -1354,26 +1512,6 @@ void FDSplineTDIWaveform::get_tdi(void *buffer, int buffer_length, cmplx *tdi_ch
     CUDA_SYNC_THREADS;
 }
 
-CUDA_DEVICE
-int FDSplineTDIWaveform::get_lam_index()
-{
-    // ndim = 2; lam first
-    return 2;
-}
-
-CUDA_DEVICE
-int FDSplineTDIWaveform::get_psi_index()
-{
-    return 1;
-}
-
-CUDA_DEVICE
-int FDSplineTDIWaveform::get_inc_index()
-{
-    return 0;
-}
-
-
 
 CUDA_DEVICE
 double TDSplineTDIWaveform::get_amp(double t, double *params, int spline_i)
@@ -1390,24 +1528,25 @@ double TDSplineTDIWaveform::get_phase(double t, double *params, int spline_i)
     return phase_spline->eval_single(t, spline_i);
 }
 
+#ifdef __CUDACC__
 CUDA_KERNEL
 void td_spline_run_wave_tdi_kernel(TDSplineTDIWaveform *tdi_on_fly, int buffer_length, cmplx *tdi_channels_arr, 
     double *tdi_amp, double *tdi_phase, double *phi_ref, 
     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels)
 {
-    extern __shared__ char shared_mem[];
+    extern CUDA_SHARED char shared_mem[];
     void *buffer = (void*)shared_mem;
     tdi_on_fly->run_wave_tdi(buffer, buffer_length, tdi_channels_arr, tdi_amp, tdi_phase, phi_ref,
         params, t_arr, N, num_bin, n_params, nchannels);
 }
-
+#endif
 
 void td_spline_run_wave_tdi_wrap(TDSplineTDIWaveform *tdi_on_fly, cmplx *tdi_channels_arr, 
     double *tdi_amp, double *tdi_phase, double *phi_ref, 
     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels)
 {
 #ifdef __CUDACC__
-    TDSplineTDIWaveform *wave_here = new TDSplineTDIWaveform(orbits, tdi_config, amp_spline, phase_spline);
+    TDSplineTDIWaveform *wave_here = new TDSplineTDIWaveform(tdi_on_fly->orbits, tdi_on_fly->tdi_config, tdi_on_fly->amp_spline, tdi_on_fly->phase_spline);
     Orbits *d_orbits;
     cudaMalloc(&d_orbits, sizeof(Orbits));
     gpuErrchk(cudaMemcpy(d_orbits, tdi_on_fly->orbits, sizeof(Orbits), cudaMemcpyHostToDevice));
@@ -1438,20 +1577,23 @@ void td_spline_run_wave_tdi_wrap(TDSplineTDIWaveform *tdi_on_fly, cmplx *tdi_cha
     td_spline_run_wave_tdi_kernel<<<num_bin, NUM_THREADS_HERE, buffer_length>>>(d_wave_here, buffer_length, tdi_channels_arr, tdi_amp, tdi_phase, phi_ref,
         params, t_arr, N, num_bin, n_params, nchannels);
 
-    cudaFree(d_orbits);
-    cudaFree(d_tdi_config);
-    cudaFree(d_amp_spline);
-    cudaFree(d_phase_spline);
-    cudaFree(d_wave_here);
+    cudaDeviceSynchronize();
+    gpuErrchk(cudaGetLastError());
+
+    gpuErrchk(cudaFree(d_orbits));
+    gpuErrchk(cudaFree(d_tdi_config));
+    gpuErrchk(cudaFree(d_amp_spline));
+    gpuErrchk(cudaFree(d_phase_spline));
+    gpuErrchk(cudaFree(d_wave_here));
     delete wave_here;
 #else
 
     // make buffer 
-    int buffer_length = tdi_on_fly->get_gb_buffer_size(N);
+    int buffer_length = tdi_on_fly->get_td_spline_buffer_size(N);
     char *buffer = new char[buffer_length];
     tdi_on_fly->run_wave_tdi((void*)buffer, buffer_length, tdi_channels_arr, tdi_amp, tdi_phase, phi_ref,
         params, t_arr, N, num_bin, n_params, nchannels);
-    delete buffer[];
+    delete[] buffer;
 #endif
 }
 
@@ -1588,25 +1730,25 @@ double FDSplineTDIWaveform::get_phase_ref(double t, double *params, int bin_i)
 }
 
 
-
+#ifdef __CUDACC__
 CUDA_KERNEL
 void fd_spline_run_wave_tdi_kernel(FDSplineTDIWaveform *tdi_on_fly, int buffer_length, cmplx *tdi_channels_arr, 
     double *tdi_amp, double *tdi_phase, double *phi_ref, 
     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels)
 {
-    extern __shared__ char shared_mem[];
+    extern CUDA_SHARED char shared_mem[];
     void *buffer = (void*)shared_mem;
     tdi_on_fly->run_wave_tdi(buffer, buffer_length, tdi_channels_arr, tdi_amp, tdi_phase, phi_ref,
         params, t_arr, N, num_bin, n_params, nchannels);
 }
-
+#endif
 
 void fd_spline_run_wave_tdi_wrap(FDSplineTDIWaveform *tdi_on_fly, cmplx *tdi_channels_arr, 
     double *tdi_amp, double *tdi_phase, double *phi_ref, 
     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels)
 {
 #ifdef __CUDACC__
-    FDSplineTDIWaveform *wave_here = new FDSplineTDIWaveform(orbits, tdi_config, amp_spline, freq_spline);
+    FDSplineTDIWaveform *wave_here = new FDSplineTDIWaveform(tdi_on_fly->orbits, tdi_on_fly->tdi_config, tdi_on_fly->amp_spline, tdi_on_fly->freq_spline);
     Orbits *d_orbits;
     cudaMalloc(&d_orbits, sizeof(Orbits));
     gpuErrchk(cudaMemcpy(d_orbits, tdi_on_fly->orbits, sizeof(Orbits), cudaMemcpyHostToDevice));
@@ -1637,20 +1779,23 @@ void fd_spline_run_wave_tdi_wrap(FDSplineTDIWaveform *tdi_on_fly, cmplx *tdi_cha
     fd_spline_run_wave_tdi_kernel<<<num_bin, NUM_THREADS_HERE, buffer_length>>>(d_wave_here, buffer_length, tdi_channels_arr, tdi_amp, tdi_phase, phi_ref,
         params, t_arr, N, num_bin, n_params, nchannels);
 
-    cudaFree(d_orbits);
-    cudaFree(d_tdi_config);
-    cudaFree(d_amp_spline);
-    cudaFree(d_freq_spline);
-    cudaFree(d_wave_here);
+    cudaDeviceSynchronize();
+    gpuErrchk(cudaGetLastError());
+
+    gpuErrchk(cudaFree(d_orbits));
+    gpuErrchk(cudaFree(d_tdi_config));
+    gpuErrchk(cudaFree(d_amp_spline));
+    gpuErrchk(cudaFree(d_freq_spline));
+    gpuErrchk(cudaFree(d_wave_here));
     delete wave_here;
 #else
 
     // make buffer 
-    int buffer_length = tdi_on_fly->get_gb_buffer_size(N);
+    int buffer_length = tdi_on_fly->get_fd_spline_buffer_size(N);
     char *buffer = new char[buffer_length];
     tdi_on_fly->run_wave_tdi((void*)buffer, buffer_length, tdi_channels_arr, tdi_amp, tdi_phase, phi_ref,
         params, t_arr, N, num_bin, n_params, nchannels);
-    delete buffer[];
+    delete[] buffer;
 #endif
 }
 
@@ -1756,5 +1901,5 @@ void fd_spline_run_wave_tdi_wrap(FDSplineTDIWaveform *tdi_on_fly, cmplx *tdi_cha
 // int TDLagrangeInterpTDIWave::get_lam_index()
 // {
 //     // ndim = 2; lam first
-//     return 0;
+//     return -1;
 // }

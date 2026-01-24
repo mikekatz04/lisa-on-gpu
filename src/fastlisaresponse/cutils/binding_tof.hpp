@@ -32,31 +32,25 @@ class LISATDIonTheFlyWrap : public ReturnPointerBase {
   public:
     OrbitsWrap_responselisa *orbits;
     TDIConfigWrap *tdi_config;
-    LISATDIonTheFly *waveform;
     LISATDIonTheFlyWrap(OrbitsWrap_responselisa *orbits_, TDIConfigWrap *tdi_config_){
         orbits = orbits_;
         tdi_config = tdi_config_;
     };
-    // Method to set the pointer to a derived class instance
-    void set_waveform(LISATDIonTheFly* instance) {
-        waveform = instance;
-    }
 };
 
 class FDSplineTDIWaveformWrap : public LISATDIonTheFlyWrap {
   public:
     CubicSplineWrap_responselisa *amp_spline;
     CubicSplineWrap_responselisa *freq_spline;
-    FDSplineTDIWaveform *waveform_here;
+    FDSplineTDIWaveform *waveform;
     FDSplineTDIWaveformWrap(OrbitsWrap_responselisa *orbits_, TDIConfigWrap *tdi_config_, CubicSplineWrap_responselisa *amp_spline_, CubicSplineWrap_responselisa *freq_spline_): LISATDIonTheFlyWrap(orbits_, tdi_config_)
     {
         amp_spline = amp_spline_;
         freq_spline = freq_spline_;
-        waveform_here = new FDSplineTDIWaveform(orbits_->orbits, tdi_config_->tdi_config, amp_spline_->spline, freq_spline_->spline);
-        set_waveform(waveform_here);
+        waveform = new FDSplineTDIWaveform(orbits_->orbits, tdi_config_->tdi_config, amp_spline_->spline, freq_spline_->spline);
     };
     ~FDSplineTDIWaveformWrap(){
-        delete waveform_here;
+        delete waveform;
     };
 
     void run_wave_tdi_wrap(
@@ -65,7 +59,7 @@ class FDSplineTDIWaveformWrap : public LISATDIonTheFlyWrap {
         array_type<double>params, array_type<double>t_arr, int N, int num_bin, int n_params, int nchannels
     );
     
-    int get_buffer_size(int N){return waveform_here->get_fd_spline_buffer_size(N);};
+    int get_buffer_size(int N){return waveform->get_fd_spline_buffer_size(N);};
 
 };
 
@@ -75,16 +69,15 @@ class TDSplineTDIWaveformWrap : public LISATDIonTheFlyWrap {
   public:
     CubicSplineWrap_responselisa *amp_spline;
     CubicSplineWrap_responselisa *freq_spline;
-    TDSplineTDIWaveform *waveform_here;
+    TDSplineTDIWaveform *waveform;
     TDSplineTDIWaveformWrap(OrbitsWrap_responselisa *orbits_, TDIConfigWrap *tdi_config_, CubicSplineWrap_responselisa *amp_spline_, CubicSplineWrap_responselisa *freq_spline_): LISATDIonTheFlyWrap(orbits_, tdi_config_)
     {
         amp_spline = amp_spline_;
         freq_spline = freq_spline_;
-        waveform_here = new TDSplineTDIWaveform(orbits_->orbits, tdi_config_->tdi_config, amp_spline_->spline, freq_spline_->spline);
-        set_waveform(waveform_here);
+        waveform = new TDSplineTDIWaveform(orbits_->orbits, tdi_config_->tdi_config, amp_spline_->spline, freq_spline_->spline);
     };
     ~TDSplineTDIWaveformWrap(){
-        delete waveform_here;
+        delete waveform;
     };
 
     void run_wave_tdi_wrap(
@@ -93,33 +86,32 @@ class TDSplineTDIWaveformWrap : public LISATDIonTheFlyWrap {
         array_type<double>params, array_type<double>t_arr, int N, int num_bin, int n_params, int nchannels
     );
     
-    int get_buffer_size(int N){return waveform_here->get_td_spline_buffer_size(N);};
+    int get_buffer_size(int N){return waveform->get_td_spline_buffer_size(N);};
 
 };
 
 
 class GBTDIonTheFlyWrap : public LISATDIonTheFlyWrap {
   public:
-    GBTDIonTheFly *waveform_here;
+    GBTDIonTheFly *waveform;
     double T;
 
     GBTDIonTheFlyWrap(OrbitsWrap_responselisa *orbits_, TDIConfigWrap *tdi_config_, double T_): LISATDIonTheFlyWrap(orbits_, tdi_config_)
     {
         T = T_;
-        waveform_here = new GBTDIonTheFly(orbits_->orbits, tdi_config_->tdi_config, T_);
-        set_waveform(waveform_here);
+        waveform = new GBTDIonTheFly(orbits_->orbits, tdi_config_->tdi_config, T_);
     };
     ~GBTDIonTheFlyWrap(){
-        delete waveform_here;
+        delete waveform;
     };
 
     void run_wave_tdi_wrap(
         array_type<std::complex<double>>tdi_channels_arr, 
         array_type<double>tdi_amp, array_type<double>tdi_phase, array_type<double>phi_ref, 
         array_type<double>params, array_type<double>t_arr, int N, int num_bin, int n_params, int nchannels
-    )
+    );
 
-    int get_buffer_size(int N){return waveform_here->get_gb_buffer_size(N);};
+    int get_buffer_size(int N){return waveform->get_gb_buffer_size(N);};
 
 };
 
