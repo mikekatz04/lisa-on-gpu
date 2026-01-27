@@ -369,15 +369,17 @@ class WDMDomain{
   public:
     int num_n;
     int num_m;
+    int num_channel;
     double *wdm_data;
     double *wdm_noise;
     CUDA_DEVICE
-    WDMDomain(double *wdm_data_, double *wdm_noise_, num_n_, num_m_)
+    WDMDomain(double *wdm_data_, double *wdm_noise_, num_n_, num_m_, num_channel_)
     {
         num_n = num_n_;
         num_m = num_m_;
         wdm_data = wdm_data_;
         wdm_noise = wdm_noise_;
+        num_channel = num_channel_;
     };
     int get_pixel_index(int n, int m, int channel);
     int get_pixel_index_noise(int n, int m, int channel);
@@ -414,48 +416,125 @@ double WDMDomain::get_pixel_noise_value(int n, int m, int channel_i, int channel
     return wdm_noise[get_pixel_index_noise(n, m, channel_i, channel_j)];
 }
 
-double WDMDomain::get_inner_product_value(double wdm_template_nm, int n, int m, int channel)
+void WDMDomain::get_inner_product_value(double *d_h, double *h_h, double wdm_template_nm, int n, int m, int channel)
 {
     double wdm_data_nm = get_pixel_data_value(n, m, channel);
     double wdm_noise_nm = get_pixel_noise_value(n, m, channel);
-    double val = wdm_template_nm * wdm_data_nm * wdm_noise_nm;
-    return val;
+    double val_d_h = wdm_data_nm * wdm_template_nm * wdm_noise_nm;
+    double val_h_h = wdm_template_nm * wdm_template_nm * wdm_noise_nm;
+    
+    *d_h = val_d_h;
+    *h_h = val_h_h;
 }
 
-double WDMDomain::get_inner_product_value(double wdm_template_nm, int n, int m, int channel_i, int channel_j)
+double WDMDomain::get_inner_product_value(double *d_h, double *h_h, double wdm_template_nm_i, double wdm_template_nm_j, int n, int m, int channel_i, int channel_j)
 {
     // assume data is channel_i, template is channel_j
     double wdm_data_nm = get_pixel_data_value(n, m, channel_i)];
     double wdm_noise_nm = get_pixel_noise_value(n, m, channel_i, channel_j)];
-    double val = wdm_template_nm * wdm_data_nm * wdm_noise_nm;
-    return val;
+    NEED TO WORK ON THIS
+    double val_d_h = wdm_template_nm * wdm_data_nm * wdm_noise_nm;
+    double val_d_h = wdm_template_nm_i * wdm_template_nm_j * wdm_noise_nm;
+    *d_h = val_d_h;
+    *h_h = val_h_h;
 }
 
-class WaveletLookupTable : public WDMDomain{
+class WaveletLookupTable{
   public:
     double *c_nm_all;
     double *s_nm_all;
     
     int num_f;
     int num_fdot;
-    WaveletLookupTable(double *c_nm_all_, double *s_nm_all_, int num_f_, int num_fdot_, int num_n_, int num_m_) : WDMDomain(num_n_, num_m_) {
+    double df;
+    double dfdot;
+
+    WaveletLookupTable(double *c_nm_all_, double *s_nm_all_, int num_f_, int num_fdot_, int df_, int dfdot_){
         // n * num_m + m 
         c_all_nm = c_all_nm_;
         s_all_nm = s_all_nm_;
         num_f = num_f_;
         num_fdot = num_fdot_;
+        df = df_;
+        dfdot = dfdot_;
     };
-    double get_w_mn_lookup(double A, double f, double fdot, double Psi, int n, int m);
+    double get_w_mn_lookup(double A, double f, double fdot, double Psi);
 };
 
-double WaveletLookupTable::get_w_mn_lookup(double A, double f, double fdot, double Psi, int n, int m)
+double WaveletLookupTable::get_w_mn_lookup(cmplx tdi_channel_val, double f, double fdot)
 {
-    double c_nm = c_nm_all[n * num_m + m];
-    double s_nm = s_nm_all[n * num_m + m];
+    
+    int f_index = int(f / df);
+    int fdot_index = int(fdot / df);
 
-    double w_nm = A * (c_nm * cos(Psi) - s_nm * sin(Psi));
+
+    double c_nm = c_nm_all[fdot_index * num_f + f_index];
+    double s_nm = s_nm_all[fdot_index * num_f + f_index];
+
+    // double w_nm = A * (c_nm * cos(Psi) - s_nm * sin(Psi));
+    double w_nm = c_nm * tdi_channel_val.real() + s_nm * tdi_channel_val.imag(); // I think with Aexp(-I Phi) it should be + s_nm
     return w_nm;
 }
+
+CUDA_KERNEL
+void gb_wdm_get_ll_kernel(Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int num_bin, int nparams, double T)
+{
+    CUDA_SHARED params[N_PARAMS_MAX];
+    GBTDIonTheFly tdi_on_fly_here(orbits, tdi_config, T);
+    int tid = threadIdx.x;
+    cmplx tdi_channel_val[3];
+    double w_mn_channels[3];
+    CUDA_SHARED double like_out_tmp[NUM_THREADS_HERE];
+
+    // Specialize BlockReduce for a 1D block of 128 threads of type int
+    using BlockReduce = cub::BlockReduce<T, NUM_THREADS_HERE>;
+
+    // Allocate shared memory for BlockReduce
+    CUDA_SHARED typename BlockReduce::TempStorage temp_storage;
+
+    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    {
+        for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+        {
+            params[i] = params_all[bin_i * nparams + i];
+        }
+        CUDA_SYNC_THREADS;
+        for (int n = THREAD_START; n < wdm->NT; n += BLOCK_INCR)
+        {
+            tdi_on_fly_here.get_tdi_Xf(&tdi_channels_val[0], params, &t_arr[n], 1, bin_i);
+            for (int j = 0; j < 3; j += 1)
+            {
+                // TODO: need to fix this probably
+                f_i = tdi_on_fly_here.get_f(params, t_arr[n]);
+                layer_m = int(f_i / wdm->df);
+                fdot_i = tdi_on_fly_here.get_f(params, t_arr[n]);
+                wdm_nm[j] = wdm_lookup->get_w_mn_lookup(tdi_channel_val[j], f_i, fdot_i);
+            }
+            for (int channel_i = 0; channel_i < 3; channel_i += 1)
+            {
+                for (int channel_j = 0; channel_j < 3; channel_j += 1)
+                {
+                    // TODO: change from 9 to 6 calculations?
+                    get_inner_product_value(&d_h_tmp, &h_h_tmp, wdm_nm[channel_i], wdm_nm[channel_j], n, layer_m, channel_i, channel_j);                
+                    d_h_tmp[tid] += d_h_tmp;
+                    h_h_tmp[tid] += h_h_tmp;    
+                }
+            } 
+            
+        }
+        CUDA_SYNC_THREADS;
+
+        d_h_thread_data = d_h_tmp[tid];
+        d_h = BlockReduce(temp_storage).Sum(d_h_thread_data);
+        h_h_thread_data = h_h_tmp[tid];
+        h_h = BlockReduce(temp_storage).Sum(h_h_thread_data);
+        CUDA_SYNC_THREADS;
+        d_h_out[bin_i] = d_h;
+        h_h_out[bin_i] = h_h;
+    }
+};
+
+
 
 */
 
