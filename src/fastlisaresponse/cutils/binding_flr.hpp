@@ -37,7 +37,7 @@ using array_type = py::array_t<T>;
 class ReturnPointerBase {
   public:
     template<typename T>
-    T* return_pointer_and_check_length(array_type<T> input1, std::string name, int N, int multiplier)
+    static T* return_pointer_and_check_length(array_type<T> input1, std::string name, int N, int multiplier)
     {
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
         T *ptr1 = static_cast<T *>(input1.get_compatible_typed_pointer());
@@ -56,7 +56,7 @@ class ReturnPointerBase {
     };
 
     template<typename T>
-    T* return_pointer(array_type<T> input1, std::string name)
+    static T* return_pointer(array_type<T> input1, std::string name)
     {
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
         T *ptr1 = static_cast<T *>(input1.get_compatible_typed_pointer());
@@ -67,7 +67,7 @@ class ReturnPointerBase {
         return ptr1;
     };
 
-    cmplx* return_pointer_cmplx(array_type<std::complex<double>> input1, std::string name)
+    static cmplx* return_pointer_cmplx(array_type<std::complex<double>> input1, std::string name)
     {
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
         cmplx *ptr1 = (cmplx *)(input1.get_compatible_typed_pointer());

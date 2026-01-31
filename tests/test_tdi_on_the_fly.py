@@ -174,7 +174,7 @@ class TDIonTheFlyTest(unittest.TestCase):
         buffer_length = gb_tdi_on_fly.get_buffer_size(N)
         # bool is 1 byte
         buffer = np.zeros(buffer_length, dtype=bool)
-        breakpoint()
+
         gb_tdi_on_fly.run_wave_tdi_wrap(
             tdi_channels_arr,
             tdi_amp, tdi_phase,
@@ -254,13 +254,13 @@ class TDIonTheFlyTest(unittest.TestCase):
         import matplotlib.pyplot as plt
         
         fig, ax = plt.subplots(3, 1, sharex=True)
-        ax[0].plot(t_new[0].get(), chans_fly[0, 0].get(), color="C0")
-        ax[1].plot(t_new[0].get(), chans_fly[0, 1].get(), color="C0")
-        ax[2].plot(t_new[0].get(), chans_fly[0, 2].get(), color="C0")
+        ax[0].plot(t_new[0], chans_fly[0, 0], color="C0")
+        ax[1].plot(t_new[0], chans_fly[0, 1], color="C0")
+        ax[2].plot(t_new[0], chans_fly[0, 2], color="C0")
 
-        ax[0].plot(t_new[0].get(), chans[0].get(), ls='--', color="C1")
-        ax[1].plot(t_new[0].get(), chans[1].get(), ls='--', color="C1")
-        ax[2].plot(t_new[0].get(), chans[2].get(), ls='--', color="C1")
+        ax[0].plot(t_new[0], chans[0], ls='--', color="C1")
+        ax[1].plot(t_new[0], chans[1], ls='--', color="C1")
+        ax[2].plot(t_new[0], chans[2], ls='--', color="C1")
         
         ax[0].set_xlim(1e6, 1e6 + 3e3)
         ax[0].set_title(f"Mismatch: {mismatch:.2e}")

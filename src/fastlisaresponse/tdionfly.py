@@ -129,11 +129,10 @@ class TDIonTheFly(FastLISAResponseParallelModule):
     @orbits.setter
     def orbits(self, orbits: Orbits) -> None:
         """Set response orbits."""
-
         if orbits is None:
             orbits = EqualArmlengthOrbits()
         
-        elif issubclass(orbits, Orbits) and not isinstance(orbits, Orbits):
+        elif not isinstance(orbits, Orbits) and issubclass(orbits, Orbits):
             # assumed default arguments if not initialized as input
             orbits = orbits()
 
@@ -453,7 +452,7 @@ class TDTDIOutput(TDIOutput):
 
     def eval_tdi(self, t_new: np.ndarray, **kwargs) -> np.ndarray:
         tdi_amp_new, tdi_phase_new, phase_ref_new = self.eval_spline_vals(t_new, **kwargs)
-        tdi_output = self.xp.real(tdi_amp_new * self.xp.exp(-1j * (tdi_phase_new + phase_ref_new)))
+        tdi_output = self.xp.real(tdi_amp_new * self.xp.exp(-1j * (tdi_phase_new + phase_ref_new[:, None, :])))
         return tdi_output
     
     @property
@@ -581,3 +580,68 @@ class FDTDIonTheFly(TDIonTheFly):
             self.freq(tdi_output.x), tdi_output.tdi_amp, tdi_output.tdi_phase, tdi_output.phase_ref, fill_splines=fill_splines
         )
     
+
+class GBTDIonTheFly(TDIonTheFly):
+    def __init__(self, 
+        t: np.ndarray,
+        T: float,
+        *args, 
+        **kwargs
+    ): 
+        super().__init__(*args, **kwargs)
+
+        self.t_arr = self.xp.atleast_2d(self.xp.asarray(t))
+        self.T = T
+        self.N = self.t_arr.shape[1]
+
+        if self.t_arr.shape[0] == 1:
+            self.t_arr = self.xp.repeat(self.t_arr, self.num_sub, axis=0)
+
+        self.dt = self.t_arr[:, 1] - self.t_arr[:, 0]
+        
+    @property
+    def wave_gen(self) -> callable:
+        return self._wave_gen
+    
+    @wave_gen.setter
+    def wave_gen(self, wave_gen):
+        self._wave_gen = wave_gen
+    
+    def from_tdi_output(self, tdi_output: TDIOutput, fill_splines: Optional[bool] = False) -> FDTDIOutput:
+        assert self.xp.allclose(tdi_output.x, self.t_arr)
+        return TDTDIOutput(
+            tdi_output.x, tdi_output.tdi_amp, tdi_output.tdi_phase, tdi_output.phase_ref, fill_splines=fill_splines
+        )
+    
+    @property
+    def wave_gen(self) -> callable:
+        self._wave_gen = self.backend.GBTDIonTheFlyWrap(self.cpp_orbits, self.cpp_tdi_config, self.T)
+        return self._wave_gen
+    
+    def __call__(self, amp, f0, fdot0, fddot0, phi0, inc, psi, lam, beta, return_spline: bool = False) -> TDIOutput:
+        
+        params = self.xp.asarray([amp, f0, fdot0, fddot0, phi0, inc, psi, lam, beta]).T.flatten().copy()
+
+        assert len(params) == 9 * self.num_sub
+
+        tdi_channels_arr = self.xp.zeros((self.N * self.tdi_config.nchannels * self.num_sub), dtype=complex)
+        tdi_amp = self.xp.zeros((self.N * self.tdi_config.nchannels * self.num_sub), dtype=float)
+        tdi_phase = self.xp.zeros((self.N * self.tdi_config.nchannels * self.num_sub), dtype=float)
+        phase_ref = self.xp.zeros((self.N * self.num_sub), dtype=float)
+        assert int(np.prod(self.t_arr.shape)) == self.N * self.num_sub
+
+        self.wave_gen.run_wave_tdi_wrap(
+            tdi_channels_arr,
+            tdi_amp, tdi_phase,
+            phase_ref,
+            params, self.t_arr.flatten().copy(),
+            self.N, self.num_sub, self.n_params, self.tdi_config.nchannels
+        )
+
+        reshape_shape = (self.num_sub, self.tdi_config.nchannels, self.N)
+        return self.from_tdi_output(TDIOutput(
+            self.t_arr, 
+            tdi_amp.reshape(reshape_shape), 
+            tdi_phase.reshape(reshape_shape), 
+            phase_ref.reshape(self.t_arr.shape)
+        ), fill_splines=return_spline)

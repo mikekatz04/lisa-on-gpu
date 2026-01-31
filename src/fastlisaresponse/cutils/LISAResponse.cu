@@ -211,7 +211,6 @@ void interp(double *result_hp, double *result_hc, cmplx *input, int h, int d, do
 
 #define NUM_PARS 33
 #define NUM_COEFFS 4
-#define NLINKS 6
 #define BUFFER_SIZE 1000
 #define MAX_UNITS 200
 

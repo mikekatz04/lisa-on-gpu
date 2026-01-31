@@ -7,6 +7,7 @@
 
 #define C_inv 3.3356409519815204e-09
 #define NUM_THREADS_RESPONSE 256
+#define NLINKS 6
 
 typedef gcmplx::complex<double> cmplx;
 

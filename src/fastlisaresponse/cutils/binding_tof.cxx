@@ -23,7 +23,6 @@ void GBTDIonTheFlyWrap::run_wave_tdi_wrap(
     array_type<double>params, array_type<double>t_arr, int N, int num_bin, int n_params, int nchannels
 )
 {
-    printf("CHECKing33\n");
     gb_run_wave_tdi_wrap(
         waveform,
         (cmplx*)return_pointer_and_check_length(tdi_channels_arr, "tdi_channels_arr", N, num_bin * nchannels), // TODO: add length check
@@ -73,6 +72,20 @@ void FDSplineTDIWaveformWrap::run_wave_tdi_wrap(
     );
 }
 
+void gb_wdm_get_ll(array_type<double>d_h_out, array_type<double>h_h_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, array_type<int>noise_index_all, int num_bin, int nparams, double T, int tdi_type)
+{
+    gb_wdm_get_ll_wrap(
+        ReturnPointerBase::return_pointer_and_check_length(d_h_out, "d_h_out", num_bin, 1), 
+        ReturnPointerBase::return_pointer_and_check_length(h_h_out, "h_h_out", num_bin, 1), 
+        orbits_wrap->orbits, 
+        tdi_config_wrap->tdi_config, 
+        wdm_lookup_wrap->wdm_lookup, 
+        wdm_wrap->wdm, 
+        ReturnPointerBase::return_pointer_and_check_length(params_all, "params_all", nparams, num_bin), 
+        ReturnPointerBase::return_pointer_and_check_length(data_index_all, "data_index_all", num_bin, 1), 
+        ReturnPointerBase::return_pointer_and_check_length(noise_index_all, "noise_index_all", num_bin, 1), 
+        num_bin, nparams, T, tdi_type);
+}
 
 std::string get_module_path_tdionthefly() {
     // Acquire the GIL if it's not already held (safe to call multiple times)
@@ -130,6 +143,40 @@ void tdionthefly_part(py::module &m) {
          py::arg("orbits"), py::arg("tdi_config"), py::arg("amp_spline"), py::arg("freqs_spline"))
     ;
 
+
+#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
+    py::class_<TDSplineTDIWaveformWrap>(m, "TDSplineTDIWaveformWrapGPU")
+#else
+    py::class_<TDSplineTDIWaveformWrap>(m, "TDSplineTDIWaveformWrapCPU")
+#endif 
+
+    // Bind the constructor
+    .def(py::init<OrbitsWrap_responselisa *, TDIConfigWrap *, CubicSplineWrap_responselisa *, CubicSplineWrap_responselisa *>(), 
+         py::arg("orbits"), py::arg("tdi_config"), py::arg("amp_spline"), py::arg("phase_spline"))
+    // Bind member functions
+    .def("run_wave_tdi_wrap", &TDSplineTDIWaveformWrap::run_wave_tdi_wrap, "Preform TDI combinations.")
+    .def("get_buffer_size", &TDSplineTDIWaveformWrap::get_buffer_size, "Get needed buffer size.")
+    // You can also expose public data members directly using def_readwrite
+    .def_readwrite("orbits", &TDSplineTDIWaveformWrap::orbits)
+    .def_readwrite("tdi_config", &TDSplineTDIWaveformWrap::tdi_config)
+    .def_readwrite("amp_spline", &TDSplineTDIWaveformWrap::amp_spline)
+    .def_readwrite("phase_spline", &TDSplineTDIWaveformWrap::phase_spline)
+    
+    // .def("get_link_ind", &OrbitsWrap::get_link_ind, "Get link index.")
+    ;
+
+#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
+    py::class_<TDSplineTDIWaveform>(m, "TDSplineTDIWaveformGPU")
+#else
+    py::class_<TDSplineTDIWaveform>(m, "TDSplineTDIWaveformCPU")
+#endif
+
+    // Bind the constructor
+    .def(py::init<Orbits *, TDIConfig*, CubicSpline*, CubicSpline*>(), 
+         py::arg("orbits"), py::arg("tdi_config"), py::arg("amp_spline"), py::arg("phase_spline"))
+    ;
+
+
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
     py::class_<GBTDIonTheFlyWrap>(m, "GBTDIonTheFlyWrapGPU")
 #else
@@ -138,14 +185,14 @@ void tdionthefly_part(py::module &m) {
 
     // Bind the constructor
     .def(py::init<OrbitsWrap_responselisa *, TDIConfigWrap *, double>(), 
-         py::arg("orbits"), py::arg("tdi_config"), py::arg("T"))
+         py::arg("orbits"), py::arg("tdi_config"), py::arg("Tobs"))
     // Bind member functions
     .def("run_wave_tdi_wrap", &GBTDIonTheFlyWrap::run_wave_tdi_wrap, "Preform TDI combinations.")
     .def("get_buffer_size", &GBTDIonTheFlyWrap::get_buffer_size, "Get needed buffer size.")
     // You can also expose public data members directly using def_readwrite
     .def_readwrite("orbits", &GBTDIonTheFlyWrap::orbits)
     .def_readwrite("tdi_config", &GBTDIonTheFlyWrap::tdi_config)
-    .def_readwrite("T", &GBTDIonTheFlyWrap::T)
+    
     // .def("get_link_ind", &OrbitsWrap::get_link_ind, "Get link index.")
     ;
 
@@ -157,8 +204,64 @@ void tdionthefly_part(py::module &m) {
 
     // Bind the constructor
     .def(py::init<Orbits *, TDIConfig*, double>(), 
-         py::arg("orbits"), py::arg("tdi_config"), py::arg("T"))
+         py::arg("orbits"), py::arg("tdi_config"), py::arg("Tobs"))
     ;
+
+#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
+    py::class_<WaveletLookupTableWrap>(m, "WaveletLookupTableWrapGPU")
+#else
+    py::class_<WaveletLookupTableWrap>(m, "WaveletLookupTableWrapCPU")
+#endif 
+
+    // Bind the constructor
+    .def(py::init<array_type<double>,array_type<double>,int,int,double,double,double,double>(), 
+         py::arg("c_nm_all"), py::arg("s_nm_all"), py::arg("num_f"), py::arg("num_fdot"), py::arg("df"), py::arg("dfdot"), py::arg("min_f"), py::arg("min_fdot"))
+    // Bind member functions
+    
+    // You can also expose public data members directly using def_readwrite
+    .def_readwrite("wdm_lookup", &WaveletLookupTableWrap::wdm_lookup)
+    // .def("get_link_ind", &OrbitsWrap::get_link_ind, "Get link index.")
+    ;
+
+#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
+    py::class_<WaveletLookupTable>(m, "WaveletLookupTableGPU")
+#else
+    py::class_<WaveletLookupTable>(m, "WaveletLookupTableCPU")
+#endif
+    // Bind the constructor
+    .def(py::init<double*,double*,int,int,double,double,double,double>(), 
+         py::arg("c_nm_all"), py::arg("s_nm_all"), py::arg("num_f"), py::arg("num_fdot"), py::arg("df"), py::arg("dfdot"), py::arg("min_f"), py::arg("min_fdot"))
+    ;
+
+#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
+    py::class_<WDMDomainWrap>(m, "WDMDomainWrapGPU")
+#else
+    py::class_<WDMDomainWrap>(m, "WDMDomainWrapCPU")
+#endif 
+
+    // Bind the constructor
+    .def(py::init<array_type<double>,array_type<double>, double, double, int, int, int, int, int>(), 
+         py::arg("wdm_data"), py::arg("wdm_noise"), py::arg("df"), py::arg("dt"), py::arg("num_m"), py::arg("num_n"), py::arg("num_channel"), py::arg("num_data"), py::arg("num_noise"))
+    // Bind member functions
+    
+    // You can also expose public data members directly using def_readwrite
+    .def_readwrite("wdm", &WDMDomainWrap::wdm)
+    // .def("get_link_ind", &OrbitsWrap::get_link_ind, "Get link index.")
+    ;
+
+#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
+    py::class_<WDMDomain>(m, "WDMDomainGPU")
+#else
+    py::class_<WDMDomain>(m, "WDMDomainCPU")
+#endif
+
+    // Bind the constructor
+    .def(py::init<double*,double*, double, double, int, int, int, int, int>(), 
+         py::arg("wdm_data"), py::arg("wdm_noise"), py::arg("df"), py::arg("dt"), py::arg("num_m"), py::arg("num_n"), py::arg("num_channel"), py::arg("num_data"), py::arg("num_noise"))
+    ;
+
+    m.def("gb_wdm_get_ll", &gb_wdm_get_ll, "wdm get likelihood.");
+
 }
 
 

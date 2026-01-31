@@ -11,12 +11,18 @@
 #define GBTDIonTheFly GBTDIonTheFlyGPU
 #define FDSplineTDIWaveform FDSplineTDIWaveformGPU
 #define TDSplineTDIWaveform TDSplineTDIWaveformGPU
+#define WaveletLookupTable WaveletLookupTableGPU
+#define WDMDomain WDMDomainGPU
 #else
 #define GBTDIonTheFly GBTDIonTheFlyCPU
 #define FDSplineTDIWaveform FDSplineTDIWaveformCPU
 #define TDSplineTDIWaveform TDSplineTDIWaveformCPU
+#define WDMDomain WDMDomainCPU
 #endif
 
+#define TDI_XYZ 1
+#define TDI_AET 2
+#define TDI_AE 3
 
 class LISATDIonTheFly{
     public:
@@ -47,6 +53,8 @@ class LISATDIonTheFly{
         ~LISATDIonTheFly();
         CUDA_DEVICE
         void print_orbits_tdi();
+        CUDA_DEVICE
+        void fill_link_arrays(int *link_space_craft_0, int *link_space_craft_1);
         // CUDA_DEVICE
         // void LISA_polarization_tensor(double costh, double phi, double *eplus, double *ecross, double *k);
         CUDA_DEVICE
@@ -60,7 +68,9 @@ class LISATDIonTheFly{
         // CUDA_DEVICE
         // void get_t_tdi(double *t_out, double *kr, double *Larm, double t, int a, int b, int c, int n);
         CUDA_DEVICE
-        void get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double *t_data, int N, int bin_i);
+        void get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double *t_data, int N, int bin_i, int *link_space_craft_0, int *link_space_craft_1, Vec k, Vec u, Vec v);
+        CUDA_DEVICE
+        void get_tdi_Xf_single(cmplx *tdi_channel, double t, double *params, Vec k, Vec u, Vec v, int *link_space_craft_0, int *link_space_craft_1, int bin_i);
         CUDA_DEVICE
         void extract_amplitude_and_phase(double *flip, double *pjump, int Ns, double *As, double *Dphi, double *M, double *Mf, double *phiR);
         CUDA_DEVICE
@@ -84,6 +94,10 @@ class LISATDIonTheFly{
         virtual double get_amp(double t, double *params, int bin_i);
         CUDA_DEVICE
         virtual double get_phase(double t, double *params, int bin_i);
+        CUDA_DEVICE
+        virtual double get_f(double t, double *params, int bin_i);
+        CUDA_DEVICE
+        virtual double get_fdot(double t, double *params, int bin_i);
 };
 
 class GBTDIonTheFly : public LISATDIonTheFly{
@@ -113,6 +127,10 @@ class GBTDIonTheFly : public LISATDIonTheFly{
         double ucb_amplitude(double t, double *params);
         CUDA_DEVICE
         double ucb_phase(double t, double *params);
+        CUDA_DEVICE
+        double ucb_fdot(double t, double *params);
+        CUDA_DEVICE
+        double ucb_f(double t, double *params);
         int get_gb_buffer_size(int N);
         // CUDA_DEVICE
         // void run_wave_tdi(
@@ -124,6 +142,10 @@ class GBTDIonTheFly : public LISATDIonTheFly{
         double get_amp(double t, double *params, int bin_i);
         CUDA_DEVICE
         double get_phase(double t, double *params, int bin_i);
+        CUDA_DEVICE
+        double get_f(double t, double *params, int bin_i);
+        CUDA_DEVICE
+        double get_fdot(double t, double *params, int bin_i);
 };
 
 void gb_run_wave_tdi_wrap(GBTDIonTheFly *tdi_on_fly, cmplx *tdi_channels_arr, 
@@ -207,59 +229,76 @@ class FDSplineTDIWaveform : public LISATDIonTheFly {
     double get_amp_f(double t, double *params, int spline_i);
 };
 
+
+class WDMDomain{
+  public:
+    int num_n;
+    int num_m;
+    int num_channel;
+    double *wdm_data;
+    double *wdm_noise;
+    double df;
+    double dt;
+    int num_data;
+    int num_noise;
+
+    WDMDomain(double *wdm_data_, double *wdm_noise_, double df_, double dt_, int num_n_, int num_m_, int num_channel_, int num_data_, int num_noise_)
+    {
+        num_n = num_n_;
+        num_m = num_m_;
+        wdm_data = wdm_data_;
+        wdm_noise = wdm_noise_;
+        num_channel = num_channel_;
+        dt = dt_;
+        df = df_;
+        num_data = num_data_;
+        num_noise = num_noise_;
+    };
+    int get_pixel_index(int m, int n, int channel, int data_index);
+    int get_pixel_index_noise(int m, int n, int channel, int noise_index);
+    int get_pixel_index_noise_cross_channel(int m, int n, int channel_i, int channel_j, int noise_index);
+    double get_pixel_data_value(int m, int n, int channel,  int data_index);
+    double get_pixel_noise_value(int m, int n, int channel, int noise_index);
+    double get_pixel_noise_value_cross_channel(int m, int n, int channel_i, int channel_j, int noise_index);
+    void get_inner_product_value(double *d_h, double *h_h, double wdm_template_nm, int m, int n, int channel, int data_index, int noise_index);
+    void get_inner_product_value_cross_channel(double *d_h, double *h_h, double wdm_template_nm_i, double wdm_template_nm_j, int m, int n, int channel_i, int channel_j, int data_index, int noise_index);
+    void add_ip_contrib(double *d_h_tmp, double *h_h_tmp, double *wdm_nm, int layer_m, int n, int data_index, int noise_index, int tdi_type);
+    void add_ip_swap_contrib(double *d_h_add_tmp, double *d_h_remove_tmp, double *add_add_tmp, double *remove_remove_tmp, double *add_remove_tmp, double *wdm_nm_add, double *wdm_nm_remove, int layer_m, int n, int data_index, int noise_index, int tdi_type);
+};
+
+
+class WaveletLookupTable{
+  public:
+    double *c_nm_all;
+    double *s_nm_all;
+    
+    int num_f;
+    int num_fdot;
+    double df;
+    double dfdot;
+    double min_f_scaled;
+    double min_fdot;
+
+    WaveletLookupTable(double *c_nm_all_, double *s_nm_all_, int num_f_, int num_fdot_, int df_, int dfdot_, double min_f_scaled_, double min_fdot_){
+        // n * num_m + m 
+        c_nm_all = c_nm_all_;
+        s_nm_all = s_nm_all_;
+        num_f = num_f_;
+        num_fdot = num_fdot_;
+        df = df_;
+        dfdot = dfdot_;
+        min_f_scaled = min_f_scaled_;
+        min_fdot = min_fdot_;
+    };
+    double linear_interp(double f_scaled, double fdot, double *z_vals);
+    double get_w_mn_lookup(cmplx tdi_channel_val, double f, double fdot, int layer_m);
+};
+
 void fd_spline_run_wave_tdi_wrap(FDSplineTDIWaveform *tdi_on_fly, cmplx *tdi_channels_arr, 
     double *tdi_amp, double *tdi_phase, double *phi_ref, 
     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels);
 
-// class LagrangeInterpolant{
-//   public:
-//     double sampling_frequency;
-//     double deps;
-//     double *A_arr;
-//     double *E_arr;
-//     int h;
-
-//     CUDA_DEVICE
-//     LagrangeInterpolant(double sampling_frequency_, double deps_, double *A_arr_, double *E_arr_, int h_)
-//     {
-//         sampling_frequency = sampling_frequency_;
-//         deps = deps_;
-//         A_arr = A_arr_;
-//         E_arr = E_arr_;
-//         h = h_;
-//     };
-//     ~LagrangeInterpolant(){};
-//     void dealloc(){};
-//     CUDA_DEVICE
-//     cmplx interp(double t, cmplx *wave, int wave_N, int bin_i);
-// };
-
-
-// class TDLagrangeInterpTDIWave : public LISATDIonTheFly{
-//     public:
-//         cmplx* wave;
-//         int wave_N;
-//         LagrangeInterpolant *lagrange;
-
-//     CUDA_DEVICE
-//     TDLagrangeInterpTDIWave(Orbits *orbits_, TDIConfig *tdi_config_, cmplx *wave_, int wave_N_, LagrangeInterpolant *lagrange_);
-//     CUDA_DEVICE
-//     ~TDLagrangeInterpTDIWave(){};
-//     // CUDA_DEVICE
-//     // void get_amp_and_phase(double t_ssb, double *t, double *amp, double *phase, double *params, int N, int spline_i);
-//     CUDA_DEVICE
-//     // void run_wave_tdi(
-//     //     cmplx *tdi_channels_arr, 
-//     //     double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double *phi_ref, 
-//     //     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels
-//     // );
-//     CUDA_DEVICE
-//     int get_td_lagrange_buffer_size(int N){return get_tdi_buffer_size(N);};
-//     CUDA_DEVICE
-//     void get_hp_hc(double *hp, double *hc, double t, double *params, double phase_change, int bin_i);
-// };
-
-
+void gb_wdm_get_ll_wrap(double *d_h_out, double *h_h_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, int tdi_type);
 
 
 #endif // __TDI_ON_THE_FLY_HH__
