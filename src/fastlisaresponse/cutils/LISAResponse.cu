@@ -352,7 +352,7 @@ void TDI_delay(double *delayed_links, double *input_links, int num_inputs, int n
             if (threadIdx.x == max_thread_num - 1)
             {
                 // if (blockIdx.x == gridDim.x - 1)
-                // printf("%e %e %d %d\n", clipped_delay0, clipped_delay1, integer_delay0, integer_delay1);
+                // printf("%e %e %d %d\n", clipped_delay_rec, clipped_delay_em, integer_delay_rec, integer_delay_em);
                 end_input_ind = max_integer_delay + buffer_integer;
                 // printf("BAD2: %d %d %d %d %e %d %d\n", i, unit_i, blockIdx.x, start_input_ind, delay, max_integer_delay, start_input_ind);
             }
@@ -444,17 +444,17 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
     CUDA_SHARED double k[3];
     CUDA_SHARED double u[3];
     CUDA_SHARED double v[3];
-    CUDA_SHARED int link_space_craft_0[NLINKS];
-    CUDA_SHARED int link_space_craft_1[NLINKS];
+    CUDA_SHARED int link_space_craft_rec[NLINKS];
+    CUDA_SHARED int link_space_craft_em[NLINKS];
     CUDA_SHARED int links[NLINKS];
 
 #ifdef __CUDACC__
-    CUDA_SHARED double x0_all[NUM_THREADS * 3];
-    CUDA_SHARED double x1_all[NUM_THREADS * 3];
+    CUDA_SHARED double x_rec_all[NUM_THREADS * 3];
+    CUDA_SHARED double x_em_all[NUM_THREADS * 3];
     CUDA_SHARED double n_all[NUM_THREADS * 3];
 
-    double *x0 = &x0_all[3 * threadIdx.x];
-    double *x1 = &x1_all[3 * threadIdx.x];
+    double *x_rec = &x_rec_all[3 * threadIdx.x];
+    double *x_em = &x_em_all[3 * threadIdx.x];
     double *n = &n_all[3 * threadIdx.x];
 #endif
 
@@ -495,11 +495,11 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
     Orbits orbits = *orbits_in;
     for (int i = start; i < NLINKS; i += increment)
     {
-        link_space_craft_0[i] = orbits.sc_r[i];
-        link_space_craft_1[i] = orbits.sc_e[i];
+        link_space_craft_rec[i] = orbits.sc_r[i];
+        link_space_craft_em[i] = orbits.sc_e[i];
         links[i] = orbits.links[i];
         // if (threadIdx.x == 1)
-        // printf("%d %d %d %d\n", orbits.sc_r[i], orbits.sc_e[i], link_space_craft_1[i], link_space_craft_0[i]);
+        // printf("%d %d %d %d\n", orbits.sc_r[i], orbits.sc_e[i], link_space_craft_em[i], link_space_craft_rec[i]);
     }
     CUDA_SYNC_THREADS;
     int point_count = order + 1;
@@ -514,8 +514,8 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
 #endif
     for (int link_i = start; link_i < NLINKS; link_i += increment)
     {
-        int sc0 = link_space_craft_0[link_i];
-        int sc1 = link_space_craft_1[link_i];
+        int sc_r = link_space_craft_rec[link_i];
+        int sc_e = link_space_craft_em[link_i];
         int link = links[link_i];
 
         int start2, increment2;
@@ -533,24 +533,24 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
 
 #ifdef __CUDACC__
 #else
-            double x0_all[3];
-            CUDA_SHARED double x1_all[3];
+            double x_rec_all[3];
+            CUDA_SHARED double x_em_all[3];
             CUDA_SHARED double n_all[3];
 
-            double *x0 = &x0_all[0];
-            double *x1 = &x1_all[0];
+            double *x_rec = &x_rec_all[0];
+            double *x_em = &x_em_all[0];
             double *n = &n_all[0];
 
 #endif
 
             double xi_p, xi_c;
-            double k_dot_n, k_dot_x0, k_dot_x1;
-            double t, L, delay0, delay1;
-            double hp_del0, hp_del1, hc_del0, hc_del1;
+            double k_dot_n, k_dot_x_rec, k_dot_x_em;
+            double t, L, delay_rec, delay_em;
+            double hp_del_rec, hp_del_em, hc_del_rec, hc_del_em;
 
             double large_factor, pre_factor;
-            double clipped_delay0, clipped_delay1, out, fraction0, fraction1;
-            int integer_delay0, integer_delay1, max_integer_delay, min_integer_delay;
+            double clipped_delay_rec, clipped_delay_em, out, fraction_rec, fraction_em;
+            int integer_delay_rec, integer_delay_em, max_integer_delay, min_integer_delay;
 
             t = t_data[i];
 
@@ -558,19 +558,25 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
             double norm = 0.0;
             double n_temp;
 
-            out_vec = orbits.get_pos(t, sc0);
-            x0[0] = out_vec.x;
-            x0[1] = out_vec.y;
-            x0[2] = out_vec.z;
+            L = orbits.get_light_travel_time(t, link);
 
-            out_vec = orbits.get_pos(t, sc1);
-            x1[0] = out_vec.x;
-            x1[1] = out_vec.y;
-            x1[2] = out_vec.z;
+            double t_rec = t;
+            double t_em = t - L;
+
+            out_vec = orbits.get_pos(t_rec, sc_r);
+            x_rec[0] = out_vec.x;
+            x_rec[1] = out_vec.y;
+            x_rec[2] = out_vec.z;
+
+            // changed this t -> t_em
+            out_vec = orbits.get_pos(t_em, sc_e);
+            x_em[0] = out_vec.x;
+            x_em[1] = out_vec.y;
+            x_em[2] = out_vec.z;
 
             for (int coord = 0; coord < 3; coord += 1)
             {
-                n_temp = x0[coord] - x1[coord];
+                n_temp = x_rec[coord] - x_em[coord];
                 n[coord] = n_temp;
                 norm += n_temp * n_temp;
             }
@@ -583,35 +589,35 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
                 n[coord] = n[coord] / norm;
             }
 
-            L = orbits.get_light_travel_time(t, link);
+            
             // if (i % 10000 == 0)
-            //     printf("%d %d %e %e %d %e %e %e %d\n", i, link_i, L, t, link, x0[0], x1[0], norm, sc0);
+            //     printf("%d %d %e %e %d %e %e %e %d\n", i, link_i, L, t, link, x_rec[0], x_em[0], norm, sc_r);
 
             // if (i <500) printf("%d %d: start \n", i, link_i);
 
             xi_projections(&xi_p, &xi_c, u, v, n);
 
             k_dot_n = dot_product_1d(k, n);
-            k_dot_x0 = dot_product_1d(k, x0); // receiver
-            k_dot_x1 = dot_product_1d(k, x1); // emitter
+            k_dot_x_rec = dot_product_1d(k, x_rec); // receiver
+            k_dot_x_em = dot_product_1d(k, x_em); // emitter
 
-            delay0 = t - k_dot_x0 * C_inv;
-            delay1 = t - L - k_dot_x1 * C_inv;
+            delay_rec = t_rec - k_dot_x_rec * C_inv; // rec is 0, em is 1 ; # TODO: change 0->rec and 1->em
+            delay_em = t_em - k_dot_x_em * C_inv;
 
             // start time for hp hx is really -(projection_buffer * dt)
 
-            // if ((i == 0) && (link_i == 0)) printf("%.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e\n", L, delay0, delay1, x0[0], x0[1], x0[2],x1[0], x1[1], x1[2]);
-            clipped_delay0 = delay0; //  - start_wave_time;
-            integer_delay0 = (int)ceil(clipped_delay0 * sampling_frequency) - 1;
-            fraction0 = 1.0 + integer_delay0 - clipped_delay0 * sampling_frequency;
+            // if ((i == 0) && (link_i == 0)) printf("%.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e\n", L, delay_rec, delay_em, x_rec[0], x_rec[1], x_rec[2],x_em[0], x_em[1], x_em[2]);
+            clipped_delay_rec = delay_rec; //  - start_wave_time;
+            integer_delay_rec = (int)ceil(clipped_delay_rec * sampling_frequency) - 1;
+            fraction_rec = 1.0 + integer_delay_rec - clipped_delay_rec * sampling_frequency;
 
-            clipped_delay1 = delay1; //  - start_wave_time;
-            integer_delay1 = (int)ceil(clipped_delay1 * sampling_frequency) - 1;
-            fraction1 = 1.0 + integer_delay1 - clipped_delay1 * sampling_frequency;
+            clipped_delay_em = delay_em; //  - start_wave_time;
+            integer_delay_em = (int)ceil(clipped_delay_em * sampling_frequency) - 1;
+            fraction_em = 1.0 + integer_delay_em - clipped_delay_em * sampling_frequency;
 
-            max_integer_delay = (integer_delay0 < integer_delay1) ? integer_delay1 : integer_delay0;
+            max_integer_delay = (integer_delay_rec < integer_delay_em) ? integer_delay_em : integer_delay_rec;
             max_integer_delay += 2; // encompass all
-            min_integer_delay = (integer_delay0 < integer_delay1) ? integer_delay0 : integer_delay1;
+            min_integer_delay = (integer_delay_rec < integer_delay_em) ? integer_delay_rec : integer_delay_em;
 
 #ifdef __CUDACC__
             int max_thread_num = ((num_delays - 2 * projections_start_ind) - blockDim.x * blockIdx.x > NUM_THREADS) ? NUM_THREADS : (num_delays - 2 * projections_start_ind) - blockDim.x * blockIdx.x;
@@ -624,13 +630,13 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
             if (threadIdx.x == max_thread_num - 1)
             {
                 // if (blockIdx.x == gridDim.x - 1)
-                // printf("%e %e %d %d\n", clipped_delay0, clipped_delay1, integer_delay0, integer_delay1);
+                // printf("%e %e %d %d\n", clipped_delay_rec, clipped_delay_em, integer_delay_rec, integer_delay_em);
                 end_input_ind = max_integer_delay + buffer_integer;
             }
 
             CUDA_SYNC_THREADS;
 
-            // if (blockIdx.x == gridDim.x - 1) printf("%d %e %d %d %d %d %d %d %d %d %d %d %d\n", i, L, blockIdx.x, gridDim.x, threadIdx.x, blockDim.x*blockIdx.x, num_delays, num_delays - blockDim.x*blockIdx.x, max_thread_num, start_input_ind, end_input_ind, integer_delay0, integer_delay1);
+            // if (blockIdx.x == gridDim.x - 1) printf("%d %e %d %d %d %d %d %d %d %d %d %d %d\n", i, L, blockIdx.x, gridDim.x, threadIdx.x, blockDim.x*blockIdx.x, num_delays, num_delays - blockDim.x*blockIdx.x, max_thread_num, start_input_ind, end_input_ind, integer_delay_rec, integer_delay_em);
             if (end_input_ind - start_input_ind > BUFFER_SIZE)
                 printf("%d %d %d %d %d %d %d %d\n", threadIdx.x, max_integer_delay, start_input_ind, end_input_ind, i, max_thread_num, num_delays, blockIdx.x * blockDim.x);
 
@@ -646,13 +652,13 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
             cmplx *input = input_in;
 #endif
 
-            interp(&hp_del0, &hc_del0, input, half_point_count, integer_delay0, fraction0, A_arr, deps, E_arr, start_input_ind, i, link_i);
-            interp(&hp_del1, &hc_del1, input, half_point_count, integer_delay1, fraction1, A_arr, deps, E_arr, start_input_ind, i, link_i);
+            interp(&hp_del_rec, &hc_del_rec, input, half_point_count, integer_delay_rec, fraction_rec, A_arr, deps, E_arr, start_input_ind, i, link_i);
+            interp(&hp_del_em, &hc_del_em, input, half_point_count, integer_delay_em, fraction_em, A_arr, deps, E_arr, start_input_ind, i, link_i);
 
             pre_factor = 1. / (1. - k_dot_n);
-            large_factor = (hp_del1 - hp_del0) * xi_p + (hc_del1 - hc_del0) * xi_c;
-            // if (i % 10000 == 0)
-            //     printf("%d %d %e %e %e %e %e %e\n", i, link_i, pre_factor, large_factor, delay0, delay1, L, xi_p);
+            large_factor = (hp_del_em - hp_del_rec) * xi_p + (hc_del_em - hc_del_rec) * xi_c;
+            // if (i < 100)
+            //     printf("%d %d %e \n", i, link_i, k_dot_x_rec * C_inv);
             y_gw[link_i * num_delays + i] = pre_factor * large_factor;
             CUDA_SYNC_THREADS;
         }
@@ -759,17 +765,17 @@ int main()
     double *n_in = new double[num_delays*nlinks*3];
     double *x = new double[num_delays*3*3];
     double *L_vals = new double[num_delays*nlinks];
-    int *link_space_craft_0 = new int[nlinks];
-    int *link_space_craft_1 = new int[nlinks];
+    int *link_space_craft_rec = new int[nlinks];
+    int *link_space_craft_em = new int[nlinks];
 
-    link_space_craft_0[0] = 0; link_space_craft_1[0] = 1;
-    link_space_craft_0[1] = 1; link_space_craft_1[1] = 0;
+    link_space_craft_rec[0] = 0; link_space_craft_em[0] = 1;
+    link_space_craft_rec[1] = 1; link_space_craft_em[1] = 0;
 
-    link_space_craft_0[2] = 0; link_space_craft_1[2] = 2;
-    link_space_craft_0[3] = 2; link_space_craft_1[3] = 0;
+    link_space_craft_rec[2] = 0; link_space_craft_em[2] = 2;
+    link_space_craft_rec[3] = 2; link_space_craft_em[3] = 0;
 
-    link_space_craft_0[4] = 1; link_space_craft_1[4] = 2;
-    link_space_craft_0[5] = 2; link_space_craft_1[5] = 1;
+    link_space_craft_rec[4] = 1; link_space_craft_em[4] = 2;
+    link_space_craft_rec[5] = 2; link_space_craft_em[5] = 1;
 
     double Re = 1.496e+11;  // meters
     double Phi0 = 0.0;
@@ -780,9 +786,9 @@ int main()
 
     double L = 2.5e9;
 
-    double sc0_delta[2] = {L/2, -L/(2.*sqrt(3.))};
+    double sc_r_delta[2] = {L/2, -L/(2.*sqrt(3.))};
 
-    double sc1_delta[2] = {-L/2, -L/(2.*sqrt(3.))};
+    double sc_e_delta[2] = {-L/2, -L/(2.*sqrt(3.))};
     double sc2_delta[2] = {0.0, L/(sqrt(3.))};
 
     double Rnew, xnew, ynew, znew, t;
@@ -792,19 +798,19 @@ int main()
         t = i*dt;
 
         // sc 1
-        Rnew = Re + sc0_delta[0];
+        Rnew = Re + sc_r_delta[0];
         xnew = Rnew*cos(Omega0*t + Phi0);
         ynew = Rnew*sin(Omega0*t + Phi0);
-        znew = sc0_delta[1];
+        znew = sc_r_delta[1];
 
         x[(0*3 + 0)*num_delays + i] = xnew;
         x[(0*3 + 1)*num_delays + i] = ynew;
         x[(0*3 + 2)*num_delays + i] = znew;
 
-        Rnew = Re + sc1_delta[0];
+        Rnew = Re + sc_e_delta[0];
         xnew = Rnew*cos(Omega0*t + Phi0);
         ynew = Rnew*sin(Omega0*t + Phi0);
-        znew = sc1_delta[1];
+        znew = sc_e_delta[1];
 
         x[(1*3 + 0)*num_delays + i] = xnew;
         x[(1*3 + 1)*num_delays + i] = ynew;
@@ -820,8 +826,8 @@ int main()
         x[(2*3 + 2)*num_delays + i] = znew;
 
         for (int j=0; j<NLINKS; j++){
-            link_ind_0 = link_space_craft_0[j];
-            link_ind_1 = link_space_craft_1[j];
+            link_ind_0 = link_space_craft_rec[j];
+            link_ind_1 = link_space_craft_em[j];
 
             xnew = x[(link_ind_0*3 + 0)*num_delays + i] - x[(link_ind_1*3 + 0)*num_delays + i];
             ynew = x[(link_ind_0*3 + 1)*num_delays + i] - x[(link_ind_1*3 + 1)*num_delays + i];
@@ -839,7 +845,7 @@ int main()
     double *d_k, *d_u, *d_v, *d_x, *d_n_in;
     double *d_L_vals, *d_y_gw;
 
-    int *d_link_space_craft_0, *d_link_space_craft_1;
+    int *d_link_space_craft_rec, *d_link_space_craft_em;
 
     gpuErrchk(cudaMalloc(&d_k, 3*sizeof(double)));
     gpuErrchk(cudaMalloc(&d_u, 3*sizeof(double)));
@@ -848,8 +854,8 @@ int main()
     gpuErrchk(cudaMalloc(&d_x, 3*3*num_delays*sizeof(double)));
     gpuErrchk(cudaMalloc(&d_n_in, nlinks*3*num_delays*sizeof(double)));
 
-    gpuErrchk(cudaMalloc(&d_link_space_craft_0, nlinks*sizeof(int)));
-    gpuErrchk(cudaMalloc(&d_link_space_craft_1, nlinks*sizeof(int)));
+    gpuErrchk(cudaMalloc(&d_link_space_craft_rec, nlinks*sizeof(int)));
+    gpuErrchk(cudaMalloc(&d_link_space_craft_em, nlinks*sizeof(int)));
 
     gpuErrchk(cudaMalloc(&d_L_vals, nlinks*num_delays*sizeof(double)));
 
@@ -860,8 +866,8 @@ int main()
     gpuErrchk(cudaMemcpy(d_x, x, 3*3*num_delays*sizeof(double), cudaMemcpyHostToDevice));
     gpuErrchk(cudaMemcpy(d_n_in, n_in, nlinks*3*num_delays*sizeof(double), cudaMemcpyHostToDevice));
 
-    gpuErrchk(cudaMemcpy(d_link_space_craft_0, link_space_craft_0, nlinks*sizeof(int), cudaMemcpyHostToDevice));
-    gpuErrchk(cudaMemcpy(d_link_space_craft_1, link_space_craft_1, nlinks*sizeof(int), cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpy(d_link_space_craft_rec, link_space_craft_rec, nlinks*sizeof(int), cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpy(d_link_space_craft_em, link_space_craft_em, nlinks*sizeof(int), cudaMemcpyHostToDevice));
 
     gpuErrchk(cudaMemcpy(d_L_vals, L_vals, num_delays*nlinks*sizeof(double), cudaMemcpyHostToDevice));
 
@@ -870,7 +876,7 @@ int main()
     for (int i=0; i<1; i++){
 
         get_response(d_y_gw, d_k, d_u, d_v, dt, d_x, d_n_in,
-                      num_delays, d_link_space_craft_0, d_link_space_craft_1,
+                      num_delays, d_link_space_craft_rec, d_link_space_craft_em,
                       d_L_vals, d_input_in, num_pts_in, order, sampling_frequency, buffer_integer, d_factorials_in, num_fac,  input_start_time);
 }
 
@@ -882,8 +888,8 @@ int main()
     delete[] n_in;
     delete[] x;
     delete[] L_vals;
-    delete[] link_space_craft_0;
-    delete[] link_space_craft_1;
+    delete[] link_space_craft_rec;
+    delete[] link_space_craft_em;
 
     gpuErrchk(cudaFree(d_k));
     gpuErrchk(cudaFree(d_u));
@@ -892,8 +898,8 @@ int main()
     gpuErrchk(cudaFree(d_x));
     gpuErrchk(cudaFree(d_n_in));
 
-    gpuErrchk(cudaFree(d_link_space_craft_0));
-    gpuErrchk(cudaFree(d_link_space_craft_1));
+    gpuErrchk(cudaFree(d_link_space_craft_rec));
+    gpuErrchk(cudaFree(d_link_space_craft_em));
 
     gpuErrchk(cudaFree(d_L_vals));
 
