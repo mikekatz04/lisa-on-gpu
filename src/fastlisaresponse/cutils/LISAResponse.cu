@@ -663,7 +663,7 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
             interp(&hp_del1, &hc_del1, input, half_point_count, integer_delay1, fraction1, A_arr, deps, E_arr, start_input_ind, i, link_i);
 
             pre_factor = 1. / (1. - k_dot_n);
-            large_factor = (hp_del0 - hp_del1) * xi_p + (hc_del0 - hc_del1) * xi_c;
+            large_factor = (hp_del1 - hp_del0) * xi_p + (hc_del1 - hc_del0) * xi_c;
             y_gw[link_i * num_delays + i] = pre_factor * large_factor;
             CUDA_SYNC_THREADS;
         }

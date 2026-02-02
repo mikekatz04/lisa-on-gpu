@@ -1048,7 +1048,7 @@ void LISATDIonTheFly::get_tdi_Xf_single(cmplx *tdi_channel, double t, double *pa
         get_hp_hc(&hp_del0, &hc_del0, delay0, params, phase_change, bin_i);
         get_hp_hc(&hp_del1, &hc_del1, delay1, params, phase_change, bin_i);
         
-        large_factor_real = (hp_del0 - hp_del1) * xi_p + (hc_del0 - hc_del1) * xi_c;
+        large_factor_real = (hp_del1 - hp_del0) * xi_p + (hc_del1 - hc_del0) * xi_c;
         
         phase_change = M_PI / 2.0; // the real part
         get_hp_hc(&hp_del0, &hc_del0, delay0, params, phase_change, bin_i);
