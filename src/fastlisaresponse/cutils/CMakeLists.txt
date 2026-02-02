@@ -98,6 +98,15 @@ if(FASTLISA_WITH_CPU)
     DEPENDS "${LISATOOLS_DIR}/cutils/Detector.cu"
     VERBATIM)
 
+  add_custom_command(
+    OUTPUT "PSD.cxx"
+    COMMENT "Copy PSD.cu to PSD.cxx"
+    COMMAND ${CMAKE_COMMAND} -E copy "${LISATOOLS_DIR}/cutils/PSD.cu"
+            "${CMAKE_CURRENT_BINARY_DIR}/PSD.cxx"
+    DEPENDS "${LISATOOLS_DIR}/cutils/PSD.cu"
+    VERBATIM)
+
+
   if(NOT EXISTS "${LISATOOLS_DIR}/cutils/binding.hpp")
     message(FATAL_ERROR "${LISATOOLS_DIR}/cutils/binding.hpp does not exist.")
   endif()
@@ -120,7 +129,8 @@ if(FASTLISA_WITH_CPU)
       message(FATAL_ERROR "LISA Analysis Tools detector static library not found in the specified folder!")
   endif()
 
-  add_library(fastlisaresponse_cpu_response_static STATIC Detector.cxx LISAResponse.cxx)
+    # Update the library to include PSD.cxx
+  add_library(fastlisaresponse_cpu_response_static STATIC Detector.cxx PSD.cxx LISAResponse.cxx)
   apply_cpu_backend_common_options(response fastlisaresponse fastlisaresponse true )
   target_include_directories(fastlisaresponse_cpu_response_static PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})  
   # target_link_libraries(fastlisaresponse_cpu_response_static PUBLIC ${LISATOOLS_DETECTOR_STATIC_LIB_CPU})
@@ -174,7 +184,7 @@ if(FASTLISA_WITH_GPU)
       message(FATAL_ERROR "LISA Analysis Tools detector (gpu) static library not found in the specified folder!")
   endif()
 
-  set(DETECTOR_GPU_OBJ "${LISATOOLS_DETECTOR_GPU_DIR}/Detector.cu.o")
+  set(DETECTOR_GPU_OBJ "${LISATOOLS_DETECTOR_GPU_DIR}/Detector.cu.o")  
 
   if(EXISTS "${DETECTOR_GPU_OBJ}")
     message("INFO: The file ${DETECTOR_GPU_OBJ} exists.")
@@ -192,7 +202,21 @@ if(FASTLISA_WITH_GPU)
     endif()
   endif()
 
-  add_library(fastlisaresponse_gpu_response_gpu_static STATIC "${LISATOOLS_DIR}/cutils/Detector.cu" LISAResponse.cu)
+  set(PSD_GPU_OBJ "${LISATOOLS_DETECTOR_GPU_DIR}/PSD.cu.o")  
+
+  if(EXISTS "${PSD_GPU_OBJ}")
+    message("INFO: The file ${PSD_GPU_OBJ} exists.")
+  else()
+    message(STATUS "The file ${PSD_GPU_OBJ} does not exist. We will unpack the installed library.")
+    execute_process (
+      COMMAND bash -c "cd ${LISATOOLS_DETECTOR_GPU_DIR} && ar -x libdetector_gpu.a PSD.cu.o && cd -"
+    )
+    if(NOT EXISTS "${PSD_GPU_OBJ}")
+      message(FATAL_ERROR "${PSD_GPU_OBJ} creation not working.")
+    endif()
+  endif()
+
+  add_library(fastlisaresponse_gpu_response_gpu_static STATIC "${LISATOOLS_DIR}/cutils/Detector.cu" "${LISATOOLS_DIR}/cutils/PSD.cu" LISAResponse.cu)
   apply_gpu_backend_common_options(response_gpu fastlisaresponse fastlisaresponse true)
   target_sources(fastlisaresponse_gpu_response_gpu_static PUBLIC FILE_SET HEADERS FILES
                                          LISAResponse.hh)
