@@ -23,12 +23,14 @@ namespace py = pybind11;
 #define TDSplineTDIWaveformWrap TDSplineTDIWaveformWrapGPU
 #define WaveletLookupTableWrap WaveletLookupTableWrapGPU
 #define WDMDomainWrap WDMDomainWrapGPU
+#define GBComputationGroupWrap GBComputationGroupWrapGPU
 #else
 #define GBTDIonTheFlyWrap GBTDIonTheFlyWrapCPU
 #define FDSplineTDIWaveformWrap FDSplineTDIWaveformWrapCPU
 #define TDSplineTDIWaveformWrap TDSplineTDIWaveformWrapCPU
 #define WaveletLookupTableWrap WaveletLookupTableWrapCPU
 #define WDMDomainWrap WDMDomainWrapCPU
+#define GBComputationGroupWrap GBComputationGroupWrapCPU
 #endif
 
 
@@ -128,17 +130,17 @@ class WaveletLookupTableWrap : public ReturnPointerBase {
     // int num_f;
     // int num_fdot;
     // double df;
-    // double dfdot;
+    // double dfdot_interp;
     // double min_f;
     // double min_fdot;
 
-    WaveletLookupTableWrap(array_type<double>c_nm_all_, array_type<double>s_nm_all_, int num_f_, int num_fdot_, double df_, double dfdot_, double min_f_, double min_fdot_)
+    WaveletLookupTableWrap(array_type<double>c_nm_all_, array_type<double>s_nm_all_, int num_f_, int num_fdot_, double df_interp_, double dfdot_interp_, double min_f_, double min_fdot_, double df_, double dt_, int num_m_, int num_n_, int num_channel_)
     {
         
         wdm_lookup = new WaveletLookupTable(
             return_pointer_and_check_length(c_nm_all_, "c_nm_all", num_f_ * num_fdot_, 1),
             return_pointer_and_check_length(s_nm_all_, "s_nm_all", num_f_ * num_fdot_, 1),
-            num_f_, num_fdot_, df_, dfdot_, min_f_, min_fdot_
+            num_f_, num_fdot_, df_interp_, dfdot_interp_, min_f_, min_fdot_, df_, dt_, num_m_, num_n_, num_channel_
         );
     };
     ~WaveletLookupTableWrap(){
@@ -156,15 +158,16 @@ class WDMDomainWrap : public ReturnPointerBase {
     // int num_f;
     // int num_fdot;
     // double df;
-    // double dfdot;
+    // double dfdot_interp;
     // double min_f;
     // double min_fdot;
 
     WDMDomainWrap(array_type<double>wdm_data_, array_type<double>wdm_noise_, double df_, double dt_, int num_m_, int num_n_, int num_channel_, int num_data_, int num_noise_)
     {
+        // TODO: adjust noise length check to TDI setups
         wdm = new WDMDomain(
             return_pointer_and_check_length(wdm_data_, "wdm_data", num_n_ * num_m_ * num_channel_ * num_data_, 1),
-            return_pointer_and_check_length(wdm_noise_, "wdm_noise", num_n_ * num_m_ * num_channel_ * num_noise_, 1),
+            return_pointer(wdm_noise_, "wdm_noise"),  // return_pointer_and_check_length(wdm_noise_, "wdm_noise", num_n_ * num_m_ * num_channel_ * num_noise_, 1),
             df_, dt_, num_m_, num_n_, num_channel_, num_data_, num_noise_
         );
     };
@@ -172,6 +175,11 @@ class WDMDomainWrap : public ReturnPointerBase {
         delete wdm;
     };
 
+};
+
+class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBase {
+  public:
+    void gb_wdm_get_ll(array_type<double>d_h_out, array_type<double>h_h_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, array_type<int>noise_index_all, int num_bin, int nparams, double T, int tdi_type);
 };
 
 #endif // __BINDING_TOF_HPP__

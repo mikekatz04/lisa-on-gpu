@@ -7,6 +7,7 @@ import abc
 from typing import Optional, Sequence, TypeVar, Union
 from ..utils.exceptions import *
 
+
 from gpubackendtools.gpubackendtools import BackendMethods, CpuBackend, Cuda11xBackend, Cuda12xBackend
 from gpubackendtools.exceptions import *
 
@@ -23,7 +24,8 @@ class FastLISAResponseBackendMethods(BackendMethods):
     CubicSplineWrap: object
     WDMDomainWrap: object
     WaveletLookupTableWrap: object
-
+    GBComputationGroupWrap: object
+    TDITypeDict: object
 
 class FastLISAResponseBackend:
     # TDSplineTDIWaveformWrap: object
@@ -37,6 +39,8 @@ class FastLISAResponseBackend:
     CubicSplineWrap: object
     WDMDomainWrap: object
     WaveletLookupTableWrap: object
+    GBComputationGroupWrap: object
+    TDITypeDict: object
     
     def __init__(self, fastlisaresponse_backend_methods):
 
@@ -55,7 +59,8 @@ class FastLISAResponseBackend:
         self.LISAResponse = fastlisaresponse_backend_methods.LISAResponse
         self.WDMDomainWrap = fastlisaresponse_backend_methods.WDMDomainWrap
         self.WaveletLookupTableWrap = fastlisaresponse_backend_methods.WaveletLookupTableWrap
-
+        self.GBComputationGroupWrap = fastlisaresponse_backend_methods.GBComputationGroupWrap
+        self.TDITypeDict = fastlisaresponse_backend_methods.TDITypeDict
 
 class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
     """Implementation of the CPU backend"""
@@ -79,6 +84,11 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
 
         numpy = FastLISAResponseCpuBackend.check_numpy()
 
+        tmp = {
+            "XYZ": fastlisaresponse_backend_cpu.tdionthefly.TDI_XYZ,
+            "AET": fastlisaresponse_backend_cpu.tdionthefly.TDI_AET,
+            "AE": fastlisaresponse_backend_cpu.tdionthefly.TDI_AE,
+        }
         return FastLISAResponseBackendMethods(
             # TDSplineTDIWaveformWrap=fastlisaresponse_backend_cpu.tdionthefly.FDSplineTDIWaveformWrap,
             FDSplineTDIWaveformWrap=fastlisaresponse_backend_cpu.tdionthefly.FDSplineTDIWaveformWrapCPU,
@@ -91,6 +101,8 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
             CubicSplineWrap=fastlisaresponse_backend_cpu.responselisa.CubicSplineWrapCPU_responselisa,
             WDMDomainWrap=fastlisaresponse_backend_cpu.tdionthefly.WDMDomainWrapCPU,
             WaveletLookupTableWrap=fastlisaresponse_backend_cpu.tdionthefly.WaveletLookupTableWrapCPU,
+            GBComputationGroupWrap=fastlisaresponse_backend_cpu.tdionthefly.GBComputationGroupWrapCPU,
+            TDITypeDict=tmp,
             xp=numpy,
         )
 
@@ -123,6 +135,11 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
                 "'cuda11x' backend requires cupy", pip_deps=["cupy-cuda11x"]
             ) from e
 
+        tmp = {
+            "XYZ": fastlisaresponse_backend_cuda11x.tdionthefly.TDI_XYZ,
+            "AET": fastlisaresponse_backend_cuda11x.tdionthefly.TDI_AET,
+            "AE": fastlisaresponse_backend_cuda11x.tdionthefly.TDI_AE,
+        }
         return FastLISAResponseBackendMethods(
             # TDSplineTDIWaveformWrap=fastlisaresponse_backend_cpu.tdionthefly.FDSplineTDIWaveformWrap,
             FDSplineTDIWaveformWrap=fastlisaresponse_backend_cuda11x.tdionthefly.FDSplineTDIWaveformWrapGPU,
@@ -135,6 +152,8 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
             CubicSplineWrap=fastlisaresponse_backend_cuda11x.responselisa.CubicSplineWrapGPU_responselisa,
             WDMDomainWrap=fastlisaresponse_backend_cuda11x.tdionthefly.WDMDomainWrapGPU,
             WaveletLookupTableWrap=fastlisaresponse_backend_cuda11x.tdionthefly.WaveletLookupTableWrapGPU,
+            GBComputationGroupWrap=fastlisaresponse_backend_cuda11x.tdionthefly.GBComputationGroupWrapGPU,
+            TDITypeDict=tmp,
             xp=cupy,
         )
 
@@ -164,6 +183,11 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
             raise MissingDependencies(
                 "'cuda12x' backend requires cupy", pip_deps=["cupy-cuda12x"]
             ) from e
+        tmp = {
+            "XYZ": fastlisaresponse_backend_cuda12x.tdionthefly.TDI_XYZ,
+            "AET": fastlisaresponse_backend_cuda12x.tdionthefly.TDI_AET,
+            "AE": fastlisaresponse_backend_cuda12x.tdionthefly.TDI_AE,
+        }
         return FastLISAResponseBackendMethods(
             # TDSplineTDIWaveformWrap=fastlisaresponse_backend_cpu.tdionthefly.FDSplineTDIWaveformWrap,
             FDSplineTDIWaveformWrap=fastlisaresponse_backend_cuda12x.tdionthefly.FDSplineTDIWaveformWrapGPU,
@@ -176,6 +200,8 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
             CubicSplineWrap=fastlisaresponse_backend_cuda12x.responselisa.CubicSplineWrapGPU_responselisa,
             WDMDomainWrap=fastlisaresponse_backend_cuda12x.tdionthefly.WDMDomainWrapGPU,
             WaveletLookupTableWrap=fastlisaresponse_backend_cuda12x.tdionthefly.WaveletLookupTableWrapGPU,
+            GBComputationGroupWrap=fastlisaresponse_backend_cuda12x.tdionthefly.GBComputationGroupWrapGPU,
+            TDITypeDict=tmp,
             xp=cupy,
         )
 

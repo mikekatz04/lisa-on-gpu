@@ -72,18 +72,19 @@ void FDSplineTDIWaveformWrap::run_wave_tdi_wrap(
     );
 }
 
-void gb_wdm_get_ll(array_type<double>d_h_out, array_type<double>h_h_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, array_type<int>noise_index_all, int num_bin, int nparams, double T, int tdi_type)
+void GBComputationGroupWrap::gb_wdm_get_ll(array_type<double>d_h_out, array_type<double>h_h_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, array_type<int>noise_index_all, int num_bin, int nparams, double T, int tdi_type)
 {
+    // from the parent class
     gb_wdm_get_ll_wrap(
-        ReturnPointerBase::return_pointer_and_check_length(d_h_out, "d_h_out", num_bin, 1), 
-        ReturnPointerBase::return_pointer_and_check_length(h_h_out, "h_h_out", num_bin, 1), 
+        return_pointer_and_check_length(d_h_out, "d_h_out", num_bin, 1), 
+        return_pointer_and_check_length(h_h_out, "h_h_out", num_bin, 1), 
         orbits_wrap->orbits, 
         tdi_config_wrap->tdi_config, 
         wdm_lookup_wrap->wdm_lookup, 
         wdm_wrap->wdm, 
-        ReturnPointerBase::return_pointer_and_check_length(params_all, "params_all", nparams, num_bin), 
-        ReturnPointerBase::return_pointer_and_check_length(data_index_all, "data_index_all", num_bin, 1), 
-        ReturnPointerBase::return_pointer_and_check_length(noise_index_all, "noise_index_all", num_bin, 1), 
+        return_pointer_and_check_length(params_all, "params_all", nparams, num_bin), 
+        return_pointer_and_check_length(data_index_all, "data_index_all", num_bin, 1), 
+        return_pointer_and_check_length(noise_index_all, "noise_index_all", num_bin, 1), 
         num_bin, nparams, T, tdi_type);
 }
 
@@ -111,6 +112,10 @@ std::string get_module_path_tdionthefly() {
 // The module name here must match the one used in CMakeLists.txt
 void tdionthefly_part(py::module &m) {
 
+    m.attr("TDI_XYZ") = TDI_XYZ;
+    m.attr("TDI_AET") = TDI_AET;
+    m.attr("TDI_AE") = TDI_AE;
+    
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
     py::class_<FDSplineTDIWaveformWrap>(m, "FDSplineTDIWaveformWrapGPU")
 #else
@@ -214,8 +219,8 @@ void tdionthefly_part(py::module &m) {
 #endif 
 
     // Bind the constructor
-    .def(py::init<array_type<double>,array_type<double>,int,int,double,double,double,double>(), 
-         py::arg("c_nm_all"), py::arg("s_nm_all"), py::arg("num_f"), py::arg("num_fdot"), py::arg("df"), py::arg("dfdot"), py::arg("min_f"), py::arg("min_fdot"))
+    .def(py::init<array_type<double>,array_type<double>,int,int,double,double,double,double, double, double, int, int, int>(), 
+         py::arg("c_nm_all"), py::arg("s_nm_all"), py::arg("num_f"), py::arg("num_fdot"), py::arg("df_interp"), py::arg("dfdot_interp"), py::arg("min_f"), py::arg("min_fdot"), py::arg("df"), py::arg("dt"), py::arg("num_m"), py::arg("num_n"), py::arg("num_channel"))
     // Bind member functions
     
     // You can also expose public data members directly using def_readwrite
@@ -229,8 +234,8 @@ void tdionthefly_part(py::module &m) {
     py::class_<WaveletLookupTable>(m, "WaveletLookupTableCPU")
 #endif
     // Bind the constructor
-    .def(py::init<double*,double*,int,int,double,double,double,double>(), 
-         py::arg("c_nm_all"), py::arg("s_nm_all"), py::arg("num_f"), py::arg("num_fdot"), py::arg("df"), py::arg("dfdot"), py::arg("min_f"), py::arg("min_fdot"))
+    .def(py::init<double*,double*,int,int,double,double,double,double, double, double, int, int, int>(), 
+         py::arg("c_nm_all"), py::arg("s_nm_all"), py::arg("num_f"), py::arg("num_fdot"), py::arg("df_interp"), py::arg("dfdot_interp"), py::arg("min_f"), py::arg("min_fdot"), py::arg("df"), py::arg("dt"), py::arg("num_m"), py::arg("num_n"), py::arg("num_channel"))
     ;
 
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
@@ -260,8 +265,15 @@ void tdionthefly_part(py::module &m) {
          py::arg("wdm_data"), py::arg("wdm_noise"), py::arg("df"), py::arg("dt"), py::arg("num_m"), py::arg("num_n"), py::arg("num_channel"), py::arg("num_data"), py::arg("num_noise"))
     ;
 
-    m.def("gb_wdm_get_ll", &gb_wdm_get_ll, "wdm get likelihood.");
-
+    #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
+    py::class_<GBComputationGroupWrap>(m, "GBComputationGroupWrapGPU")
+#else
+    py::class_<GBComputationGroupWrap>(m, "GBComputationGroupWrapCPU")
+#endif
+    .def(py::init<>())
+    .def("gb_wdm_get_ll", &GBComputationGroupWrap::gb_wdm_get_ll, "Log-likelihood computation.")
+    
+    ;
 }
 
 

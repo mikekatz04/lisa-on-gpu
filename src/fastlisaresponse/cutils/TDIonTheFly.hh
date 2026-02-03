@@ -13,11 +13,13 @@
 #define TDSplineTDIWaveform TDSplineTDIWaveformGPU
 #define WaveletLookupTable WaveletLookupTableGPU
 #define WDMDomain WDMDomainGPU
+#define GBComputationGroup GBComputationGroupGPU
 #else
 #define GBTDIonTheFly GBTDIonTheFlyCPU
 #define FDSplineTDIWaveform FDSplineTDIWaveformCPU
 #define TDSplineTDIWaveform TDSplineTDIWaveformCPU
 #define WDMDomain WDMDomainCPU
+#define GBComputationGroup GBComputationGroupCPU
 #endif
 
 #define TDI_XYZ 1
@@ -54,7 +56,7 @@ class LISATDIonTheFly{
         CUDA_DEVICE
         void print_orbits_tdi();
         CUDA_DEVICE
-        void fill_link_arrays(int *link_space_craft_0, int *link_space_craft_1);
+        void fill_link_arrays(int *link_space_craft_rec, int *link_space_craft_em);
         // CUDA_DEVICE
         // void LISA_polarization_tensor(double costh, double phi, double *eplus, double *ecross, double *k);
         CUDA_DEVICE
@@ -68,9 +70,9 @@ class LISATDIonTheFly{
         // CUDA_DEVICE
         // void get_t_tdi(double *t_out, double *kr, double *Larm, double t, int a, int b, int c, int n);
         CUDA_DEVICE
-        void get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double *t_data, int N, int bin_i, int *link_space_craft_0, int *link_space_craft_1, Vec k, Vec u, Vec v);
+        void get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double *t_data, int N, int bin_i, int *link_space_craft_rec, int *link_space_craft_em, Vec k, Vec u, Vec v);
         CUDA_DEVICE
-        void get_tdi_Xf_single(cmplx *tdi_channel, double t, double *params, Vec k, Vec u, Vec v, int *link_space_craft_0, int *link_space_craft_1, int bin_i);
+        void get_tdi_Xf_single(cmplx *tdi_channel, double t, double *params, Vec k, Vec u, Vec v, int *link_space_craft_rec, int *link_space_craft_em, int bin_i);
         CUDA_DEVICE
         void extract_amplitude_and_phase(double *flip, double *pjump, int Ns, double *As, double *Dphi, double *M, double *Mf, double *phiR);
         CUDA_DEVICE
@@ -229,28 +231,37 @@ class FDSplineTDIWaveform : public LISATDIonTheFly {
     double get_amp_f(double t, double *params, int spline_i);
 };
 
-
-class WDMDomain{
+class WDMSettings{
   public:
     int num_n;
     int num_m;
     int num_channel;
-    double *wdm_data;
-    double *wdm_noise;
     double df;
     double dt;
+
+    // TODO: add to this?
+    WDMSettings(double df_, double dt_, int num_m_, int num_n_, int num_channel_){
+        num_m = num_m_;
+        num_n = num_n_;
+        num_channel = num_channel_;
+        df = df_;
+        dt = dt_;
+    };
+};
+
+class WDMDomain : public WDMSettings{
+  public:
+    
+    double *wdm_data;
+    double *wdm_noise;
     int num_data;
     int num_noise;
 
-    WDMDomain(double *wdm_data_, double *wdm_noise_, double df_, double dt_, int num_n_, int num_m_, int num_channel_, int num_data_, int num_noise_)
+    WDMDomain(double *wdm_data_, double *wdm_noise_, double df_, double dt_, int num_m_, int num_n_, int num_channel_, int num_data_, int num_noise_):
+    WDMSettings(df_, dt_, num_m_, num_n_, num_channel_)
     {
-        num_n = num_n_;
-        num_m = num_m_;
         wdm_data = wdm_data_;
         wdm_noise = wdm_noise_;
-        num_channel = num_channel_;
-        dt = dt_;
-        df = df_;
         num_data = num_data_;
         num_noise = num_noise_;
     };
@@ -267,26 +278,27 @@ class WDMDomain{
 };
 
 
-class WaveletLookupTable{
+class WaveletLookupTable : public WDMSettings{
   public:
     double *c_nm_all;
     double *s_nm_all;
     
     int num_f;
     int num_fdot;
-    double df;
-    double dfdot;
+    double df_interp;
+    double dfdot_interp;
     double min_f_scaled;
     double min_fdot;
 
-    WaveletLookupTable(double *c_nm_all_, double *s_nm_all_, int num_f_, int num_fdot_, int df_, int dfdot_, double min_f_scaled_, double min_fdot_){
+    WaveletLookupTable(double *c_nm_all_, double *s_nm_all_, int num_f_, int num_fdot_, double df_interp_, double dfdot_interp_, double min_f_scaled_, double min_fdot_, 
+        double df_, double dt_, int num_m_, int num_n_, int num_channel_): WDMSettings(df_, dt_, num_m_, num_n_, num_channel_) {
         // n * num_m + m 
         c_nm_all = c_nm_all_;
         s_nm_all = s_nm_all_;
         num_f = num_f_;
         num_fdot = num_fdot_;
-        df = df_;
-        dfdot = dfdot_;
+        df_interp = df_interp_;
+        dfdot_interp = dfdot_interp_;
         min_f_scaled = min_f_scaled_;
         min_fdot = min_fdot_;
     };
@@ -298,7 +310,9 @@ void fd_spline_run_wave_tdi_wrap(FDSplineTDIWaveform *tdi_on_fly, cmplx *tdi_cha
     double *tdi_amp, double *tdi_phase, double *phi_ref, 
     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels);
 
-void gb_wdm_get_ll_wrap(double *d_h_out, double *h_h_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, int tdi_type);
-
+class GBComputationGroup{
+  public:
+    void gb_wdm_get_ll_wrap(double *d_h_out, double *h_h_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, int tdi_type);
+};
 
 #endif // __TDI_ON_THE_FLY_HH__

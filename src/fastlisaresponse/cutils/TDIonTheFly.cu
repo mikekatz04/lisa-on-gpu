@@ -11,7 +11,11 @@
 // TODO: GET RID OF THIS ??!!!
 double C_SI = 299792458.;
 
+#ifdef __CUDACC__
 #define NUM_THREADS_HERE 64
+#else
+#define NUM_THREADS_HERE 1
+#endif
 
 CUDA_DEVICE
 LISATDIonTheFly::~LISATDIonTheFly()
@@ -390,6 +394,7 @@ int WDMDomain::get_pixel_index_noise(int m, int n, int channel, int noise_index)
 
 int WDMDomain::get_pixel_index_noise_cross_channel(int m, int n, int channel_i, int channel_j, int noise_index)
 {
+    int out = (((noise_index * num_channel + channel_i) * num_channel + channel_j) * num_m + m) * num_n + n;;
     return (((noise_index * num_channel + channel_i) * num_channel + channel_j) * num_m + m) * num_n + n;
 }
 
@@ -422,9 +427,13 @@ void WDMDomain::get_inner_product_value(double *d_h, double *h_h, double wdm_tem
 void WDMDomain::get_inner_product_value_cross_channel(double *d_h, double *h_h, double wdm_template_nm_i, double wdm_template_nm_j, int m, int n, int channel_i, int channel_j, int data_index, int noise_index)
 {
     // assume data is channel_i, template is channel_j
+    // printf("CHECK14 %d %d %d %d\n", n, m, channel_i, channel_j);
+    
     double wdm_data_nm_i = get_pixel_data_value(m, n, channel_i, data_index);
+    // printf("CHECK15 %d %d %d %d\n", n, m, channel_i, channel_j);
     double wdm_noise_nm_ij = get_pixel_noise_value_cross_channel(m, n, channel_i, channel_j, noise_index);
-
+    // printf("CHECK16 %d %d %d %d %e %e %e\n", n, m, channel_i, channel_j, wdm_data_nm_i, wdm_template_nm_j, wdm_noise_nm_ij);
+    
     double val_d_h = wdm_data_nm_i * wdm_template_nm_j * wdm_noise_nm_ij;
     double val_h_h = wdm_template_nm_i * wdm_template_nm_j * wdm_noise_nm_ij;
     *d_h = val_d_h;
@@ -434,9 +443,12 @@ void WDMDomain::get_inner_product_value_cross_channel(double *d_h, double *h_h, 
 
 double WaveletLookupTable::linear_interp(double f_scaled, double fdot, double *z_vals)
 {
-    int f_index = int((f_scaled - min_f_scaled) / df) ;
-    int fdot_index = int((fdot - min_fdot) / dfdot) ;
+    int f_index = int((f_scaled - min_f_scaled) / df_interp) ;
+    int fdot_index = int((fdot - min_fdot) / dfdot_interp) ;
     bool bad = false;
+
+    printf("CHECK18 %e %e %d %d %d %d %e %e %e %e\n", f_scaled, fdot, f_index, fdot_index, num_f, num_fdot, df_interp, dfdot_interp, min_f_scaled, min_fdot);
+    
     if ((f_index < 0) || (f_index >= num_f) || (fdot_index < 0) || (fdot_index >= num_fdot))
     {
         bad = true;
@@ -445,7 +457,7 @@ double WaveletLookupTable::linear_interp(double f_scaled, double fdot, double *z
         fdot_index = 0;
        
 #else
-        throw std::invalid_argument("Asking for value outside interp domain.");
+        // throw std::invalid_argument("Asking for value outside interp domain.");
 #endif
     }
 
@@ -453,11 +465,12 @@ double WaveletLookupTable::linear_interp(double f_scaled, double fdot, double *z
     {
         return 0.0;
     }
-    double x1 = df * f_index;
-    double x2 = df * (f_index + 1);
-    double y1 = df * fdot_index;
-    double y2 = df * (fdot_index + 1);
+    double x1 = df_interp * f_index;
+    double x2 = df_interp * (f_index + 1);
+    double y1 = df_interp * fdot_index;
+    double y2 = df_interp * (fdot_index + 1);
 
+    printf("%d %d %d %d\n", f_index, fdot_index, num_f, num_fdot);
     double z11 = z_vals[fdot_index * num_f + f_index];
     double z12 = z_vals[(fdot_index + 1) * num_f + f_index];
     double z21 = z_vals[fdot_index * num_f + (f_index + 1)];
@@ -472,7 +485,8 @@ double WaveletLookupTable::linear_interp(double f_scaled, double fdot, double *z
 
 double WaveletLookupTable::get_w_mn_lookup(cmplx tdi_channel_val, double f, double fdot, int layer_m)
 {
-    double f_scaled = f - layer_m * df; 
+    double f_scaled = f - layer_m * df;
+    printf("CHECK10 %e %d %d %e\n", f_scaled, layer_m, int(f / df_interp), f); 
     double c_nm = linear_interp(f_scaled, fdot, c_nm_all);
     double s_nm = linear_interp(f_scaled, fdot, s_nm_all);
 
@@ -489,6 +503,8 @@ void WDMDomain::add_ip_contrib(double *d_h_tmp, double *h_h_tmp, double *w_mn, i
     int tid = 0;
 #endif
 
+    // printf("CHECK11 %d %d\n", n, layer_m);
+
     double d_h_val = 0.0;
     double h_h_val = 0.0;
     if (tdi_type == TDI_XYZ)
@@ -497,6 +513,8 @@ void WDMDomain::add_ip_contrib(double *d_h_tmp, double *h_h_tmp, double *w_mn, i
         {
             for (int channel_j = 0; channel_j < 3; channel_j += 1)
             {
+                // printf("CHECK12 %d %d %d %d\n", n, layer_m, channel_i, channel_j);
+    
                 // TODO: change from 9 to 6 calculations?
                 get_inner_product_value_cross_channel(&d_h_val, &h_h_val, w_mn[channel_i], w_mn[channel_j], layer_m, n, channel_i, channel_j, data_index, noise_index);                
                 d_h_tmp[tid] += d_h_val;
@@ -609,6 +627,7 @@ void WDMDomain::add_ip_swap_contrib(double *d_h_add_tmp, double *d_h_remove_tmp,
 CUDA_KERNEL
 void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, int tdi_type)
 {
+    printf("CHECK1\n");
     CUDA_SHARED double d_h_tmp[NUM_THREADS_HERE];
     CUDA_SHARED double h_h_tmp[NUM_THREADS_HERE];
 
@@ -623,15 +642,20 @@ void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIC
     //double freq_channels[3];
     //double fdot_channels[3];
     double f, fdot;
-    CUDA_SHARED double like_out_tmp[NUM_THREADS_HERE];
-
-    CUDA_SHARED int link_space_craft_0[NLINKS];
-    CUDA_SHARED int link_space_craft_1[NLINKS];
+    
+    CUDA_SHARED int link_Space_craft_rec[NLINKS];
+    CUDA_SHARED int link_Space_craft_em[NLINKS];
     // CUDA_SHARED int links[NLINKS];
     
-    tdi_on_fly_here.fill_link_arrays(link_space_craft_0, link_space_craft_1);
+    tdi_on_fly_here.fill_link_arrays(link_Space_craft_rec, link_Space_craft_em);
     CUDA_SYNC_THREADS;
     double tn;
+
+#ifdef __CUDACC__
+    int tid = threadIdx.x;
+#else
+    int tid = 0;
+#endif
     
     int layer_m;
     int data_index, noise_index;
@@ -643,6 +667,11 @@ void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIC
     int num_m = wdm->num_m;
     for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
     {
+        d_h_tmp[tid] = 0.0;
+        h_h_tmp[tid] = 0.0;
+        CUDA_SYNC_THREADS;
+
+        // printf("CHECK2 %d\n", bin_i);
         data_index = data_index_all[bin_i];
         noise_index = noise_index_all[bin_i];
         for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
@@ -650,28 +679,44 @@ void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIC
             params[i] = params_all[bin_i * nparams + i];
         }
         CUDA_SYNC_THREADS;
-
+        printf("CHECK3 %d\n", bin_i);
+        
         tdi_on_fly_here.get_sky_vectors(&k, &u, &v, params);
         for (int n = THREAD_START; n < wdm->num_n; n += BLOCK_INCR)
         {
+            // printf("CHECK4 %d\n", n);
+        
             tn = n * dt;
-            tdi_on_fly_here.get_tdi_Xf_single(&tdi_channel_val[0], tn, params, k, u, v, link_space_craft_0, link_space_craft_1, bin_i);
+            tdi_on_fly_here.get_tdi_Xf_single(&tdi_channel_val[0], tn, params, k, u, v, link_Space_craft_rec, link_Space_craft_em, bin_i);
             
+            // printf("CHECK5 %d\n", n);
+        
             f = tdi_on_fly_here.get_f(tn, params, bin_i);
             fdot = tdi_on_fly_here.get_fdot(tn, params, bin_i);
 
             // all threads have to be able to make it to CUDA_SYNC_THREADS;
             layer_m_here = int(f / wdm->df);
             // TODO: more/less layers?
-            for (int layer_m = layer_m_here - 1; layer_m <= layer_m_here + 1; layer_m += 1)
+            printf("CHECK6 %d %d %e %e\n", n, layer_m_here, f, wdm->df);
+            
+            // exit(0);
+            for (int diff = -1; diff <= +1; diff += 1)
+            // for (int layer_m = layer_m_here; layer_m <= layer_m_here; layer_m += 1)
             {
+                layer_m = layer_m_here + diff;
+                printf("CHECK7 %d %d\n", n, layer_m);
                 if ((layer_m >= 0) && (layer_m <= num_m - 1))
                 {
                     for (int j = 0; j < 3; j += 1) // over channels
                     {
                         w_mn[j] = wdm_lookup->get_w_mn_lookup(tdi_channel_val[j], f, fdot, layer_m);
+                        printf("CHECK8 %e %e %d %d %e %e %e\n", wdm_lookup->df_interp, wdm_lookup->dfdot_interp, layer_m, j, tdi_channel_val[j].real(), tdi_channel_val[j].imag(), w_mn[j]);                
                     }
+                    // printf("CHECK9 %d %d\n", n, layer_m);
+                
                     wdm->add_ip_contrib(d_h_tmp, h_h_tmp, w_mn, layer_m, n, data_index, noise_index, tdi_type);    
+                    // printf("CHECK10 %d %d\n", n, layer_m);
+                
                 }
                 CUDA_SYNC_THREADS;
             }
@@ -689,7 +734,7 @@ void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIC
     }
 };
 
-void gb_wdm_get_ll_wrap(double *d_h_out, double *h_h_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, int tdi_type)
+void GBComputationGroup::gb_wdm_get_ll_wrap(double *d_h_out, double *h_h_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, int tdi_type)
 {
 #ifdef __CUDACC__
     Orbits *d_orbits;
@@ -767,11 +812,11 @@ void gb_wdm_swap_ll_kernel(double *d_h_add_out, double *d_h_remove_out, double *
     CUDA_SHARED double remove_remove_tmp[NUM_THREADS_HERE];
     CUDA_SHARED double add_remove_tmp[NUM_THREADS_HERE];
 
-    CUDA_SHARED int link_space_craft_0[NLINKS];
-    CUDA_SHARED int link_space_craft_1[NLINKS];
+    CUDA_SHARED int link_Space_craft_rec[NLINKS];
+    CUDA_SHARED int link_Space_craft_em[NLINKS];
     // CUDA_SHARED int links[NLINKS];
     
-    tdi_on_fly_here.fill_link_arrays(link_space_craft_0, link_space_craft_1);
+    tdi_on_fly_here.fill_link_arrays(link_Space_craft_rec, link_Space_craft_em);
     CUDA_SYNC_THREADS;
     Vec k_add(0.0, 0.0, 0.0);
     Vec u_add(0.0, 0.0, 0.0);
@@ -809,8 +854,8 @@ void gb_wdm_swap_ll_kernel(double *d_h_add_out, double *d_h_remove_out, double *
         for (int n = THREAD_START; n < wdm->num_n; n += BLOCK_INCR)
         {
             tn = n * dt;
-            tdi_on_fly_here.get_tdi_Xf_single(&tdi_channel_val_add[0], tn, params_add, k_add, u_add, v_add, link_space_craft_0, link_space_craft_1, bin_i);
-            tdi_on_fly_here.get_tdi_Xf_single(&tdi_channel_val_remove[0], tn, params_remove, k_remove, u_remove, v_remove, link_space_craft_0, link_space_craft_1, bin_i);
+            tdi_on_fly_here.get_tdi_Xf_single(&tdi_channel_val_add[0], tn, params_add, k_add, u_add, v_add, link_Space_craft_rec, link_Space_craft_em, bin_i);
+            tdi_on_fly_here.get_tdi_Xf_single(&tdi_channel_val_remove[0], tn, params_remove, k_remove, u_remove, v_remove, link_Space_craft_rec, link_Space_craft_em, bin_i);
             
             f_add = tdi_on_fly_here.get_f(tn, params_add, bin_i);
             fdot_add = tdi_on_fly_here.get_fdot(tn, params_add, bin_i);
@@ -906,27 +951,27 @@ void LISATDIonTheFly::xi_projections(double *xi_p, double *xi_c, Vec u, Vec v, V
 }
 
 CUDA_DEVICE
-void LISATDIonTheFly::fill_link_arrays(int *link_space_craft_0, int *link_space_craft_1)
+void LISATDIonTheFly::fill_link_arrays(int *link_Space_craft_rec, int *link_Space_craft_em)
 {
     for (int i = THREAD_START; i < NLINKS; i += BLOCK_INCR)
     {
-        link_space_craft_0[i] = orbits->sc_r[i];
-        link_space_craft_1[i] = orbits->sc_e[i];
+        link_Space_craft_rec[i] = orbits->sc_r[i];
+        link_Space_craft_em[i] = orbits->sc_e[i];
         // links[i] = orbits->links[i];
         // if (threadIdx.x == 1)
-        // printf("%d %d %d %d\n", orbits->sc_r[i], orbits->sc_e[i], link_space_craft_1[i], link_space_craft_0[i]);
+        // printf("%d %d %d %d\n", orbits->sc_r[i], orbits->sc_e[i], link_Space_craft_em[i], link_Space_craft_rec[i]);
     }
     CUDA_SYNC_THREADS;
 }
 CUDA_DEVICE
-void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double *t_data, int N, int bin_i, int *link_space_craft_0, int *link_space_craft_1, Vec k, Vec u, Vec v)
+void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double *t_data, int N, int bin_i, int *link_Space_craft_rec, int *link_Space_craft_em, Vec k, Vec u, Vec v)
 {
     double t;
     cmplx tdi_channel_tmp[3];
     for (int i = THREAD_START; i < N; i += BLOCK_INCR)
     {
         t = t_data[i];
-        get_tdi_Xf_single(&tdi_channel_tmp[0], t, params, k, u, v, link_space_craft_0, link_space_craft_1, bin_i);
+        get_tdi_Xf_single(&tdi_channel_tmp[0], t, params, k, u, v, link_Space_craft_rec, link_Space_craft_em, bin_i);
         
         for (int channel = 0; channel < tdi_config->num_channels; channel += 1)
         {
@@ -935,9 +980,9 @@ void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double
     }
 }
 
-// void LISATDIonTheFly::get_tdi_Xf_single_with_f_fdot(cmplx *tdi_channel, double *f, double *fdot, double t, double *params, Vec *k, Vec *u, Vec *v, int *link_space_craft_0, int *link_space_craft_1)
+// void LISATDIonTheFly::get_tdi_Xf_single_with_f_fdot(cmplx *tdi_channel, double *f, double *fdot, double t, double *params, Vec *k, Vec *u, Vec *v, int *link_Space_craft_rec, int *link_Space_craft_em)
 // {
-//     get_tdi_Xf_single(tdi_channel, t, k, u, v, link_space_craft_0, link_space_craft_1);
+//     get_tdi_Xf_single(tdi_channel, t, k, u, v, link_Space_craft_rec, link_Space_craft_em);
 
 //     cmplx tdi_channels_up[3];
 //     cmplx tdi_channels_down[3];
@@ -946,8 +991,8 @@ void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double
 //     double t_down = t * (1. - eps_rel);
 //     double h = t_up - t;
 
-//     get_tdi_Xf_single(tdi_channels_up, t_up, k, u, v, link_space_craft_0, link_space_craft_1);
-//     get_tdi_Xf_single(tdi_channels_down, t_down, k, u, v, link_space_craft_0, link_space_craft_1);
+//     get_tdi_Xf_single(tdi_channels_up, t_up, k, u, v, link_Space_craft_rec, link_Space_craft_em);
+//     get_tdi_Xf_single(tdi_channels_down, t_down, k, u, v, link_Space_craft_rec, link_Space_craft_em);
 
 //     double phase_mid, phase_up, phase_down;
 
@@ -967,27 +1012,27 @@ void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double
 //     }
 // }
 
-void LISATDIonTheFly::get_tdi_Xf_single(cmplx *tdi_channel, double t, double *params, Vec k, Vec u, Vec v, int *link_space_craft_0, int *link_space_craft_1, int bin_i)
+void LISATDIonTheFly::get_tdi_Xf_single(cmplx *tdi_channel, double t, double *params, Vec k, Vec u, Vec v, int *link_Space_craft_rec, int *link_Space_craft_em, int bin_i)
 {
-    Vec x0;
-    Vec x1;
+    Vec x_rec;
+    Vec x_em;
     Vec n;
-    double delay0, phase_change;
-    double delay1;
+    double delay_rec, phase_change;
+    double delay_em;
     double xi_p;
     double xi_c;
-    double k_dot_n, k_dot_x0, k_dot_x1;
+    double k_dot_n, k_dot_x_rec, k_dot_x_em;
     double L;
-    double hp_del0, hp_del1, hc_del0, hc_del1;
+    double hp_del_rec, hp_del_em, hc_del_rec, hc_del_em;
     cmplx I(0.0, 1.0);
     double pre_factor, large_factor_real, large_factor_imag;
 
     tdi_channel[0] = 0.0;
     tdi_channel[1] = 0.0;
     tdi_channel[2] = 0.0;
-    int sc0, sc1;
+    int sc_r, sc_e;
     double total_delay;
-    double time_eval;
+    double time_eval, time_rec, time_em;
     double norm;
     for (int unit_i = 0; unit_i < tdi_config->num_units; unit_i += 1)
     {
@@ -1021,41 +1066,45 @@ void LISATDIonTheFly::get_tdi_Xf_single(cmplx *tdi_channel, double t, double *pa
         }
         
         time_eval = t - total_delay;
+        time_rec = time_eval;
 
-        sc0 = link_space_craft_0[base_link_index];
-        sc1 = link_space_craft_1[base_link_index];
+        L = orbits->get_light_travel_time(time_rec, base_link);
         
-        x0 = orbits->get_pos(time_eval, sc0);
-        x1 = orbits->get_pos(time_eval, sc1);
-        n = x0 - x1; // # TODO: check if this right
+        time_em = time_rec - L;
+
+        sc_r = link_Space_craft_rec[base_link_index];
+        sc_e = link_Space_craft_em[base_link_index];
+
+        
+        x_rec = orbits->get_pos(time_rec, sc_r);
+        x_em = orbits->get_pos(time_em, sc_e);
+        n = x_rec - x_em; // # TODO: check if this right
         norm = sqrt(n.dot(n));
         n = n / norm;
 
         k_dot_n = k.dot(n);
-        k_dot_x0 = k.dot(x0); // receiver
-        k_dot_x1 = k.dot(x1); // emitter
+        k_dot_x_rec = k.dot(x_rec); // receiver
+        k_dot_x_em = k.dot(x_em); // emitter
 
-        L = orbits->get_light_travel_time(time_eval, base_link);
-        
         pre_factor = 1. / (1. - k_dot_n);
         
-        delay0 = time_eval - k_dot_x0 * C_inv;
-        delay1 = time_eval - L - k_dot_x1 * C_inv;
+        delay_rec = time_rec - k_dot_x_rec * C_inv;
+        delay_em = time_em - k_dot_x_em * C_inv;
 
         xi_projections(&xi_p, &xi_c, u, v, n);
 
         phase_change = 0.0; // the real part
-        get_hp_hc(&hp_del0, &hc_del0, delay0, params, phase_change, bin_i);
-        get_hp_hc(&hp_del1, &hc_del1, delay1, params, phase_change, bin_i);
+        get_hp_hc(&hp_del_rec, &hc_del_rec, delay_rec, params, phase_change, bin_i);
+        get_hp_hc(&hp_del_em, &hc_del_em, delay_em, params, phase_change, bin_i);
         
-        large_factor_real = (hp_del1 - hp_del0) * xi_p + (hc_del1 - hc_del0) * xi_c;
+        large_factor_real = (hp_del_em - hp_del_rec) * xi_p + (hc_del_em - hc_del_rec) * xi_c;
         
         phase_change = M_PI / 2.0; // the real part
-        get_hp_hc(&hp_del0, &hc_del0, delay0, params, phase_change, bin_i);
-        get_hp_hc(&hp_del1, &hc_del1, delay1, params, phase_change, bin_i);
+        get_hp_hc(&hp_del_rec, &hc_del_rec, delay_rec, params, phase_change, bin_i);
+        get_hp_hc(&hp_del_em, &hc_del_em, delay_em, params, phase_change, bin_i);
         
-        large_factor_imag = (hp_del0 - hp_del1) * xi_p + (hc_del0 - hc_del1) * xi_c;
-        // printf("FLY: %d %.12e %d %d %d %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e\n", i, t, channel, base_link_index, base_link, pre_factor, large_factor_real, time_eval, hp_del0, hp_del1, delay0, params[0], params[1], params[2]);
+        large_factor_imag = (hp_del_em - hp_del_rec) * xi_p + (hc_del_em - hc_del_rec) * xi_c;
+        // printf("FLY: %d %.12e %d %d %d %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e\n", i, t, channel, base_link_index, base_link, pre_factor, large_factor_real, time_eval, hp_del_rec, hp_del_em, delay_rec, params[0], params[1], params[2]);
         tdi_channel[channel] += sign * pre_factor * (large_factor_real + I * large_factor_imag);
     }
 }
@@ -1149,17 +1198,17 @@ void LISATDIonTheFly::get_tdi(void *buffer, int buffer_length, cmplx *tdi_channe
     }
 #endif
 
-    CUDA_SHARED int link_space_craft_0[NLINKS];
-    CUDA_SHARED int link_space_craft_1[NLINKS];
+    CUDA_SHARED int link_Space_craft_rec[NLINKS];
+    CUDA_SHARED int link_Space_craft_em[NLINKS];
     // CUDA_SHARED int links[NLINKS];
     
-    fill_link_arrays(link_space_craft_0, link_space_craft_1);
+    fill_link_arrays(link_Space_craft_rec, link_Space_craft_em);
     CUDA_SYNC_THREADS;
     Vec k(0.0, 0.0, 0.0);
     Vec u(0.0, 0.0, 0.0);
     Vec v(0.0, 0.0, 0.0);
     get_sky_vectors(&k, &u, &v, params);
-    get_tdi_Xf(tdi_channels_arr, params, t_arr, N, bin_i, link_space_craft_0, link_space_craft_1, k, u, v);
+    get_tdi_Xf(tdi_channels_arr, params, t_arr, N, bin_i, link_Space_craft_rec, link_Space_craft_em, k, u, v);
     CUDA_SYNC_THREADS;
     
     // will get reset inside function
@@ -1643,9 +1692,9 @@ double LISATDIonTheFly::get_phase_ref(double t, double *params, int bin_i)
     
     get_sky_vectors(&k, &u, &v, params);
     // reference phase is at spacecraft 1
-    Vec x0 = orbits->get_pos(t, 1);
-    double k_dot_x0 = k.dot(x0);
-    double t_sc = t - k_dot_x0 * C_inv;
+    Vec x_rec = orbits->get_pos(t, 1);
+    double k_dot_x_rec = k.dot(x_rec);
+    double t_sc = t - k_dot_x_rec * C_inv;
     double phase_ref = get_phase(t_sc, params, bin_i);
     return phase_ref;
 }
@@ -1879,9 +1928,9 @@ void gb_run_wave_tdi_wrap(GBTDIonTheFly *tdi_on_fly, cmplx *tdi_channels_arr,
     double *tdi_amp, double *tdi_phase, double *phi_ref, 
     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels)
 {
-    printf("CHECK44\n");
+    // printf("CHECK44\n");
 #ifdef __CUDACC__
-    printf("CHECK55\n");
+    // printf("CHECK55\n");
     GBTDIonTheFly *gb_here = new GBTDIonTheFly(tdi_on_fly->orbits, tdi_on_fly->tdi_config, tdi_on_fly->T);
     Orbits *d_orbits;
     cudaMalloc(&d_orbits, sizeof(Orbits));
@@ -1910,7 +1959,7 @@ void gb_run_wave_tdi_wrap(GBTDIonTheFly *tdi_on_fly, cmplx *tdi_channels_arr,
     gpuErrchk(cudaFree(d_tdi_config));
     gpuErrchk(cudaFree(d_gb_here));
     delete gb_here;
-    printf("CHECK66\n");
+    // printf("CHECK66\n");
 #else
 
     // make buffer 
@@ -2283,15 +2332,15 @@ void fd_spline_run_wave_tdi_wrap(FDSplineTDIWaveform *tdi_on_fly, cmplx *tdi_cha
 //     A /= denominator;
 //     */
 
-//     // if ((i == 0) && (link_i == 0)) printf("%.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e\n", L, delay0, delay1, x0[0], x0[1], x0[2],x1[0], x1[1], x1[2]);
-//     double clipped_delay0 = t; 
-//     int integer_delay0 = (int)ceil(clipped_delay0 * sampling_frequency) - 1;
-//     double fraction0 = 1.0 + integer_delay0 - clipped_delay0 * sampling_frequency;
+//     // if ((i == 0) && (link_i == 0)) printf("%.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e\n", L, delay_rec, delay_em, x0[0], x0[1], x0[2],x1[0], x1[1], x1[2]);
+//     double clipped_delay_rec = t; 
+//     int integer_delay_rec = (int)ceil(clipped_delay_rec * sampling_frequency) - 1;
+//     double fraction0 = 1.0 + integer_delay_rec - clipped_delay_rec * sampling_frequency;
     
 //     // int h, int d, double e, double *A_arr, double deps, double *E_arr, int start_input_ind
 //     // half_point_count, integer_delay, fraction, A_arr, deps, E_arr, start_input_ind
 //     double e = fraction0;
-//     int d = integer_delay0;
+//     int d = integer_delay_rec;
     
 //     int ind = (int)(e / deps);
 
