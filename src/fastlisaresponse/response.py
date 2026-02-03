@@ -686,7 +686,7 @@ class ResponseWrapper(FastLISAResponseParallelModule):
             with the :code:`*args` formalism producing a list. :code:`index_beta`
             tells the class the index of the ecliptic latitude (or ecliptic polar angle)
             within this list of parameters.
-        t0 (double, optional): Start of returned waveform in seconds leaving ample time for garbage at
+        t_buffer (double, optional): Start of returned waveform in seconds (with respect to the start of the observation) leaving ample time for garbage at
             the beginning of the waveform. It also removed the same amount from the end. (Default: 10000.0)
         flip_hx (bool, optional): If True, :code:`waveform_gen` produces :math:`h_+ - ih_x`.
             :class:`pyResponseTDI` takes :math:`h_+ + ih_x`, so this setting will
@@ -701,8 +701,8 @@ class ResponseWrapper(FastLISAResponseParallelModule):
             convert it with :math:`\beta=\pi / 2 - \Theta`. (Default: :code:`True`)
         force_backend (str, optional): If given, run this class on the requested backend. 
             Options are ``"cpu"``, ``"cuda11x"``, ``"cuda12x"``. (default: ``None``)
-        remove_garbage (bool or str, optional): If True, it removes everything before ``t0``
-            and after the end time - ``t0``. If ``str``, it must be ``"zero"``. If ``"zero"``,
+        remove_garbage (bool or str, optional): If True, it removes everything before ``t_buffer``
+            and after the end time - ``t_buffer``. If ``str``, it must be ``"zero"``. If ``"zero"``,
             it will not remove the points, but set them to zero. This is ideal for PE. (Default: ``True``)
         n_overide (int, optional): If not ``None``, this will override the determination of
             the number of points, ``n``, from ``int(T/dt)`` to the ``n_overide``. This is used
