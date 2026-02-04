@@ -240,6 +240,7 @@ class WDMSettings{
     double dt;
 
     // TODO: add to this?
+    CUDA_CALLABLE_MEMBER
     WDMSettings(double df_, double dt_, int num_m_, int num_n_, int num_channel_){
         num_m = num_m_;
         num_n = num_n_;
@@ -257,6 +258,7 @@ class WDMDomain : public WDMSettings{
     int num_data;
     int num_noise;
 
+    CUDA_CALLABLE_MEMBER
     WDMDomain(double *wdm_data_, double *wdm_noise_, double df_, double dt_, int num_m_, int num_n_, int num_channel_, int num_data_, int num_noise_):
     WDMSettings(df_, dt_, num_m_, num_n_, num_channel_)
     {
@@ -265,15 +267,25 @@ class WDMDomain : public WDMSettings{
         num_data = num_data_;
         num_noise = num_noise_;
     };
+    CUDA_DEVICE
     int get_pixel_index(int m, int n, int channel, int data_index);
+    CUDA_DEVICE
     int get_pixel_index_noise(int m, int n, int channel, int noise_index);
+    CUDA_DEVICE
     int get_pixel_index_noise_cross_channel(int m, int n, int channel_i, int channel_j, int noise_index);
+    CUDA_DEVICE
     double get_pixel_data_value(int m, int n, int channel,  int data_index);
+    CUDA_DEVICE
     double get_pixel_noise_value(int m, int n, int channel, int noise_index);
+    CUDA_DEVICE
     double get_pixel_noise_value_cross_channel(int m, int n, int channel_i, int channel_j, int noise_index);
+    CUDA_DEVICE
     void get_inner_product_value(double *d_h, double *h_h, double wdm_template_nm, int m, int n, int channel, int data_index, int noise_index);
+    CUDA_DEVICE
     void get_inner_product_value_cross_channel(double *d_h, double *h_h, double wdm_template_nm_i, double wdm_template_nm_j, int m, int n, int channel_i, int channel_j, int data_index, int noise_index);
+    CUDA_DEVICE
     void add_ip_contrib(double *d_h_tmp, double *h_h_tmp, double *wdm_nm, int layer_m, int n, int data_index, int noise_index, int tdi_type);
+    CUDA_DEVICE
     void add_ip_swap_contrib(double *d_h_add_tmp, double *d_h_remove_tmp, double *add_add_tmp, double *remove_remove_tmp, double *add_remove_tmp, double *wdm_nm_add, double *wdm_nm_remove, int layer_m, int n, int data_index, int noise_index, int tdi_type);
 };
 
@@ -290,6 +302,7 @@ class WaveletLookupTable : public WDMSettings{
     double min_f_scaled;
     double min_fdot;
 
+    CUDA_CALLABLE_MEMBER
     WaveletLookupTable(double *c_nm_all_, double *s_nm_all_, int num_f_, int num_fdot_, double df_interp_, double dfdot_interp_, double min_f_scaled_, double min_fdot_, 
         double df_, double dt_, int num_m_, int num_n_, int num_channel_): WDMSettings(df_, dt_, num_m_, num_n_, num_channel_) {
         // n * num_m + m 
@@ -302,7 +315,9 @@ class WaveletLookupTable : public WDMSettings{
         min_f_scaled = min_f_scaled_;
         min_fdot = min_fdot_;
     };
+    CUDA_DEVICE
     double linear_interp(double f_scaled, double fdot, double *z_vals);
+    CUDA_DEVICE
     double get_w_mn_lookup(cmplx tdi_channel_val, double f, double fdot, int layer_m);
 };
 

@@ -367,7 +367,7 @@ LISATDIonTheFly::~LISATDIonTheFly()
 // }
 
 
-// WILL PROBABLY HAVE TO BE SPLINE
+CUDA_DEVICE
 int WDMDomain::get_pixel_index(int m, int n, int channel, int data_index)
 {
     if (data_index >= num_data)
@@ -380,6 +380,7 @@ int WDMDomain::get_pixel_index(int m, int n, int channel, int data_index)
     return ((data_index * num_channel + channel) * num_m + m) * num_n + n;
 }
 
+CUDA_DEVICE
 int WDMDomain::get_pixel_index_noise(int m, int n, int channel, int noise_index)
 {
     if (noise_index >= num_noise)
@@ -392,27 +393,32 @@ int WDMDomain::get_pixel_index_noise(int m, int n, int channel, int noise_index)
     return ((noise_index * num_channel + channel) * num_m + m) * num_n + n;
 }
 
+CUDA_DEVICE
 int WDMDomain::get_pixel_index_noise_cross_channel(int m, int n, int channel_i, int channel_j, int noise_index)
 {
     int out = (((noise_index * num_channel + channel_i) * num_channel + channel_j) * num_m + m) * num_n + n;;
     return (((noise_index * num_channel + channel_i) * num_channel + channel_j) * num_m + m) * num_n + n;
 }
 
+CUDA_DEVICE
 double WDMDomain::get_pixel_data_value(int m, int n, int channel,  int data_index)
 {
     return wdm_data[get_pixel_index(m, n, channel, data_index)];
 }
 
+CUDA_DEVICE
 double WDMDomain::get_pixel_noise_value(int m, int n, int channel, int noise_index)
 {
     return wdm_noise[get_pixel_index_noise(m, n, channel, noise_index)];
 }
 
+CUDA_DEVICE
 double WDMDomain::get_pixel_noise_value_cross_channel(int m, int n, int channel_i, int channel_j, int noise_index)
 {
     return wdm_noise[get_pixel_index_noise_cross_channel(m, n, channel_i, channel_j, noise_index)];
 }
 
+CUDA_DEVICE
 void WDMDomain::get_inner_product_value(double *d_h, double *h_h, double wdm_template_nm, int m, int n, int channel, int data_index, int noise_index)
 {
     double wdm_data_nm = get_pixel_data_value(m, n, channel, data_index);
@@ -424,6 +430,7 @@ void WDMDomain::get_inner_product_value(double *d_h, double *h_h, double wdm_tem
     *h_h = val_h_h;
 }
 
+CUDA_DEVICE
 void WDMDomain::get_inner_product_value_cross_channel(double *d_h, double *h_h, double wdm_template_nm_i, double wdm_template_nm_j, int m, int n, int channel_i, int channel_j, int data_index, int noise_index)
 {
     // assume data is channel_i, template is channel_j
@@ -440,7 +447,7 @@ void WDMDomain::get_inner_product_value_cross_channel(double *d_h, double *h_h, 
     *h_h = val_h_h;
 }
 
-
+CUDA_DEVICE
 double WaveletLookupTable::linear_interp(double f_scaled, double fdot, double *z_vals)
 {
     int f_index = int((f_scaled - min_f_scaled) / df_interp) ;
@@ -483,6 +490,7 @@ double WaveletLookupTable::linear_interp(double f_scaled, double fdot, double *z
     return f_xy;
 }
 
+CUDA_DEVICE
 double WaveletLookupTable::get_w_mn_lookup(cmplx tdi_channel_val, double f, double fdot, int layer_m)
 {
     double f_scaled = f - layer_m * df;
@@ -494,7 +502,7 @@ double WaveletLookupTable::get_w_mn_lookup(cmplx tdi_channel_val, double f, doub
     return w_mn;
 }
 
-
+CUDA_DEVICE
 void WDMDomain::add_ip_contrib(double *d_h_tmp, double *h_h_tmp, double *w_mn, int layer_m, int n, int data_index, int noise_index, int tdi_type)
 {
 #ifdef __CUDACC__
@@ -552,7 +560,7 @@ void WDMDomain::add_ip_contrib(double *d_h_tmp, double *h_h_tmp, double *w_mn, i
     }
 }
 
-
+CUDA_DEVICE
 void WDMDomain::add_ip_swap_contrib(double *d_h_add_tmp, double *d_h_remove_tmp, double *add_add_tmp, double *remove_remove_tmp, double *add_remove_tmp, double *w_mn_add, double *w_mn_remove, int layer_m, int n, int data_index, int noise_index, int tdi_type)
 {
 #ifdef __CUDACC__
@@ -622,6 +630,7 @@ void WDMDomain::add_ip_swap_contrib(double *d_h_add_tmp, double *d_h_remove_tmp,
 #endif
     }
 }
+
 #define N_PARAMS_MAX 20
 
 CUDA_KERNEL
