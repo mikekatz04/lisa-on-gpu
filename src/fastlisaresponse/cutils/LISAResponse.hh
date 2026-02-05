@@ -35,4 +35,5 @@ class LISAResponse{
                   double sampling_frequency, int buffer_integer,
                   double *A_in_, double deps, int num_A, double *E_in_, int projections_start_ind);
 };
+
 #endif // __LISA_RESPONSE__
