@@ -52,7 +52,7 @@ set_property(
 # backend if it is compiled. See the documentation of CUDA_ARCHITECTURES:
 # https://cmake.org/cmake/help/latest/prop_tgt/CUDA_ARCHITECTURES.html
 set(
-  FASTLISA_CUDA_ARCH "native"
+  FASTLISA_CUDA_ARCH "70,80,86,90"
   CACHE STRING "CUDA Architecture targetted for Fast LISA Response compilation (see doc of \
           CMAKE_CUDA_ARCHITECTURES)."
 )

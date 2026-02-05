@@ -82,7 +82,7 @@ optional-dependencies.sampling = [
 optional-dependencies.testing = [
   "matplotlib",
   "astropy",
-  "lisatools",
+  "lisaanalysistools",
   "gpubackendtools",
 ]
 
