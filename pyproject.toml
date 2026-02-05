@@ -82,6 +82,8 @@ optional-dependencies.sampling = [
 optional-dependencies.testing = [
   "matplotlib",
   "astropy",
+  "lisatools",
+  "gpubackendtools",
 ]
 
 [tool.setuptools_scm]

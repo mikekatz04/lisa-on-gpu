@@ -168,7 +168,7 @@ jobs:
         run: |
           sed -i'' -e 's|" #@NAMESUFFIX@|-${{ matrix.release }}"|g' pyproject.toml
       - name: Add cuda1xx python dependency for lisatools.
-        if: matrix.kind != 'cuda_plugin'
+        if: matrix.kind == 'cuda_plugin'
         run: |
           sed -i'' -e 's|" #@LISATOOLS_CUDA@|lisaanalysistools-${{ matrix.release }}"|g' pyproject.toml
           sed -i 's/) #@ADDCUDAHERE@/ CUDA)/g' CMakeLists.txt
@@ -270,7 +270,7 @@ jobs:
             CUDADIR=/usr/local/cuda
             CC=gcc
             CXX=g++
-            CUDACXX=$(nvcc -ccbin /opt/rh/gcc-toolset-11/root/usr/bin/gcc)
+            CUDACXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++
             SETUPTOOLS_SCM_PRETEND_VERSION="${{ needs.version.outputs.version }}"
           CIBW_REPAIR_WHEEL_COMMAND: auditwheel repair -w {dest_dir} {wheel} --exclude "libcudart.so.${{ matrix.cuda_major }}" --exclude "libcusparse.so.${{ matrix.cuda_major }}" --exclude "libcublas.so.${{ matrix.cuda_major }}" --exclude "libnvJitLink.so.${{ matrix.cuda_major }}" --exclude "libcublasLt.so.${{ matrix.cuda_major }}"
       # =====================
