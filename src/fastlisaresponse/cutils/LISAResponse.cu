@@ -286,6 +286,9 @@ void TDI_delay(double *delayed_links, double *input_links, int num_inputs, int n
     int point_count = order + 1;
     int half_point_count = int(point_count / 2);
     int start2, increment2;
+
+    double t0_offset = t_arr[0];
+            
 #ifdef __CUDACC__
     start2 = tdi_start_ind + threadIdx.x + blockDim.x * blockIdx.x;
     increment2 = blockDim.x * gridDim.x;
@@ -332,7 +335,8 @@ void TDI_delay(double *delayed_links, double *input_links, int num_inputs, int n
             // at i = 0, delay ind should be at TDI_buffer = total_buffer - projection_buffer
 
             // delays are still with respect to projection start
-            clipped_delay = delay;
+            // Subtract t0 (first element of t_arr) to get array-relative delays
+            clipped_delay = delay - t0_offset;
             integer_delay = (int)ceil(clipped_delay * sampling_frequency) - 1;
             fraction = 1.0 + integer_delay - clipped_delay * sampling_frequency;
 
@@ -504,7 +508,7 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
     CUDA_SYNC_THREADS;
     int point_count = order + 1;
     int half_point_count = int(point_count / 2);
-
+    double t0_offset = t_data[0];
 #ifdef __CUDACC__
     start = blockIdx.y;
     increment = gridDim.y;
@@ -605,13 +609,15 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
             delay_em = t_em - k_dot_x_em * C_inv;
 
             // start time for hp hx is really -(projection_buffer * dt)
+            // Subtract t0 (first element of t_data) to get array-relative delays
+            
 
             // if ((i == 0) && (link_i == 0)) printf("%.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e\n", L, delay_rec, delay_em, x_rec[0], x_rec[1], x_rec[2],x_em[0], x_em[1], x_em[2]);
-            clipped_delay_rec = delay_rec; //  - start_wave_time;
+            clipped_delay_rec = delay_rec - t0_offset; //  - start_wave_time;
             integer_delay_rec = (int)ceil(clipped_delay_rec * sampling_frequency) - 1;
             fraction_rec = 1.0 + integer_delay_rec - clipped_delay_rec * sampling_frequency;
 
-            clipped_delay_em = delay_em; //  - start_wave_time;
+            clipped_delay_em = delay_em - t0_offset; //  - start_wave_time;
             integer_delay_em = (int)ceil(clipped_delay_em * sampling_frequency) - 1;
             fraction_em = 1.0 + integer_delay_em - clipped_delay_em * sampling_frequency;
 

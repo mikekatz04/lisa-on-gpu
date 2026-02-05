@@ -48,7 +48,7 @@ class GBWave(FastLISAResponseParallelModule):
 
         fddot = 11.0 / 3.0 * fdot**2 / f
 
-        # phi0 is phi(t = 0) not phi(t = t0)
+        # phi0 is phi(t = 0) not phi(t = t_buffer)
         phase = (
             2 * np.pi * (f * t + 1.0 / 2.0 * fdot * t**2 + 1.0 / 6.0 * fddot * t**3)
             - phi0
@@ -70,7 +70,7 @@ class ResponseTest(unittest.TestCase):
         gb = GBWave(force_backend=force_backend)
 
         T = 2.0  # years
-        t0 = 10000.0  # time at which signal starts (chops off data at start of waveform where information is not correct)
+        t_buffer = 10000.0  # time at which signal starts (chops off data at start of waveform where information is not correct)
 
         sampling_frequency = 0.1
         dt = 1 / sampling_frequency
@@ -100,7 +100,7 @@ class ResponseTest(unittest.TestCase):
             dt,
             index_lambda,
             index_beta,
-            t0=t0,
+            t_buffer=t_buffer,
             flip_hx=False,  # set to True if waveform is h+ - ihx
             force_backend=force_backend,
             remove_sky_coords=True,  # True if the waveform generator does not take sky coordinates
