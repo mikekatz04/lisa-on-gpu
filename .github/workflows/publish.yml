@@ -251,7 +251,7 @@ jobs:
           # Use dnf to install cuda-toolkit and gcc inside the manylinux container
           CIBW_BEFORE_ALL: >
             dnf install -y scl-utils &&
-            dnf install -y gcc-toolset-13-toolchain &&
+            dnf install -y gcc-toolset-13 &&
             source scl_source enable gcc-toolset-13 &&
             dnf -y install epel-release &&
             dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel7/x86_64/cuda-rhel7.repo &&
