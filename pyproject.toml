@@ -3,10 +3,10 @@ requires = [
   "Cython",
   "numpy",
   "astropy",  # TODO: remove astropy?
-  "gpubackendtools==0.0.15", # @ file:///home/mlkatz/GPUBackendTools", 
+  "gpubackendtools>=0.0.15", # @ file:///home/mlkatz/GPUBackendTools", 
   "scikit_build_core",
   "pybind11",
-  "lisaanalysistools==1.2.4",  #  @ file:///home/mlkatz/LISAanalysistools",  # /Users/mlkatz/Research/LISAanalysistools
+  "lisaanalysistools>=1.2.4",  #  @ file:///home/mlkatz/LISAanalysistools",  # /Users/mlkatz/Research/LISAanalysistools
   #@LISATOOLS_CUDA@,
 ]
 build-backend = "scikit_build_core.build"
