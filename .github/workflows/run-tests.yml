@@ -35,9 +35,11 @@ jobs:
           python --version
           which cmake
           cmake --version
+          export NPY_DISABLE_CPU_FEATURES=AVX512F,AVX512CD,AVX512_KNL,AVX512_KNM,AVX512_SKX,AVX512_CLX,AVX512_CNL,AVX512_ICL,AVX512_SPR
           python -m pip install -v .[testing]
       - name: Run tests alone without coverage.
         run: |
+          export NPY_DISABLE_CPU_FEATURES=AVX512F,AVX512CD,AVX512_KNL,AVX512_KNM,AVX512_SKX,AVX512_CLX,AVX512_CNL,AVX512_ICL,AVX512_SPR
           python -m unittest tests/test*
       # - name: Install coverage
       #   run: |
