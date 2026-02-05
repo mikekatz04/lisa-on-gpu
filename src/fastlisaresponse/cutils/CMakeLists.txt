@@ -65,18 +65,11 @@ execute_process(
   OUTPUT_VARIABLE LISATOOLS_VERSION
   OUTPUT_STRIP_TRAILING_WHITESPACE)
 
-execute_process(
-COMMAND "${PYTHON_EXECUTABLE}" -c "if True:
-  from lisatools_backend_cpu import pycppdetector
-  print(pycppdetector.__file__)"
-OUTPUT_VARIABLE LISATOOLS_DETECTOR_CPU
-OUTPUT_STRIP_TRAILING_WHITESPACE)
 
 message(STATUS "LISATOOLS location is ${LISATOOLS_DIR}.")
 file(GLOB MY_FILES "${LISATOOLS_DIR}/cutils/*")
 message(STATUS "LISATOOLS Source files: ${MY_FILES}")
 message(STATUS "LISATOOLS version: ${LISATOOLS_VERSION}")
-message(STATUS "LISATOOLS_DETECTOR_CPU: ${LISATOOLS_DETECTOR_CPU}")
 
 # I. Process fastlisaresponse_utils_wrap.pyx into a C++ file
 
@@ -102,15 +95,6 @@ if(FASTLISA_WITH_CPU)
     message(FATAL_ERROR "${LISATOOLS_DIR}/cutils/binding.hpp does not exist.")
   endif()
 
-  get_filename_component(LISATOOLS_DETECTOR_CPU_DIR ${LISATOOLS_DETECTOR_CPU} DIRECTORY)
-  get_filename_component(LISATOOLS_DETECTOR_CPU_LIB_NAME ${LISATOOLS_DETECTOR_CPU} NAME)
-  message(STATUS "dir: ${LISATOOLS_DETECTOR_CPU_DIR}")
-
-  find_library(LISATOOLS_DETECTOR_STATIC_LIB_CPU
-      NAMES detector # The name of the library (without 'lib' prefix or '.a' extension)
-      PATHS ${LISATOOLS_DETECTOR_CPU_DIR} # The specific folder to check
-      NO_DEFAULT_PATH_LOGIC # Optional: Restricts search to only the provided PATHS
-  )
 
   if(LISATOOLS_DETECTOR_STATIC_LIB_CPU)
       message("Found static library at: ${LISATOOLS_DETECTOR_STATIC_LIB_CPU}")
@@ -123,8 +107,6 @@ if(FASTLISA_WITH_CPU)
   add_library(fastlisaresponse_cpu_response_static STATIC Detector.cxx LISAResponse.cxx)
   apply_cpu_backend_common_options(response fastlisaresponse fastlisaresponse true )
   target_include_directories(fastlisaresponse_cpu_response_static PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})  
-  # target_link_libraries(fastlisaresponse_cpu_response_static PUBLIC ${LISATOOLS_DETECTOR_STATIC_LIB_CPU})
-  # target_link_directories(fastlisaresponse_cpu_response_static PUBLIC ${LISATOOLS_DETECTOR_CPU_DIR})
   target_sources(fastlisaresponse_cpu_response_static PUBLIC FILE_SET HEADERS FILES
                                         LISAResponse.hh)
 
@@ -133,7 +115,6 @@ if(FASTLISA_WITH_CPU)
   
   # Link your target to the imported target name
   target_link_libraries(fastlisaresponse_cpu_responselisa PUBLIC fastlisaresponse_cpu_response_static)  #  ${LISATOOLS_DETECTOR_STATIC_LIB_CPU})
-  # target_link_directories(fastlisaresponse_cpu_responselisa PUBLIC ${LISATOOLS_DETECTOR_CPU_DIR})  
   target_include_directories(fastlisaresponse_cpu_responselisa PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})  
   target_sources(fastlisaresponse_cpu_responselisa PUBLIC FILE_SET HEADERS FILES
                                           binding_flr.hpp)

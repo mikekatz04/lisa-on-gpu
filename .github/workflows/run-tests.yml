@@ -4,11 +4,9 @@ on:
   push:
     branches:
       - master
-      - dev-installl
   pull_request:
     branches:
       - master
-      - dev-installl
 
   workflow_dispatch:
 
