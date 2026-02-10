@@ -101,13 +101,13 @@ jobs:
             arch: x86_64
             kind: core
             reqpython: '>=3.10'
-          - release: cuda11x
-            os: ubuntu-latest
-            arch: x86_64
-            kind: cuda_plugin
-            cuda_major: 11
-            cuda_minor: 8
-            reqpython: '>=3.10'
+          # - release: cuda11x
+          #   os: ubuntu-latest
+          #   arch: x86_64
+          #   kind: cuda_plugin
+          #   cuda_major: 11
+          #   cuda_minor: 8
+          #   reqpython: '>=3.10'
           - release: cuda12x
             os: ubuntu-latest
             arch: x86_64
@@ -120,18 +120,18 @@ jobs:
             arch: aarch64
             kind: core
             reqpython: '>=3.10'
-          - release: cuda11x
-            os: ubuntu-latest
-            arch: aarch64
-            kind: cuda_plugin
-            cuda_major: 11
-            cuda_minor: 8
-          - release: cuda12x
-            os: ubuntu-latest
-            arch: aarch64
-            kind: cuda_plugin
-            cuda_major: 12
-            cuda_minor: 6
+          # - release: cuda11x
+          #   os: ubuntu-latest
+          #   arch: aarch64
+          #   kind: cuda_plugin
+          #   cuda_major: 11
+          #   cuda_minor: 8
+          # - release: cuda12x
+          #   os: ubuntu-latest
+          #   arch: aarch64
+          #   kind: cuda_plugin
+          #   cuda_major: 12
+          #   cuda_minor: 6
           # - release: cpu
           #   os: macos-15-intel
           #   kind: core
@@ -255,7 +255,7 @@ jobs:
             dnf -y install epel-release &&
             dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel7/x86_64/cuda-rhel7.repo &&
             dnf clean all &&
-            dnf -y install cuda-toolkit &&
+            dnf -y install cuda-toolkit-${{ matrix.cuda_major }}-${{ matrix.cuda_minor }}.${{ matrix.arch }} &&
             ls -al /usr/local &&
             export PATH=$PATH:/usr/local/cuda/bin &&
             nvcc --version
@@ -271,7 +271,7 @@ jobs:
             CXX=g++
             CUDACXX="nvcc -ccbin /opt/rh/gcc-toolset-13/root/usr/bin/gcc"
             SETUPTOOLS_SCM_PRETEND_VERSION="${{ needs.version.outputs.version }}"
-          CIBW_REPAIR_WHEEL_COMMAND: auditwheel repair -v -w {dest_dir} {wheel} --exclude "libcudart.so.${{ matrix.cuda_major }}" --exclude "libcusparse.so.${{ matrix.cuda_major }}" --exclude "libcublas.so.${{ matrix.cuda_major }}" --exclude "libnvJitLink.so.${{ matrix.cuda_major }}" --exclude "libcublasLt.so.${{ matrix.cuda_major }}"
+          CIBW_REPAIR_WHEEL_COMMAND: auditwheel repair -w {dest_dir} {wheel} --exclude "libcudart.so.${{ matrix.cuda_major }}" --exclude "libcusparse.so.${{ matrix.cuda_major }}" --exclude "libcublas.so.${{ matrix.cuda_major }}" --exclude "libnvJitLink.so.${{ matrix.cuda_major }}" --exclude "libcublasLt.so.${{ matrix.cuda_major }}"
       # =====================
       # = V. Upload wheels  =
       # =====================
