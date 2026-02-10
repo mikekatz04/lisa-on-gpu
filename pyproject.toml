@@ -4,11 +4,13 @@ requires = [
   "numpy",
   "astropy",  # TODO: remove astropy?
   "eryn",
-  "lisaanalysistools",  #  @ file:///home/mlkatz/LISAanalysistools",  # >=1.2.0",  #", # 
+  "gpubackendtools>=0.1.1", # @ file:///home/mlkatz/GPUBackendTools", 
   "scikit_build_core",
   "gpubackendtools",  # @ file:///home/mlkatz/GPUBackendTools",
   "pybind11",
   #@FASTLISA_CUDA@,
+  "lisaanalysistools>=1.2.8",  #  @ file:///home/mlkatz/LISAanalysistools",  # /Users/mlkatz/Research/LISAanalysistools
+  #@LISATOOLS_CUDA@,
 ]
 build-backend = "scikit_build_core.build"
 
@@ -83,6 +85,8 @@ optional-dependencies.sampling = [
 optional-dependencies.testing = [
   "matplotlib",
   "astropy",
+  "lisaanalysistools",
+  "gpubackendtools",
 ]
 
 [tool.setuptools_scm]

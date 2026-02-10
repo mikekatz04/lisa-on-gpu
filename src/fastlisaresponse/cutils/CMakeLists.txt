@@ -74,7 +74,6 @@ message(STATUS "LISATOOLS location is ${LISATOOLS_DIR}.")
 file(GLOB MY_FILES "${LISATOOLS_DIR}/cutils/*")
 message(STATUS "LISATOOLS Source files: ${MY_FILES}")
 message(STATUS "LISATOOLS version: ${LISATOOLS_VERSION}")
-# message(STATUS "LISATOOLS_DETECTOR_CPU: ${LISATOOLS_DETECTOR_CPU}")
 
 execute_process(
   COMMAND "${PYTHON_EXECUTABLE}" -c "if True:
@@ -176,11 +175,13 @@ if(FASTLISA_WITH_CPU)
     DEPENDS "${LISATOOLS_DIR}/cutils/Detector.cu"
     VERBATIM)
 
+  if(NOT EXISTS "${LISATOOLS_DIR}/cutils/binding.hpp")
+    message(FATAL_ERROR "${LISATOOLS_DIR}/cutils/binding.hpp does not exist.")
+  endif()
+
   add_library(fastlisaresponse_cpu_response_static STATIC Detector.cxx LISAResponse.cxx)
   apply_cpu_backend_common_options(response fastlisaresponse fastlisaresponse true )
   target_include_directories(fastlisaresponse_cpu_response_static PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})  
-  # target_link_libraries(fastlisaresponse_cpu_response_static PUBLIC ${LISATOOLS_DETECTOR_STATIC_LIB_CPU})
-  # target_link_directories(fastlisaresponse_cpu_response_static PUBLIC ${LISATOOLS_DETECTOR_CPU_DIR})
   target_sources(fastlisaresponse_cpu_response_static PUBLIC FILE_SET HEADERS FILES
                                         LISAResponse.hh)
 
@@ -188,8 +189,7 @@ if(FASTLISA_WITH_CPU)
   apply_cpu_backend_common_options(responselisa fastlisaresponse fastlisaresponse false)
   
   # Link your target to the imported target name
-  target_link_libraries(fastlisaresponse_cpu_responselisa PUBLIC fastlisaresponse_cpu_response_static)  #  ${LISATOOLS_DETECTOR_STATIC_LIB_CPU})
-  # target_link_directories(fastlisaresponse_cpu_responselisa PUBLIC ${LISATOOLS_DETECTOR_CPU_DIR})  
+  target_link_libraries(fastlisaresponse_cpu_responselisa PUBLIC fastlisaresponse_cpu_response_static)
   target_include_directories(fastlisaresponse_cpu_responselisa PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})  
   target_sources(fastlisaresponse_cpu_responselisa PUBLIC FILE_SET HEADERS FILES
                                           binding_flr.hpp)
@@ -205,14 +205,12 @@ if(FASTLISA_WITH_GPU)
                                          LISAResponse.hh)
 
   target_include_directories(fastlisaresponse_gpu_response_gpu_static PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})
-  
   pybind11_add_module(fastlisaresponse_gpu_responselisa "${LISATOOLS_DIR}/cutils/binding.cxx" binding_flr.cxx)
   apply_gpu_backend_common_options(responselisa fastlisaresponse fastlisaresponse false)
   target_sources(fastlisaresponse_gpu_responselisa PUBLIC FILE_SET HEADERS FILES
                                          LISAResponse.hh
                                          )
   target_link_libraries(fastlisaresponse_gpu_responselisa PUBLIC fastlisaresponse_gpu_response_gpu_static)
-  # target_link_directories(fastlisaresponse_gpu_responselisa PUBLIC ${LISATOOLS_DETECTOR_GPU_DIR})  
   target_include_directories(fastlisaresponse_gpu_responselisa PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})  
   
 endif()

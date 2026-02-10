@@ -64,6 +64,7 @@ jobs:
       #     sed -i 's|local_scheme = "node-and-date"|local_scheme = "no-local-version"|g' pyproject.toml
       - name: Install bare package
         run: |
+          export NPY_DISABLE_CPU_FEATURES=AVX512F,AVX512CD,AVX512_KNL,AVX512_KNM,AVX512_SKX,AVX512_CLX,AVX512_CNL,AVX512_ICL,AVX512_SPR
           python -m pip install '.[doc, testing]' \
             --config-settings=cmake.define.FASTLISA_WITH_GPU=OFF
       - name: Install astropy

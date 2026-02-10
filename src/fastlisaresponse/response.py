@@ -381,18 +381,18 @@ class pyResponseTDI(FastLISAResponseParallelModule):
         self, t_data: np.ndarray, input_in: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray]:
         # remove input data that goes beyond orbital information
-        if t_data.max() > self.response_orbits.t.max():
+        if t_data.max() > self.response_orbits.t.max():  # self.response_orbits.ltt_t.max():
             warnings.warn(
                 "Input waveform is longer than available orbital information. Trimming to fit orbital information."
             )
 
-            max_ind = np.where(t_data <= self.response_orbits.t.max())[0][-1]
+            max_ind = np.where(t_data <= self.response_orbits.t.max())[0][-1]  # np.where(t_data <= self.response_orbits.sc_t.max())[0][-1]
 
             t_data = t_data[:max_ind]
             input_in = input_in[:max_ind]
         return (t_data, input_in)
 
-    def get_projections(self, input_in, lam, beta, t0=10000.0):
+    def get_projections(self, input_in, lam, beta, t0=0.0, t_buffer=10000.0):
         """Compute projections of GW signal on to LISA constellation
 
         Args:
@@ -400,20 +400,22 @@ class pyResponseTDI(FastLISAResponseParallelModule):
                 :math:`h_+ + ih_x`. If using the GPU for the response, this should be a CuPy array.
             lam (double): Ecliptic Longitude in radians.
             beta (double): Ecliptic Latitude in radians.
-            t0 (double, optional): Time at which to the waveform. Because of the delays
+            t0 (double): Initial time at which to start the waveform. 
+            t_buffer (double, optional): Buffer time from ``t0``. Because of the delays
                 and interpolation towards earlier times, the beginning of the waveform
-                is garbage. ``t0`` tells the waveform generator where to start the waveform
-                compraed to ``t=0``.
+                is garbage. ``t_buffer`` tells the waveform generator where to start the waveform
+                compared to ``t0``.
 
         Raises:
-            ValueError: If ``t0`` is not large enough.
+            ValueError: If ``t_buffer`` is not large enough.
 
 
         """
-        self.tdi_start_ind = int(t0 / self.dt)
+        self.tdi_start_ind = int(t_buffer / self.dt)
         # get necessary buffer for TDI
         self.check_tdi_buffer = int(100.0 * self.sampling_frequency) + 4 * self.order
 
+        self.t0_projection = t0
         from copy import deepcopy
 
         tmp_orbits = deepcopy(self.response_orbits.x_base)
@@ -434,7 +436,7 @@ class pyResponseTDI(FastLISAResponseParallelModule):
 
         if self.projections_start_ind < self.projection_buffer:
             raise ValueError(
-                "Need to increase t0. The initial buffer is not large enough."
+                "Need to increase t_buffer. The initial buffer is not large enough."
             )
 
         # determine sky vectors
@@ -467,7 +469,7 @@ class pyResponseTDI(FastLISAResponseParallelModule):
 
         input_in = self.xp.asarray(input_in)
 
-        t_data = self.xp.arange(len(input_in)) * self.dt
+        t_data = t0 + self.xp.arange(len(input_in)) * self.dt
 
         t_data, input_in = self._data_time_check(t_data, input_in)
 
@@ -502,7 +504,7 @@ class pyResponseTDI(FastLISAResponseParallelModule):
         """Return links as an array"""
         return self.delayed_links_flat.reshape(3, -1)
 
-    def get_tdi_delays(self, y_gw=None):
+    def get_tdi_delays(self, t0=None, y_gw=None):
         """Get TDI combinations from projections.
 
         This functions generates the TDI combinations from the projections
@@ -510,11 +512,14 @@ class pyResponseTDI(FastLISAResponseParallelModule):
         on what was input for ``tdi_chan`` into ``__init__``.
 
         Args:
-            y_gw (xp.ndarray, optional): Projections along each link. Must be
+            t0 (double, optional): Initial time at which to start the waveform. 
+                Should only be provided if not running projections. Otherwise (and if None), it will
+                be the same as the projection used. (Default: ``None``)
+            y_gw (xp.ndarray, optional): Projections along the arms. This should be
                 a 2D ``numpy`` or ``cupy`` array with shape: ``(nlinks, num_pts)``.
                 The links must be entered in the proper order in the code.
                 The link order is given in the orbits class: ``orbits.LINKS``. 
-                (Default: None)
+                (Default: ``None``)
 
         Returns:
             tuple: (X,Y,Z) or (A,E,T) or (A,E)
@@ -528,6 +533,14 @@ class pyResponseTDI(FastLISAResponseParallelModule):
             (3, self.num_pts), dtype=self.xp.float64
         )
 
+        if t0 is None:
+            t0 = self.t0_projection
+
+        else:
+            if self.t0_projection is not None:
+                if self.t0_projection != t0:
+                    raise ValueError("If running projections with a t0 value, that t0 value needs to be the same for TDI. If you want to force otherwise, need to run 'del class.t0_projections' before TDI computation.")
+        
         # y_gw entered directly
         if y_gw is not None:
             assert y_gw.shape == (len(self.link_space_craft_0_in), self.num_pts)
@@ -541,8 +554,9 @@ class pyResponseTDI(FastLISAResponseParallelModule):
 
         self.delayed_links_flat = self.delayed_links_flat.flatten()
 
-        t_data = self.xp.arange(self.y_gw_length) * self.dt
-        num_units = int(self.tdi.tdi_operation_index.max() + 1)
+        t_data = t0 + self.xp.arange(self.y_gw_length) * self.dt
+
+        num_units = int(self.tdi_operation_index.max() + 1)
 
         assert np.all(
             (np.diff(self.tdi.tdi_operation_index) == 0)
@@ -615,7 +629,8 @@ class ResponseWrapper(FastLISAResponseParallelModule):
             with the :code:`*args` formalism producing a list. :code:`index_beta`
             tells the class the index of the ecliptic latitude (or ecliptic polar angle)
             within this list of parameters.
-        t0 (double, optional): Start of returned waveform in seconds leaving ample time for garbage at
+        t0 (double, optional): Initial time at which to start the waveform. (Default: 0.0)
+        t_buffer (double, optional): Start of returned waveform in seconds (with respect to the start of the observation) leaving ample time for garbage at
             the beginning of the waveform. It also removed the same amount from the end. (Default: 10000.0)
         flip_hx (bool, optional): If True, :code:`waveform_gen` produces :math:`h_+ - ih_x`.
             :class:`pyResponseTDI` takes :math:`h_+ + ih_x`, so this setting will
@@ -630,8 +645,8 @@ class ResponseWrapper(FastLISAResponseParallelModule):
             convert it with :math:`\beta=\pi / 2 - \Theta`. (Default: :code:`True`)
         force_backend (str, optional): If given, run this class on the requested backend. 
             Options are ``"cpu"``, ``"cuda11x"``, ``"cuda12x"``. (default: ``None``)
-        remove_garbage (bool or str, optional): If True, it removes everything before ``t0``
-            and after the end time - ``t0``. If ``str``, it must be ``"zero"``. If ``"zero"``,
+        remove_garbage (bool or str, optional): If True, it removes everything before ``t_buffer``
+            and after the end time - ``t_buffer``. If ``str``, it must be ``"zero"``. If ``"zero"``,
             it will not remove the points, but set them to zero. This is ideal for PE. (Default: ``True``)
         n_overide (int, optional): If not ``None``, this will override the determination of
             the number of points, ``n``, from ``int(T/dt)`` to the ``n_overide``. This is used
@@ -651,7 +666,8 @@ class ResponseWrapper(FastLISAResponseParallelModule):
         dt,
         index_lambda,
         index_beta,
-        t0=10000.0,
+        t0=0.0, 
+        t_buffer=10000.0,
         flip_hx=False,
         remove_sky_coords=False,
         is_ecliptic_latitude=True,
@@ -668,6 +684,7 @@ class ResponseWrapper(FastLISAResponseParallelModule):
         self.index_beta = index_beta
         self.dt = dt
         self.t0 = t0
+        self.t_buffer = t_buffer
         self.sampling_frequency = 1.0 / dt
         super().__init__(force_backend=force_backend)
 
@@ -676,12 +693,13 @@ class ResponseWrapper(FastLISAResponseParallelModule):
 
         assert isinstance(orbits, Orbits)
 
-        if Tobs * YRSID_SI > orbits.t_base.max():
+        if Tobs * YRSID_SI > orbits.t_base.max():  # Tobs * YRSID_SI > (orbits.ltt_t.max() - orbits.ltt_t.min()):
             warnings.warn(
                 f"Tobs is larger than available orbital information time array. Reducing Tobs to {orbits.t_base.max()}"
+                # f"Tobs is larger than available orbital information time array. Reducing Tobs to {orbits.ltt_t.max() - orbits.ltt_t.min()}"
             )
             Tobs = orbits.t_base.max() / YRSID_SI
-
+            # Tobs = (orbits.ltt_t.max() - orbits.ltt_t.min()) / YRSID_SI
         if n_overide is not None:
             if not isinstance(n_overide, int):
                 raise ValueError("n_overide must be an integer if not None.")
@@ -757,8 +775,8 @@ class ResponseWrapper(FastLISAResponseParallelModule):
         if self.flip_hx:
             h = h.real - 1j * h.imag
 
-        self.response_model.get_projections(h, lam, beta, t0=self.t0)
-        tdi_out = self.response_model.get_tdi_delays()
+        self.response_model.get_projections(h, lam, beta, t0=self.t0, t_buffer=self.t_buffer)
+        tdi_out = self.response_model.get_tdi_delays()  # will take care of t0 automatically to match projections
 
         out = list(tdi_out)
         if self.remove_garbage is True:  # bool

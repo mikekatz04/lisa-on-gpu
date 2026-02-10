@@ -79,11 +79,10 @@ jobs:
       # =======================
       # = IV - install llvm   =
       # =======================
-
       # - name: Install LLVM and Clang
       #   uses: KyleMayes/install-llvm-action@v2
       #   with:
-      #     version: "10.0"
+      #     version: "17.0"
       #     directory: ${{ runner.temp }}/llvm
       
   build:
@@ -102,13 +101,13 @@ jobs:
             arch: x86_64
             kind: core
             reqpython: '>=3.10'
-          - release: cuda11x
-            os: ubuntu-latest
-            arch: x86_64
-            kind: cuda_plugin
-            cuda_major: 11
-            cuda_minor: 8
-            reqpython: '>=3.10'
+          # - release: cuda11x
+          #   os: ubuntu-latest
+          #   arch: x86_64
+          #   kind: cuda_plugin
+          #   cuda_major: 11
+          #   cuda_minor: 8
+          #   reqpython: '>=3.10'
           - release: cuda12x
             os: ubuntu-latest
             arch: x86_64
@@ -121,24 +120,24 @@ jobs:
             arch: aarch64
             kind: core
             reqpython: '>=3.10'
-          - release: cuda11x
-            os: ubuntu-latest
-            arch: aarch64
-            kind: cuda_plugin
-            cuda_major: 11
-            cuda_minor: 8
-          - release: cuda12x
-            os: ubuntu-latest
-            arch: aarch64
-            kind: cuda_plugin
-            cuda_major: 12
-            cuda_minor: 6
-          - release: cpu
-            os: macos-15-intel
-            kind: core
-            reqpython: '>=3.10'
-            arch: x86_64
-            macos_ver: 15.0
+          # - release: cuda11x
+          #   os: ubuntu-latest
+          #   arch: aarch64
+          #   kind: cuda_plugin
+          #   cuda_major: 11
+          #   cuda_minor: 8
+          # - release: cuda12x
+          #   os: ubuntu-latest
+          #   arch: aarch64
+          #   kind: cuda_plugin
+          #   cuda_major: 12
+          #   cuda_minor: 6
+          # - release: cpu
+          #   os: macos-15-intel
+          #   kind: core
+          #   reqpython: '>=3.10'
+          #   arch: x86_64
+          #   macos_ver: 15.0
           - release: cpu
             os: macos-15
             kind: core
@@ -168,7 +167,7 @@ jobs:
         run: |
           sed -i'' -e 's|" #@NAMESUFFIX@|-${{ matrix.release }}"|g' pyproject.toml
       - name: Add cuda1xx python dependency for lisatools.
-        if: matrix.kind != 'cuda_plugin'
+        if: matrix.kind == 'cuda_plugin'
         run: |
           sed -i'' -e 's|" #@LISATOOLS_CUDA@|lisaanalysistools-${{ matrix.release }}"|g' pyproject.toml
           sed -i 's/) #@ADDCUDAHERE@/ CUDA)/g' CMakeLists.txt
@@ -247,20 +246,20 @@ jobs:
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28 
           CIBW_CONFIG_SETTINGS: >
             cmake.define.FASTLISA_WITH_GPU=ONLY
-            cmake.define.FASTLISA_CUDA_ARCH="60;70;75;80;86;90"
+            cmake.define.FASTLISA_CUDA_ARCH="70;75;80;86;90"
           # Use dnf to install cuda-toolkit and gcc inside the manylinux container
           CIBW_BEFORE_ALL: >
             dnf install -y scl-utils &&
-            dnf install -y gcc-toolset-11-toolchain &&
-            source scl_source enable gcc-toolset-11 &&
+            dnf install -y gcc-toolset-13 &&
+            source scl_source enable gcc-toolset-13 &&
             dnf -y install epel-release &&
             dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel7/x86_64/cuda-rhel7.repo &&
             dnf clean all &&
-            dnf -y install cuda-toolkit &&
+            dnf -y install cuda-toolkit-${{ matrix.cuda_major }}-${{ matrix.cuda_minor }}.${{ matrix.arch }} &&
             ls -al /usr/local &&
             export PATH=$PATH:/usr/local/cuda/bin &&
             nvcc --version
-          CIBW_BEFORE_BUILD: source scl_source enable gcc-toolset-11
+          CIBW_BEFORE_BUILD: source scl_source enable gcc-toolset-13
           CIBW_ENVIRONMENT: >
             PATH="/usr/local/cuda/bin:${PATH}"
             LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH}"
@@ -270,6 +269,7 @@ jobs:
             CUDADIR=/usr/local/cuda
             CC=gcc
             CXX=g++
+            CUDACXX="nvcc -ccbin /opt/rh/gcc-toolset-13/root/usr/bin/gcc"
             SETUPTOOLS_SCM_PRETEND_VERSION="${{ needs.version.outputs.version }}"
           CIBW_REPAIR_WHEEL_COMMAND: auditwheel repair -w {dest_dir} {wheel} --exclude "libcudart.so.${{ matrix.cuda_major }}" --exclude "libcusparse.so.${{ matrix.cuda_major }}" --exclude "libcublas.so.${{ matrix.cuda_major }}" --exclude "libnvJitLink.so.${{ matrix.cuda_major }}" --exclude "libcublasLt.so.${{ matrix.cuda_major }}"
       # =====================

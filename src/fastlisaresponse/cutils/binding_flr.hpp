@@ -36,6 +36,29 @@ using array_type = py::array_t<T>;
 
 class ReturnPointerBase {
   public:
+    Orbits *orbits;
+    OrbitsWrap_responselisa(double dt_, int N_, array_type<double> n_arr_, array_type<double> ltt_arr_, array_type<double> x_arr_, array_type<int> links_, array_type<int> sc_r_, array_type<int> sc_e_, double armlength_)
+    // OrbitsWrap_responselisa(double sc_t0_, double sc_dt_, int sc_N_, double ltt_t0_, double ltt_dt_, int ltt_N_, array_type<double> n_arr_, array_type<double> ltt_arr_, array_type<double> x_arr_, array_type<int> links_, array_type<int> sc_r_, array_type<int> sc_e_, double armlength_)
+    {
+
+        // double *_n_arr = return_pointer_and_check_length(n_arr_, "n_arr", sc_N_, 6 * 3);
+        // double *_ltt_arr = return_pointer_and_check_length(ltt_arr_, "ltt_arr", ltt_N_, 6);
+        // double *_x_arr = return_pointer_and_check_length(x_arr_, "x_arr", sc_N_, 3 * 3);
+
+        double *_n_arr = return_pointer_and_check_length(n_arr_, "n_arr", N_, 6 * 3);
+        double *_ltt_arr = return_pointer_and_check_length(ltt_arr_, "ltt_arr", N_, 6);
+        double *_x_arr = return_pointer_and_check_length(x_arr_, "x_arr", N_, 3 * 3);
+
+        int *_sc_r = return_pointer_and_check_length(sc_r_, "sc_r", 6, 1);
+        int *_sc_e = return_pointer_and_check_length(sc_e_, "sc_e", 6, 1);
+        int *_links = return_pointer_and_check_length(links_, "links", 6, 1);
+
+        orbits = new Orbits(dt_, N_, _n_arr, _ltt_arr, _x_arr, _links,  _sc_r, _sc_e, armlength_);
+        // orbits = new Orbits(sc_t0_, sc_dt_, sc_N_, ltt_t0_, ltt_dt_, ltt_N_, _n_arr, _ltt_arr, _x_arr, _links,  _sc_r, _sc_e, armlength_);
+    };
+    ~OrbitsWrap_responselisa(){
+        delete orbits;
+    };
     template<typename T>
     static T* return_pointer_and_check_length(array_type<T> input1, std::string name, int N, int multiplier)
     {
