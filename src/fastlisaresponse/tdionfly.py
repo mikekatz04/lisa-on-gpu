@@ -143,7 +143,7 @@ class TDIonTheFly(FastLISAResponseParallelModule):
 
         if not self._orbits.configured:
             self._orbits.configure(linear_interp_setup=True)
-
+            
         self.cpp_orbits = self.backend.OrbitsWrap(*self._orbits.pycppdetector_args)
     
     @property
@@ -178,7 +178,6 @@ class TDIonTheFly(FastLISAResponseParallelModule):
             self.N, self.num_sub, self.n_params, self.tdi_config.nchannels
         )
         
-        breakpoint()
         reshape_shape = (self.num_sub, self.tdi_config.nchannels, self.N)
         return self.from_tdi_output(TDIOutput(
             self.t_arr, 
@@ -228,8 +227,8 @@ class TDTDIonTheFly(TDIonTheFly):
             phase = self.xp.atleast_2d(self.xp.asarray(phase))
 
             # TODO: improve when gbt is fixed up
-            amp = CubicSplineInterpolant(t_input.copy(), amp, force_backend=self.backend.name.split("_")[-1])
-            phase = CubicSplineInterpolant(t_input.copy(), phase, force_backend=self.backend.name.split("_")[-1])
+            amp = self.backend.CubicSplineInterpolant_responselisa(t_input.copy(), amp, force_backend=self.backend)
+            phase = self.backend.CubicSplineInterpolant_responselisa(t_input.copy(), phase, force_backend=self.backend)
 
         elif isinstance(amp, CubicSpline_scipy):
             raise NotImplementedError
@@ -258,6 +257,7 @@ class TDTDIonTheFly(TDIonTheFly):
 
         elif isinstance(amp, CubicSplineInterpolant):
             assert isinstance(phase, CubicSplineInterpolant)
+            breakpoint()
 
         else:
             raise ValueError("# TODO: fix this.")
@@ -325,6 +325,7 @@ class TDIOutput(FastLISAResponseParallelModule):
             x_in =  self.xp.repeat(x[:, None, :], y.shape[1], axis=1)
         else:
             x_in = x.copy()
+
         return CubicSplineInterpolant(x_in, y, **kwargs, force_backend=self.backend.name.split("_")[-1])
     
     @property
@@ -444,10 +445,10 @@ class TDIOutput(FastLISAResponseParallelModule):
         raise NotImplementedError
     
 class TDTDIOutput(TDIOutput):
-    @classmethod
-    def from_tdi_output(cls, tdi_output: TDIOutput, fill_splines: Optional[bool] = False) -> TDTDIOutput:
+
+    def from_tdi_output(self, tdi_output: TDIOutput, fill_splines: Optional[bool] = False) -> TDTDIOutput:
         return TDTDIOutput(
-            tdi_output.x, tdi_output.tdi_amp, tdi_output.tdi_phase, tdi_output.phase_ref, fill_splines=fill_splines
+            tdi_output.x, tdi_output.tdi_amp, tdi_output.tdi_phase, tdi_output.phase_ref, fill_splines=fill_splines, force_backend=tdi_output.backend.name.split("_")[-1]
         )
 
     def eval_tdi(self, t_new: np.ndarray, **kwargs) -> np.ndarray:
@@ -577,7 +578,7 @@ class FDTDIonTheFly(TDIonTheFly):
     def from_tdi_output(self, tdi_output: TDIOutput, fill_splines: Optional[bool] = False) -> FDTDIOutput:
         # TODO: remove the freq spline?
         return FDTDIOutput(
-            self.freq(tdi_output.x), tdi_output.tdi_amp, tdi_output.tdi_phase, tdi_output.phase_ref, fill_splines=fill_splines
+            self.freq(tdi_output.x), tdi_output.tdi_amp, tdi_output.tdi_phase, tdi_output.phase_ref, fill_splines=fill_splines, force_backend=tdi_output.backend.name.split("_")[-1]
         )
     
 
@@ -610,7 +611,7 @@ class GBTDIonTheFly(TDIonTheFly):
     def from_tdi_output(self, tdi_output: TDIOutput, fill_splines: Optional[bool] = False) -> FDTDIOutput:
         assert self.xp.allclose(tdi_output.x, self.t_arr)
         return TDTDIOutput(
-            tdi_output.x, tdi_output.tdi_amp, tdi_output.tdi_phase, tdi_output.phase_ref, fill_splines=fill_splines
+            tdi_output.x, tdi_output.tdi_amp, tdi_output.tdi_phase, tdi_output.phase_ref, fill_splines=fill_splines, force_backend=tdi_output.backend.name.split("_")[-1]
         )
     
     @property
@@ -639,9 +640,11 @@ class GBTDIonTheFly(TDIonTheFly):
         )
 
         reshape_shape = (self.num_sub, self.tdi_config.nchannels, self.N)
+
         return self.from_tdi_output(TDIOutput(
             self.t_arr, 
             tdi_amp.reshape(reshape_shape), 
             tdi_phase.reshape(reshape_shape), 
-            phase_ref.reshape(self.t_arr.shape)
+            phase_ref.reshape(self.t_arr.shape),
+            force_backend=self.backend
         ), fill_splines=return_spline)

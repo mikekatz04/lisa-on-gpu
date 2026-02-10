@@ -6,7 +6,7 @@ from lisatools.domains import WDMLookupTable
 
 
 class GBWDMComputations(FastLISAResponseParallelModule):
-    def __init__(self, wdm_lookup_table, T, orbits=None, tdi_config=None, force_backend=None):
+    def __init__(self, wdm_lookup_table, T, orbits=None, tdi_config=None, force_backend=None, d_d=0.0):
         
         super().__init__(force_backend=force_backend)
         # setup orbits
@@ -16,6 +16,7 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         # setup WDM c class
         self.wdm_lookup_table = wdm_lookup_table
         self.T = T
+        self.d_d = d_d
         
     @property
     def tdi_config(self) -> TDIConfig:
@@ -71,8 +72,8 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         """Set wdm lookup table."""
 
         self._wdm_lookup_table = wdm_lookup_table
-        self.c_nm_all = wdm_lookup_table.table.real.copy()
-        self.s_nm_all = wdm_lookup_table.table.imag.copy()
+        self.c_nm_all = self.xp.asarray(wdm_lookup_table.table.real.copy())
+        self.s_nm_all = self.xp.asarray(wdm_lookup_table.table.imag.copy())
         self.cpp_wdm_lookup_table = self.backend.WaveletLookupTableWrap(
             self.c_nm_all, 
             self.s_nm_all, 
@@ -98,8 +99,8 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         num_bin = params_tmp.shape[0]
         params_in = params_tmp.flatten().copy()
 
-        d_h_out = self.xp.zeros(num_bin)
-        h_h_out = self.xp.zeros(num_bin)
+        self.d_h_out = self.xp.zeros(num_bin)
+        self.h_h_out = self.xp.zeros(num_bin)
 
         # TODO: move this part
         # TODO: need to check for num_data, num_noise
@@ -130,8 +131,8 @@ class GBWDMComputations(FastLISAResponseParallelModule):
 
         breakpoint()
         self.backend.GBComputationGroupWrap().gb_wdm_get_ll(
-            d_h_out, 
-            h_h_out, 
+            self.d_h_out, 
+            self.h_h_out, 
             self.cpp_orbits,
             self.cpp_tdi_config, 
             self.cpp_wdm_lookup_table, 
@@ -144,4 +145,8 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             self.T,
             self.backend.TDITypeDict["XYZ"]
         )
-        breakpoint()
+
+        like_out = -1. / 2. * (self.d_d + self.h_h_out - 2 * self.d_h_out)
+        # TODO: phase maximize
+
+        return like_out

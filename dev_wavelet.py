@@ -1,6 +1,11 @@
 import numpy as np
 import matplotlib.pyplot as plt
-    
+
+try:
+    import cupy as cp
+except (ImportError, ModuleNotFoundError) as e:
+    pass
+
 from fastlisaresponse.tdionfly import GBTDIonTheFly
 from fastlisaresponse.tdiconfig import TDIConfig
 from lisatools.detector import DefaultOrbits
@@ -12,37 +17,40 @@ from fastlisaresponse.gbcomps import GBWDMComputations
 
 if __name__ == "__main__":
 
-    orbits = DefaultOrbits()
+    force_backend = "cuda12x"
+
+    xp = np if force_backend == "cpu" else cp
+    orbits = DefaultOrbits(force_backend=force_backend)
     orbits.configure(linear_interp_setup=True)
-    tdi_config = TDIConfig("2nd generation")
+    tdi_config = TDIConfig("2nd generation", force_backend=force_backend)
     dt = 10.0
     Tobs = 2 * YRSID_SI
     Tobs = WAVELET_DURATION * int(Tobs / WAVELET_DURATION)
     Nobs = int(Tobs / dt)
     N_sparse = 256
-    t_tdi = np.linspace(0.0, Tobs, N_sparse + 1)[1:-1]
+    t_tdi = xp.linspace(0.0, Tobs, N_sparse + 1)[1:-1]
     Tobs = Nobs * dt
 
     wdm_settings = WDMSettings(Tobs, dt)
     wdm_lookup_table = WDMLookupTable(wdm_settings, 50, 20, 3)
     
-    gb_comps = GBWDMComputations(wdm_lookup_table, Tobs, orbits, tdi_config)
+    gb_comps = GBWDMComputations(wdm_lookup_table, Tobs, orbits=orbits, tdi_config=tdi_config, force_backend=force_backend)
 
     num_bin = 3
 
-    data_t_arr = np.arange(Nobs) * dt
+    data_t_arr = xp.arange(Nobs) * dt
     keep = (data_t_arr > t_tdi[0]) & (data_t_arr < t_tdi [-1])
     tdi_t_arr = data_t_arr[keep]
 
-    amp = np.full(num_bin, 1e-23)
-    f0 = np.full(num_bin, 4.2300812341e-3)
-    fdot = np.full(num_bin, 1e-16)
-    fddot = np.full(num_bin, 0.0)
-    phi0 = np.full(num_bin, 0.892342342342)
-    inc = np.full(num_bin, 1.2309804223)
-    psi = np.full(num_bin, 3.00908098)
-    lam = np.full(num_bin, 4.827342308)
-    beta = np.full(num_bin, -0.50923423)
+    amp = xp.full(num_bin, 1e-23)
+    f0 = xp.full(num_bin, 4.2300812341e-3)
+    fdot = xp.full(num_bin, 1e-16)
+    fddot = xp.full(num_bin, 0.0)
+    phi0 = xp.full(num_bin, 0.892342342342)
+    inc = xp.full(num_bin, 1.2309804223)
+    psi = xp.full(num_bin, 3.00908098)
+    lam = xp.full(num_bin, 4.827342308)
+    beta = xp.full(num_bin, -0.50923423)
 
     gb_gen = GBTDIonTheFly(
         t_tdi, 
@@ -53,10 +61,11 @@ if __name__ == "__main__":
         tdi_config=tdi_config,
         orbits=orbits,
         tdi_chan="XYZ",
+        force_backend=force_backend,
     )
 
     output = gb_gen(amp, f0, fdot, fddot, phi0, inc, psi, lam, beta, return_spline=True)
-    tdi_output = np.zeros((num_bin, 3, len(data_t_arr))) 
+    tdi_output = xp.zeros((num_bin, 3, len(data_t_arr))) 
 
     tdi_output[:, :, keep]= output.eval_tdi(tdi_t_arr)
 
@@ -64,8 +73,11 @@ if __name__ == "__main__":
     # plt.plot(data_t_arr[:num_points], tdi_output[0,0])
     # plt.show()
 
-    td_signal = TDSignal(tdi_output[0], settings=TDSettings(tdi_output.shape[-1], dt))
-    from scipy.signal.windows import tukey
+    td_signal = TDSignal(tdi_output[0], settings=TDSettings(tdi_output.shape[-1], dt, force_backend=force_backend))
+    if force_backend == "cpu":
+        from scipy.signal.windows import tukey
+    else:
+        from cupyx.scipy.signal.windows import tukey
     # from eryn.prior import uniform_dist
     # num = 11
     # f_arr = uniform_dist(wdm_lookup_table.f_vals[0], wdm_lookup_table.f_vals[-1]).rvs(size=num)
@@ -73,7 +85,7 @@ if __name__ == "__main__":
     # output = wdm_lookup_table.get_table_coeffs(f_arr, fdot_arr)
     # breakpoint()
     wdm = td_signal.fft(window=tukey(tdi_output.shape[-1], alpha=0.05)).wdmtransform(settings=wdm_settings)
-    fig, ax = wdm.heatmap()
+    # fig, ax = wdm.heatmap()
 
     from lisatools.datacontainer import DataResidualArray
     from lisatools.sensitivity import XYZ1SensitivityMatrix
@@ -88,13 +100,12 @@ if __name__ == "__main__":
         analysis_container = AnalysisContainer(deepcopy(data_res), deepcopy(sens_mat))
         acs_list.append(analysis_container)
     
-    acs = AnalysisContainerArray(acs_list)
+    acs = AnalysisContainerArray(acs_list, gpus=[0])
     check_ll = acs.likelihood()
 
-    params = np.array([amp, f0, fdot, fddot, phi0, inc, psi, lam, beta]).T
+    params = xp.array([amp, f0, fdot, fddot, phi0, inc, psi, lam, beta]).T
 
-    gb_comps.get_ll_wdm(params, acs, data_index=None, noise_index=None)
-    breakpoint()
+    test = gb_comps.get_ll_wdm(params, acs, data_index=None, noise_index=None)
     # fig.savefig("check0.png")
     #plt.show()
     # ms = np.arange(wdm.NF)

@@ -454,7 +454,7 @@ double WaveletLookupTable::linear_interp(double f_scaled, double fdot, double *z
     int fdot_index = int((fdot - min_fdot) / dfdot_interp) ;
     bool bad = false;
 
-    printf("CHECK18 %e %e %d %d %d %d %e %e %e %e\n", f_scaled, fdot, f_index, fdot_index, num_f, num_fdot, df_interp, dfdot_interp, min_f_scaled, min_fdot);
+    // printf("CHECK18 %e %e %d %d %d %d %e %e %e %e\n", f_scaled, fdot, f_index, fdot_index, num_f, num_fdot, df_interp, dfdot_interp, min_f_scaled, min_fdot);
     
     if ((f_index < 0) || (f_index >= num_f) || (fdot_index < 0) || (fdot_index >= num_fdot))
     {
@@ -477,7 +477,7 @@ double WaveletLookupTable::linear_interp(double f_scaled, double fdot, double *z
     double y1 = df_interp * fdot_index;
     double y2 = df_interp * (fdot_index + 1);
 
-    printf("%d %d %d %d\n", f_index, fdot_index, num_f, num_fdot);
+    // printf("%d %d %d %d\n", f_index, fdot_index, num_f, num_fdot);
     double z11 = z_vals[fdot_index * num_f + f_index];
     double z12 = z_vals[(fdot_index + 1) * num_f + f_index];
     double z21 = z_vals[fdot_index * num_f + (f_index + 1)];
@@ -494,7 +494,7 @@ CUDA_DEVICE
 double WaveletLookupTable::get_w_mn_lookup(cmplx tdi_channel_val, double f, double fdot, int layer_m)
 {
     double f_scaled = f - layer_m * df;
-    printf("CHECK10 %e %d %d %e\n", f_scaled, layer_m, int(f / df_interp), f); 
+    // printf("CHECK10 %e %d %d %e\n", f_scaled, layer_m, int(f / df_interp), f); 
     double c_nm = linear_interp(f_scaled, fdot, c_nm_all);
     double s_nm = linear_interp(f_scaled, fdot, s_nm_all);
 
@@ -633,6 +633,24 @@ void WDMDomain::add_ip_swap_contrib(double *d_h_add_tmp, double *d_h_remove_tmp,
 
 #define N_PARAMS_MAX 20
 
+
+#ifdef __CUDACC__
+CUDA_DEVICE
+double block_reduce(double *array) 
+{
+     // Specialize BlockReduce for a 1D block of 128 threads of type int
+    using BlockReduce = cub::BlockReduce<double, NUM_THREADS_HERE>;
+    int tid = threadIdx.x;
+    // Allocate shared memory for BlockReduce
+    CUDA_SHARED typename BlockReduce::TempStorage temp_storage;
+    CUDA_SYNC_THREADS;
+    double thread_data = array[tid];
+    double output = BlockReduce(temp_storage).Sum(thread_data);
+    return output;
+}
+#endif
+
+
 CUDA_KERNEL
 void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, int tdi_type)
 {
@@ -713,25 +731,25 @@ void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIC
             // for (int layer_m = layer_m_here; layer_m <= layer_m_here; layer_m += 1)
             {
                 layer_m = layer_m_here + diff;
-                printf("CHECK7 %d %d\n", n, layer_m);
+                // printf("CHECK7 %d %d\n", n, layer_m);
                 if ((layer_m >= 0) && (layer_m <= num_m - 1))
                 {
                     for (int j = 0; j < 3; j += 1) // over channels
                     {
                         w_mn[j] = wdm_lookup->get_w_mn_lookup(tdi_channel_val[j], f, fdot, layer_m);
-                        printf("CHECK8 %e %e %d %d %e %e %e\n", wdm_lookup->df_interp, wdm_lookup->dfdot_interp, layer_m, j, tdi_channel_val[j].real(), tdi_channel_val[j].imag(), w_mn[j]);                
+                        // printf("CHECK8 %e %e %d %d %e %e %e\n", wdm_lookup->df_interp, wdm_lookup->dfdot_interp, layer_m, j, tdi_channel_val[j].real(), tdi_channel_val[j].imag(), w_mn[j]);                
                     }
-                    // printf("CHECK9 %d %d\n", n, layer_m);
+                    printf("CHECK9 %d %d\n", n, layer_m);
                 
                     wdm->add_ip_contrib(d_h_tmp, h_h_tmp, w_mn, layer_m, n, data_index, noise_index, tdi_type);    
-                    // printf("CHECK10 %d %d\n", n, layer_m);
+                    printf("CHECK10 %d %d\n", n, layer_m);
                 
                 }
-                CUDA_SYNC_THREADS;
             }
         }
         CUDA_SYNC_THREADS;
-
+        printf("CHECK12 %d\n", bin_i);
+        
 #ifdef __CUDACC__        
         d_h_out[bin_i] = 4.0 * block_reduce(d_h_tmp);
         h_h_out[bin_i] = 4.0 * block_reduce(h_h_tmp);
@@ -740,6 +758,8 @@ void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIC
         d_h_out[bin_i] = 4.0 * d_h_tmp[0];
         h_h_out[bin_i] = 4.0 * h_h_tmp[0];
 #endif
+        printf("CHECK14 %d\n", bin_i);
+        
     }
 };
 
@@ -781,22 +801,6 @@ void GBComputationGroup::gb_wdm_get_ll_wrap(double *d_h_out, double *h_h_out, Or
 
 #endif
 }
-
-#ifdef __CUDACC__
-CUDA_DEVICE
-double block_reduce(double *array) 
-{
-     // Specialize BlockReduce for a 1D block of 128 threads of type int
-    using BlockReduce = cub::BlockReduce<double, NUM_THREADS_HERE>;
-
-    // Allocate shared memory for BlockReduce
-    CUDA_SHARED typename BlockReduce::TempStorage temp_storage;
-    CUDA_SYNC_THREADS;
-    double thread_data = array[tid];
-    double output = BlockReduce(temp_storage).Sum(thread_data);
-    return output;
-}
-#endif
 
 CUDA_KERNEL
 void gb_wdm_swap_ll_kernel(double *d_h_add_out, double *d_h_remove_out, double *add_add_out, double *remove_remove_out, double *add_remove_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_add_all, double *params_remove_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, int tdi_type)
@@ -905,11 +909,11 @@ void gb_wdm_swap_ll_kernel(double *d_h_add_out, double *d_h_remove_out, double *
         add_remove_red = 4.0 * block_reduce(add_remove_tmp);
         if (threadIdx.x == 0)
         {
-            d_h_add[bin_i] = d_h_add_red;
-            d_h_remove[bin_i] = d_h_remove_red;
-            add_add[bin_i] = add_add_red;
-            remove_remove[bin_i] = remove_remove_red;
-            add_remove[bin_i] = add_remove_red;
+            d_h_add_tmp[bin_i] = d_h_add_red;
+            d_h_remove_tmp[bin_i] = d_h_remove_red;
+            add_add_tmp[bin_i] = add_add_red;
+            remove_remove_tmp[bin_i] = remove_remove_red;
+            add_remove_tmp[bin_i] = add_remove_red;
         }
         CUDA_SYNC_THREADS;
 #else
