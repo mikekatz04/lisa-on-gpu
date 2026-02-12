@@ -578,11 +578,6 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
             double norm = 0.0;
             double n_temp;
 
-            L = orbits.get_light_travel_time(t, link);
-
-            double t_rec = t;
-            double t_em = t - L;
-
             out_vec = orbits.get_pos(t_rec, sc_r);
             x_rec[0] = out_vec.x;
             x_rec[1] = out_vec.y;

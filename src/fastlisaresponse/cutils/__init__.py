@@ -13,7 +13,7 @@ from gpubackendtools.exceptions import *
 
 @dataclasses.dataclass
 class FastLISAResponseBackendMethods(BackendMethods):
-    # TDSplineTDIWaveformWrap: object
+    TDSplineTDIWaveformWrap: object
     FDSplineTDIWaveformWrap: object
     GBTDIonTheFlyWrap: object
     LISAResponseWrap: object
@@ -28,7 +28,7 @@ class FastLISAResponseBackendMethods(BackendMethods):
     TDITypeDict: object
 
 class FastLISAResponseBackend:
-    # TDSplineTDIWaveformWrap: object
+    TDSplineTDIWaveformWrap: object
     FDSplineTDIWaveformWrap: object
     GBTDIonTheFlyWrap: object
     LISAResponseWrap: object
@@ -48,7 +48,7 @@ class FastLISAResponseBackend:
         # pass rest to general backend
         assert isinstance(fastlisaresponse_backend_methods, FastLISAResponseBackendMethods)
 
-        # self.TDSplineTDIWaveformWrap = fastlisaresponse_backend_methods.TDSplineTDIWaveformWrap
+        self.TDSplineTDIWaveformWrap = fastlisaresponse_backend_methods.TDSplineTDIWaveformWrap
         self.FDSplineTDIWaveformWrap = fastlisaresponse_backend_methods.FDSplineTDIWaveformWrap
         self.GBTDIonTheFlyWrap = fastlisaresponse_backend_methods.GBTDIonTheFlyWrap
         self.OrbitsWrap = fastlisaresponse_backend_methods.OrbitsWrap
@@ -90,7 +90,7 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
             "AE": fastlisaresponse_backend_cpu.tdionthefly.TDI_AE,
         }
         return FastLISAResponseBackendMethods(
-            # TDSplineTDIWaveformWrap=fastlisaresponse_backend_cpu.tdionthefly.FDSplineTDIWaveformWrap,
+            TDSplineTDIWaveformWrap=fastlisaresponse_backend_cpu.tdionthefly.TDSplineTDIWaveformWrapCPU,
             FDSplineTDIWaveformWrap=fastlisaresponse_backend_cpu.tdionthefly.FDSplineTDIWaveformWrapCPU,
             GBTDIonTheFlyWrap=fastlisaresponse_backend_cpu.tdionthefly.GBTDIonTheFlyWrapCPU,
             LISAResponseWrap=fastlisaresponse_backend_cpu.responselisa.LISAResponseWrapCPU,
@@ -141,7 +141,7 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
             "AE": fastlisaresponse_backend_cuda11x.tdionthefly.TDI_AE,
         }
         return FastLISAResponseBackendMethods(
-            # TDSplineTDIWaveformWrap=fastlisaresponse_backend_cpu.tdionthefly.FDSplineTDIWaveformWrap,
+            TDSplineTDIWaveformWrap=fastlisaresponse_backend_cuda11x.tdionthefly.TDSplineTDIWaveformWrapGPU,
             FDSplineTDIWaveformWrap=fastlisaresponse_backend_cuda11x.tdionthefly.FDSplineTDIWaveformWrapGPU,
             GBTDIonTheFlyWrap=fastlisaresponse_backend_cuda11x.tdionthefly.GBTDIonTheFlyWrapGPU,
             LISAResponseWrap=fastlisaresponse_backend_cuda11x.responselisa.LISAResponseWrapGPU,
@@ -189,7 +189,7 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
             "AE": fastlisaresponse_backend_cuda12x.tdionthefly.TDI_AE,
         }
         return FastLISAResponseBackendMethods(
-            # TDSplineTDIWaveformWrap=fastlisaresponse_backend_cpu.tdionthefly.FDSplineTDIWaveformWrap,
+            TDSplineTDIWaveformWrap=fastlisaresponse_backend_cuda12x.tdionthefly.TDSplineTDIWaveformWrapGPU,
             FDSplineTDIWaveformWrap=fastlisaresponse_backend_cuda12x.tdionthefly.FDSplineTDIWaveformWrapGPU,
             GBTDIonTheFlyWrap=fastlisaresponse_backend_cuda12x.tdionthefly.GBTDIonTheFlyWrapGPU,
             LISAResponseWrap=fastlisaresponse_backend_cuda12x.responselisa.LISAResponseWrapGPU,

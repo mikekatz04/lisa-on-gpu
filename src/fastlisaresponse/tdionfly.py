@@ -227,9 +227,9 @@ class TDTDIonTheFly(TDIonTheFly):
             phase = self.xp.atleast_2d(self.xp.asarray(phase))
 
             # TODO: improve when gbt is fixed up
-            amp = self.backend.CubicSplineInterpolant_responselisa(t_input.copy(), amp, force_backend=self.backend)
-            phase = self.backend.CubicSplineInterpolant_responselisa(t_input.copy(), phase, force_backend=self.backend)
-
+            amp = CubicSplineInterpolant(t_input.copy(), amp, force_backend=self.backend.name.split("_")[-1])
+            phase = CubicSplineInterpolant(t_input.copy(), phase, force_backend=self.backend.name.split("_")[-1])
+            
         elif isinstance(amp, CubicSpline_scipy):
             raise NotImplementedError
             assert isinstance(phase, CubicSpline_scipy)
@@ -284,11 +284,10 @@ class TDTDIonTheFly(TDIonTheFly):
         # time.sleep(1.0)
     @property
     def wave_gen(self) -> callable:
+        self.cpp_amp = self.backend.CubicSplineWrap(*self.amp.cpp_class_args)
+        self.cpp_phase = self.backend.CubicSplineWrap(*self.phase.cpp_class_args)
+        self._wave_gen = self.backend.TDSplineTDIWaveformWrap(self.cpp_orbits, self.cpp_tdi_config, self.cpp_amp, self.cpp_phase)
         return self._wave_gen
-    
-    @wave_gen.setter
-    def wave_gen(self, wave_gen):
-        self._wave_gen = wave_gen
     
     def from_tdi_output(self, tdi_output: TDIOutput, fill_splines: Optional[bool] = False) -> FDTDIOutput:
         assert self.xp.allclose(tdi_output.x, self.t_arr)

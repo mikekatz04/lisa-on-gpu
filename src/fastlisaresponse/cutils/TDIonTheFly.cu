@@ -2049,14 +2049,14 @@ void FDSplineTDIWaveform::get_tdi(void *buffer, int buffer_length, cmplx *tdi_ch
 CUDA_DEVICE
 double TDSplineTDIWaveform::get_amp(double t, double *params, int spline_i)
 {
-    printf("before amp: %d\n", amp_spline->ninterps);
+    // printf("before amp: %d\n", amp_spline->ninterps);
     return amp_spline->eval_single(t, spline_i);
 }
 
 CUDA_DEVICE
 double TDSplineTDIWaveform::get_phase(double t, double *params, int spline_i)
 {
-    printf("before phase: %d\n", phase_spline->ninterps);
+    // printf("before phase: %d\n", phase_spline->ninterps);
     
     return phase_spline->eval_single(t, spline_i);
 }
