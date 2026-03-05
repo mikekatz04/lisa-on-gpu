@@ -36,6 +36,41 @@ factorials = np.array([factorial(i) for i in range(30)])
 C_inv = 3.3356409519815204e-09
 
 
+from astropy.coordinates import SkyCoord
+import astropy.units as u
+
+# ...existing code...
+def ecliptic_to_icrs(lambda_ecl, beta_ecl):
+    """
+    Convert ecliptic coordinates (lambda, beta) in radians to ICRS (RA, Dec) in radians.
+
+    Parameters
+    ----------
+    lambda_ecl, beta_ecl : float or array-like
+        Ecliptic longitude (lambda) and latitude (beta) in radians.
+
+    Returns
+    -------
+    ra, dec : tuple
+        Right ascension and declination in radians (same shape as inputs).
+    """
+    ecl = SkyCoord(lon=lambda_ecl * u.rad, lat=beta_ecl * u.rad, frame='barycentrictrueecliptic')
+    icrs = ecl.transform_to('icrs')
+    return icrs.ra.rad, icrs.dec.rad
+
+
+def icrs_to_ecliptic(ra, dec):
+    """Convert ICRS coordinates (ra, dec) to ecliptic coordinates (lambda, beta)."""
+    
+    icrs_coord = SkyCoord(ra=ra * u.rad, dec=dec * u.rad, frame='icrs')
+    ecliptic_coord = icrs_coord.barycentrictrueecliptic
+
+    lambda_ecl = ecliptic_coord.lon.rad
+    beta_ecl = ecliptic_coord.lat.rad
+
+    return lambda_ecl, beta_ecl
+
+
 class pyResponseTDI(FastLISAResponseParallelModule):
     """Class container for fast LISA response function generation.
 
@@ -380,6 +415,7 @@ class pyResponseTDI(FastLISAResponseParallelModule):
     def _data_time_check(
         self, t_data: np.ndarray, input_in: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray]:
+
         # remove input data that goes beyond orbital information
         if t_data.max() > self.response_orbits.t.max():  # self.response_orbits.ltt_t.max():
             warnings.warn(
@@ -556,7 +592,7 @@ class pyResponseTDI(FastLISAResponseParallelModule):
 
         t_data = t0 + self.xp.arange(self.y_gw_length) * self.dt
 
-        num_units = int(self.tdi_operation_index.max() + 1)
+        num_units = int(self.tdi.tdi_operation_index.max() + 1)
 
         assert np.all(
             (np.diff(self.tdi.tdi_operation_index) == 0)
@@ -775,7 +811,10 @@ class ResponseWrapper(FastLISAResponseParallelModule):
         if self.flip_hx:
             h = h.real - 1j * h.imag
 
-        self.response_model.get_projections(h, lam, beta, t0=self.t0, t_buffer=self.t_buffer)
+        ra, dec = ecliptic_to_icrs(lam, beta)
+        breakpoint()
+        # self.response_model.get_projections(h, lam, beta, t0=self.t0, t_buffer=self.t_buffer)
+        self.response_model.get_projections(h, ra, dec, t0=self.t0, t_buffer=self.t_buffer)
         tdi_out = self.response_model.get_tdi_delays()  # will take care of t0 automatically to match projections
 
         out = list(tdi_out)
