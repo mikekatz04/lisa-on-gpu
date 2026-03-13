@@ -105,6 +105,7 @@ class LISATDIonTheFly{
 class GBTDIonTheFly : public LISATDIonTheFly{
     public:
         double T;
+        double t_ref;
         int amplitude_index;
         int f0_index;
         int fdot0_index;
@@ -112,9 +113,10 @@ class GBTDIonTheFly : public LISATDIonTheFly{
         int phi0_index;
 
         CUDA_CALLABLE_MEMBER
-        GBTDIonTheFly(Orbits *orbits_, TDIConfig *tdi_config_, double T_) : LISATDIonTheFly(orbits_, tdi_config_, 5, 6, 7, 8)
+        GBTDIonTheFly(Orbits *orbits_, TDIConfig *tdi_config_, double T_, double t_ref_) : LISATDIonTheFly(orbits_, tdi_config_, 5, 6, 7, 8)
         {
             T = T_;
+            t_ref = t_ref_;
             amplitude_index = 0;
             f0_index = 1;
             fdot0_index = 2;
@@ -327,7 +329,7 @@ void fd_spline_run_wave_tdi_wrap(FDSplineTDIWaveform *tdi_on_fly, cmplx *tdi_cha
 
 class GBComputationGroup{
   public:
-    void gb_wdm_get_ll_wrap(double *d_h_out, double *h_h_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, int tdi_type);
+    void gb_wdm_get_ll_wrap(double *d_h_out, double *h_h_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type);
 };
 
 #endif // __TDI_ON_THE_FLY_HH__

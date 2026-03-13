@@ -585,6 +585,7 @@ class GBTDIonTheFly(TDIonTheFly):
     def __init__(self, 
         t: np.ndarray,
         T: float,
+        t_ref: float,
         *args, 
         **kwargs
     ): 
@@ -592,6 +593,7 @@ class GBTDIonTheFly(TDIonTheFly):
 
         self.t_arr = self.xp.atleast_2d(self.xp.asarray(t))
         self.T = T
+        self.t_ref = t_ref
         self.N = self.t_arr.shape[1]
 
         if self.t_arr.shape[0] == 1:
@@ -615,7 +617,7 @@ class GBTDIonTheFly(TDIonTheFly):
     
     @property
     def wave_gen(self) -> callable:
-        self._wave_gen = self.backend.GBTDIonTheFlyWrap(self.cpp_orbits, self.cpp_tdi_config, self.T)
+        self._wave_gen = self.backend.GBTDIonTheFlyWrap(self.cpp_orbits, self.cpp_tdi_config, self.T, self.t_ref)
         return self._wave_gen
     
     def __call__(self, amp, f0, fdot0, fddot0, phi0, inc, psi, lam, beta, return_spline: bool = False) -> TDIOutput:

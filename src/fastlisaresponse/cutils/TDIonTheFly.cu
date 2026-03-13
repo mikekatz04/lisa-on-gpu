@@ -652,14 +652,14 @@ double block_reduce(double *array)
 
 
 CUDA_KERNEL
-void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, int tdi_type)
+void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type)
 {
     printf("CHECK1\n");
     CUDA_SHARED double d_h_tmp[NUM_THREADS_HERE];
     CUDA_SHARED double h_h_tmp[NUM_THREADS_HERE];
 
     CUDA_SHARED double params[N_PARAMS_MAX];
-    GBTDIonTheFly tdi_on_fly_here(orbits, tdi_config, T);
+    GBTDIonTheFly tdi_on_fly_here(orbits, tdi_config, T, t_ref);
     
     cmplx tdi_channel_val[3];
     double w_mn[3];
@@ -763,7 +763,7 @@ void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIC
     }
 };
 
-void GBComputationGroup::gb_wdm_get_ll_wrap(double *d_h_out, double *h_h_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, int tdi_type)
+void GBComputationGroup::gb_wdm_get_ll_wrap(double *d_h_out, double *h_h_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type)
 {
 #ifdef __CUDACC__
     Orbits *d_orbits;
@@ -783,7 +783,7 @@ void GBComputationGroup::gb_wdm_get_ll_wrap(double *d_h_out, double *h_h_out, Or
     gpuErrchk(cudaMemcpy(d_wdm, wdm, sizeof(WDMDomain), cudaMemcpyHostToDevice));
 
     gb_wdm_get_ll_kernel<<<num_bin, NUM_THREADS_HERE>>>(d_h_out, h_h_out, d_orbits, d_tdi_config, d_wdm_lookup, d_wdm, params_all, data_index_all, 
-        noise_index_all, num_bin, nparams, T, tdi_type);
+        noise_index_all, num_bin, nparams, T, t_ref, tdi_type);
 
     cudaDeviceSynchronize();
     gpuErrchk(cudaGetLastError());
@@ -797,17 +797,17 @@ void GBComputationGroup::gb_wdm_get_ll_wrap(double *d_h_out, double *h_h_out, Or
 
     // make buffer 
     gb_wdm_get_ll_kernel(d_h_out, h_h_out, orbits, tdi_config, wdm_lookup, wdm, params_all, data_index_all, 
-        noise_index_all, num_bin, nparams, T, tdi_type);
+        noise_index_all, num_bin, nparams, T, t_ref, tdi_type);
 
 #endif
 }
 
 CUDA_KERNEL
-void gb_wdm_swap_ll_kernel(double *d_h_add_out, double *d_h_remove_out, double *add_add_out, double *remove_remove_out, double *add_remove_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_add_all, double *params_remove_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, int tdi_type)
+void gb_wdm_swap_ll_kernel(double *d_h_add_out, double *d_h_remove_out, double *add_add_out, double *remove_remove_out, double *add_remove_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_add_all, double *params_remove_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type)
 {
     CUDA_SHARED double params_add[N_PARAMS_MAX];
     CUDA_SHARED double params_remove[N_PARAMS_MAX];
-    GBTDIonTheFly tdi_on_fly_here(orbits, tdi_config, T);
+    GBTDIonTheFly tdi_on_fly_here(orbits, tdi_config, T, t_ref);
 
     cmplx tdi_channel_val_add[3];
     cmplx tdi_channel_val_remove[3];
@@ -1757,8 +1757,8 @@ double GBTDIonTheFly::ucb_phase(double t, double *params)
      * LDC phase parameter in key files is
      * -phi0
      */
-    
-    return -phi0 + 2 * M_PI *( f0*t + 0.5*fdot*t*t + 1.0/6.0*fddot*t*t*t );
+    double t_diff = t - t_ref;
+    return -phi0 + 2 * M_PI *( f0*t_diff + 0.5*fdot*t_diff*t_diff + 1.0/6.0*fddot*t_diff*t_diff*t_diff );
 }
 
 
@@ -1931,7 +1931,7 @@ void gb_run_wave_tdi_kernel(GBTDIonTheFly *tdi_on_fly, int buffer_length, cmplx 
     extern CUDA_SHARED char shared_mem[];
     void *buffer = (void*)shared_mem;
 
-    GBTDIonTheFly tdi_on_fly_here(tdi_on_fly->orbits, tdi_on_fly->tdi_config, tdi_on_fly->T);
+    GBTDIonTheFly tdi_on_fly_here(tdi_on_fly->orbits, tdi_on_fly->tdi_config, tdi_on_fly->T, tdi_on_fly->t_ref);
     tdi_on_fly_here.run_wave_tdi(buffer, buffer_length, tdi_channels_arr, tdi_amp, tdi_phase, phi_ref,
         params, t_arr, N, num_bin, n_params, nchannels);
 }
@@ -1944,7 +1944,7 @@ void gb_run_wave_tdi_wrap(GBTDIonTheFly *tdi_on_fly, cmplx *tdi_channels_arr,
     // printf("CHECK44\n");
 #ifdef __CUDACC__
     // printf("CHECK55\n");
-    GBTDIonTheFly *gb_here = new GBTDIonTheFly(tdi_on_fly->orbits, tdi_on_fly->tdi_config, tdi_on_fly->T);
+    GBTDIonTheFly *gb_here = new GBTDIonTheFly(tdi_on_fly->orbits, tdi_on_fly->tdi_config, tdi_on_fly->T, tdi_on_fly->t_ref);
     Orbits *d_orbits;
     cudaMalloc(&d_orbits, sizeof(Orbits));
     gpuErrchk(cudaMemcpy(d_orbits, tdi_on_fly->orbits, sizeof(Orbits), cudaMemcpyHostToDevice));
