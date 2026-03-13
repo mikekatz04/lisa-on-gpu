@@ -1597,12 +1597,6 @@ void LISATDIonTheFly::new_extract_amplitude_and_phase(int *count, bool *fix_coun
     // cumsum
     cumsum(count, Ns);
     CUDA_SYNC_THREADS;
-    for (int i = (start + 1); i < Ns; i += 1)
-    {
-        count[i] += count[i - 1];
-    }
-    CUDA_SYNC_THREADS;
-
 
     // 
     for (int i = start; i < Ns - 1; i += 1)
@@ -1768,7 +1762,8 @@ double GBTDIonTheFly::ucb_amplitude(double t, double *params)
     double A0    = params[amplitude_index];
     double f0    = params[f0_index];
     double fdot  = params[fdot0_index];
-    return A0 * ( 1.0 + 2.0/3.0*fdot/f0*t );
+    double t_diff = t - t_ref;
+    return A0 * ( 1.0 + 2.0/3.0*fdot/f0*t_diff);
 }
 
 CUDA_DEVICE
