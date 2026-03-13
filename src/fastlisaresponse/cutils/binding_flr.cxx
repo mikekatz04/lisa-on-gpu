@@ -34,7 +34,7 @@ void LISAResponseWrap::get_response_wrap(array_type<double> y_gw_, array_type<do
     int num_delays,
     array_type<std::complex<double>> input_in_, int num_inputs, int order,
     double sampling_frequency, int buffer_integer,
-    array_type<double> A_in_, double deps, int num_A, array_type<double> E_in_, int projections_start_ind)
+    array_type<double> A_in_, double deps, int num_A, array_type<double> E_in_, int projections_start_ind, double t0)
 {
     response->get_response(
         return_pointer_and_check_length(y_gw_, "y_gw", num_delays, 6),
@@ -48,7 +48,7 @@ void LISAResponseWrap::get_response_wrap(array_type<double> y_gw_, array_type<do
         return_pointer_and_check_length(A_in_, "A_in", num_A, 1),
         deps, num_A,
         return_pointer(E_in_, "E_in"), 
-        projections_start_ind
+        projections_start_ind, t0
     );
 }
     

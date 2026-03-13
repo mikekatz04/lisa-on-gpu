@@ -167,7 +167,7 @@ class LISAResponseWrap : public ReturnPointerBase {
                   int num_delays,
                   array_type<std::complex<double>> input_in_, int num_inputs, int order,
                   double sampling_frequency, int buffer_integer,
-                  array_type<double> A_in_, double deps, int num_A, array_type<double> E_in_, int projections_start_ind);
+                  array_type<double> A_in_, double deps, int num_A, array_type<double> E_in_, int projections_start_ind, double t0);
     
 };
 

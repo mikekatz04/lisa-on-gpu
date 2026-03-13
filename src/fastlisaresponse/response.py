@@ -428,7 +428,7 @@ class pyResponseTDI(FastLISAResponseParallelModule):
             input_in = input_in[:max_ind]
         return (t_data, input_in)
 
-    def get_projections(self, input_in, lam, beta, t0=0.0, t_buffer=10000.0):
+    def get_projections(self, input_in, lam, beta, t0_shift_to_data=0.0, t0=0.0, t_buffer=10000.0):
         """Compute projections of GW signal on to LISA constellation
 
         Args:
@@ -450,9 +450,6 @@ class pyResponseTDI(FastLISAResponseParallelModule):
         self.tdi_start_ind = int(t_buffer / self.dt)
         # get necessary buffer for TDI
         self.check_tdi_buffer = int(100.0 * self.sampling_frequency) + 4 * self.order
-
-        self.t0_projection = t0
-        from copy import deepcopy
 
         tmp_orbits = deepcopy(self.response_orbits.x_base)
         self.projection_buffer = (
@@ -505,16 +502,17 @@ class pyResponseTDI(FastLISAResponseParallelModule):
 
         input_in = self.xp.asarray(input_in)
 
-        t_data = t0 + self.xp.arange(len(input_in)) * self.dt
+        assert np.abs(t0_shift_to_data) < self.dt
 
-        t_data, input_in = self._data_time_check(t_data, input_in)
+        t_arr = np.arange(len(input_in)) * self.dt + (t0 + t0_shift_to_data)
+        t_arr, input_in = self._data_time_check(t_arr, input_in)
 
         assert len(input_in) >= self.num_pts
         y_gw = self.xp.zeros((self.nlinks * self.num_pts,), dtype=self.xp.float64)
 
         self.response_gen(
             y_gw,
-            t_data,
+            t_arr,
             k_in,
             u_in,
             v_in,
@@ -530,8 +528,10 @@ class pyResponseTDI(FastLISAResponseParallelModule):
             len(self.A_in),
             self.E_in,
             self.projections_start_ind,
+            t0,
         )
 
+        self.t_arr_proj = t_arr
         self.y_gw_flat = y_gw
         self.y_gw_length = self.num_pts
 
@@ -540,7 +540,7 @@ class pyResponseTDI(FastLISAResponseParallelModule):
         """Return links as an array"""
         return self.delayed_links_flat.reshape(3, -1)
 
-    def get_tdi_delays(self, t0=None, y_gw=None):
+    def get_tdi_delays(self, t_arr=None, y_gw=None):
         """Get TDI combinations from projections.
 
         This functions generates the TDI combinations from the projections
@@ -569,29 +569,26 @@ class pyResponseTDI(FastLISAResponseParallelModule):
             (3, self.num_pts), dtype=self.xp.float64
         )
 
-        if t0 is None:
-            t0 = self.t0_projection
-
-        else:
-            if self.t0_projection is not None:
-                if self.t0_projection != t0:
-                    raise ValueError("If running projections with a t0 value, that t0 value needs to be the same for TDI. If you want to force otherwise, need to run 'del class.t0_projections' before TDI computation.")
-        
         # y_gw entered directly
         if y_gw is not None:
-            assert y_gw.shape == (len(self.link_space_craft_0_in), self.num_pts)
+            assert y_gw.shape == (len(self.orbits.LINKS), self.num_pts)
             self.y_gw_flat = y_gw.flatten().copy()
             self.y_gw_length = self.num_pts
+            if t_arr is None:
+                raise ValueError("If entering y_gw directly, also need to enter t_arr directly.")
+            
+            assert t_arr.shape == (self.num_pts,)
 
         elif self.y_gw_flat is None:
             raise ValueError(
                 "Need to either enter projection array or have this code determine projections."
             )
+        else:
+            assert self.t_arr_proj is not None
+            t_arr = self.t_arr_proj
 
         self.delayed_links_flat = self.delayed_links_flat.flatten()
-
-        t_data = t0 + self.xp.arange(self.y_gw_length) * self.dt
-
+    
         num_units = int(self.tdi.tdi_operation_index.max() + 1)
 
         assert np.all(
@@ -613,7 +610,7 @@ class pyResponseTDI(FastLISAResponseParallelModule):
             self.y_gw_flat,
             self.y_gw_length,
             self.num_pts,
-            t_data,
+            t_arr,
             self.order,
             self.sampling_frequency,
             self.buffer_integer,
@@ -702,7 +699,8 @@ class ResponseWrapper(FastLISAResponseParallelModule):
         dt,
         index_lambda,
         index_beta,
-        t0=0.0, 
+        t0=0.0,
+        t0_shift_to_data=0.0,
         t_buffer=10000.0,
         flip_hx=False,
         remove_sky_coords=False,
@@ -720,6 +718,7 @@ class ResponseWrapper(FastLISAResponseParallelModule):
         self.index_beta = index_beta
         self.dt = dt
         self.t0 = t0
+        self.t0_shift_to_data = t0_shift_to_data
         self.t_buffer = t_buffer
         self.sampling_frequency = 1.0 / dt
         super().__init__(force_backend=force_backend)
@@ -812,9 +811,10 @@ class ResponseWrapper(FastLISAResponseParallelModule):
             h = h.real - 1j * h.imag
 
         ra, dec = ecliptic_to_icrs(lam, beta)
-        breakpoint()
+
+        # TODO: make this customizable
         # self.response_model.get_projections(h, lam, beta, t0=self.t0, t_buffer=self.t_buffer)
-        self.response_model.get_projections(h, ra, dec, t0=self.t0, t_buffer=self.t_buffer)
+        self.response_model.get_projections(h, ra, dec, t0_shift_to_data=self.t0_shift_to_data, t0=self.t0, t_buffer=self.t_buffer)
         tdi_out = self.response_model.get_tdi_delays()  # will take care of t0 automatically to match projections
 
         out = list(tdi_out)

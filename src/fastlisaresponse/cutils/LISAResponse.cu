@@ -446,7 +446,7 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
               int num_delays,
               cmplx *input_in, int num_inputs, int order, double sampling_frequency,
               int buffer_integer, double *A_in, double deps, int num_A, double *E_in, int projections_start_ind,
-              Orbits *orbits_in)
+              Orbits *orbits_in, double t0)
 {
 #ifdef __CUDACC__
     CUDA_SHARED cmplx input[BUFFER_SIZE];
@@ -521,7 +521,7 @@ void response(double *y_gw, double *t_data, double *k_in, double *u_in, double *
     CUDA_SYNC_THREADS;
     int point_count = order + 1;
     int half_point_count = int(point_count / 2);
-    double t0_offset = t_data[0];
+    double t0_offset = t0;
 #ifdef __CUDACC__
     start = blockIdx.y;
     increment = gridDim.y;
@@ -685,7 +685,7 @@ void LISAResponse::get_response(double *y_gw, double *t_data, double *k_in, doub
                   int num_delays,
                   cmplx* input_in, int num_inputs, int order,
                   double sampling_frequency, int buffer_integer,
-                  double *A_in, double deps, int num_A, double *E_in, int projections_start_ind)
+                  double *A_in, double deps, int num_A, double *E_in, int projections_start_ind, double t0)
 {
 
     if (orbits == NULL)
@@ -710,7 +710,7 @@ void LISAResponse::get_response(double *y_gw, double *t_data, double *k_in, doub
                                        num_delays,
                                        input_in, num_inputs, order, sampling_frequency, buffer_integer,
                                        A_in, deps, num_A, E_in, projections_start_ind,
-                                       orbits_gpu);
+                                       orbits_gpu, t0);
     cudaDeviceSynchronize();
     gpuErrchk(cudaGetLastError());
 
@@ -723,7 +723,7 @@ void LISAResponse::get_response(double *y_gw, double *t_data, double *k_in, doub
              num_delays,
              input_in, num_inputs, order, sampling_frequency, buffer_integer,
              A_in, deps, num_A, E_in, projections_start_ind,
-             orbits);
+             orbits, t0);
 #endif
 }
 

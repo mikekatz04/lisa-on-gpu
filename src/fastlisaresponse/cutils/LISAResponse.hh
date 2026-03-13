@@ -67,7 +67,7 @@ class LISAResponse{
                   int num_delays,
                   cmplx* input_in_, int num_inputs, int order,
                   double sampling_frequency, int buffer_integer,
-                  double *A_in_, double deps, int num_A, double *E_in_, int projections_start_ind);
+                  double *A_in_, double deps, int num_A, double *E_in_, int projections_start_ind, double t0);
 };
 
 #endif // __LISA_RESPONSE__
