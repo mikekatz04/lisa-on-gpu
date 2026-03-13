@@ -1772,7 +1772,8 @@ double GBTDIonTheFly::ucb_f(double t, double *params)
     double f0    = params[f0_index];
     double fdot  = params[fdot0_index];
     double fddot = params[fddot0_index];
-    return f0 + fdot * t + 1.0 / 2.0 * fddot * t * t;
+    double t_diff = t - t_ref;
+    return f0 + fdot * t_diff + 1.0 / 2.0 * fddot * t_diff * t_diff;
 }
 
 CUDA_DEVICE
@@ -1780,7 +1781,8 @@ double GBTDIonTheFly::ucb_fdot(double t, double *params)
 {
     double fdot  = params[fdot0_index];
     double fddot = params[fddot0_index];
-    return fdot + fddot * t;
+    double t_diff = t - t_ref;
+    return fdot + fddot * t_diff;
 }
 
 // CUDA_DEVICE
