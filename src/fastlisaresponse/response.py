@@ -75,7 +75,7 @@ class pyResponseTDI(FastLISAResponseParallelModule):
             outputs: ``lisa-simulation.pages.in2p3.fr/orbits/``.
             (default: :class:`EqualArmlengthOrbits`)
         force_backend (str, optional): If given, run this class on the requested backend. 
-            Options are ``"cpu"``, ``"cuda11x"``, ``"cuda12x"``. (default: ``None``)
+            Options are ``"cpu"``, ``"cuda11x"``, ``"cuda12x"``, ``"cuda13x"``. (default: ``None``)
 
     Attributes:
         A_in (xp.ndarray): Array containing y values for linear spline of A
@@ -712,7 +712,7 @@ class ResponseWrapper(FastLISAResponseParallelModule):
             coordinate is the polar angle. In this case, the code will
             convert it with :math:`\beta=\pi / 2 - \Theta`. (Default: :code:`True`)
         force_backend (str, optional): If given, run this class on the requested backend. 
-            Options are ``"cpu"``, ``"cuda11x"``, ``"cuda12x"``. (default: ``None``)
+            Options are ``"cpu"``, ``"cuda11x"``, ``"cuda12x"``, ``"cuda13x"``. (default: ``None``)
         remove_garbage (bool or str, optional): If True, it removes everything before ``t_buffer``
             and after the end time - ``t_buffer``. If ``str``, it must be ``"zero"``. If ``"zero"``,
             it will not remove the points, but set them to zero. This is ideal for PE. (Default: ``True``)
