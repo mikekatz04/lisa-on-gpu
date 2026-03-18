@@ -129,7 +129,7 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
             xp=cupy,
         )
 
-class FastLISAResponseCuda13Backend(Cuda13xBackend, FastLISAResponseBackend):
+class FastLISAResponseCuda13xBackend(Cuda13xBackend, FastLISAResponseBackend):
     """Implementation of CUDA 13.x backend"""
     _backend_name : str = "fastlisaresponse_backend_cuda13x"
     _name = "fastlisaresponse_cuda13x"
