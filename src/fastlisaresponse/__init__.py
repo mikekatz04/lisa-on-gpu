@@ -32,14 +32,14 @@ from . import cutils, utils
 from .cutils import KNOWN_BACKENDS
 
 from gpubackendtools import Globals
-from .cutils import FastLISAResponseCpuBackend, FastLISAResponseCuda11xBackend, FastLISAResponseCuda12xBackend, FastLISAResponseCuda13Backend
+from .cutils import FastLISAResponseCpuBackend, FastLISAResponseCuda11xBackend, FastLISAResponseCuda12xBackend, FastLISAResponseCuda13xBackend
 
 
 add_backends = {
     "fastlisaresponse_cpu": FastLISAResponseCpuBackend,
     "fastlisaresponse_cuda11x": FastLISAResponseCuda11xBackend,
     "fastlisaresponse_cuda12x": FastLISAResponseCuda12xBackend,
-    "fastlisaresponse_cuda13x": FastLISAResponseCuda13Backend,
+    "fastlisaresponse_cuda13x": FastLISAResponseCuda13xBackend,
 }
 
 Globals().backends_manager.add_backends(add_backends)
