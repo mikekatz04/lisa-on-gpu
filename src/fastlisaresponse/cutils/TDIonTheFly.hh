@@ -34,6 +34,7 @@ class LISATDIonTheFly{
         int psi_index;
         int lam_index;
         int beta_index;
+        int N_store;
 
         CUDA_DEVICE 
         void run_wave_tdi(
@@ -136,6 +137,7 @@ class GBTDIonTheFly : public LISATDIonTheFly{
         CUDA_DEVICE
         double ucb_f(double t, double *params);
         int get_gb_buffer_size(int N);
+        double get_phase_ref(double t, double *params, int bin_i);
         // CUDA_DEVICE
         // void run_wave_tdi(
         //     cmplx *tdi_channels_arr, 

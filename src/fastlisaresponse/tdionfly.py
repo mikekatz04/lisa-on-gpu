@@ -299,11 +299,11 @@ class TDTDIonTheFly(TDIonTheFly):
 class TDIOutput(FastLISAResponseParallelModule):
     def __init__(self, x, tdi_amp, tdi_phase, phase_ref, fill_splines=True, **kwargs):
         
+        self.x = x
         self.fill_splines = fill_splines
         if self.fill_splines:
             self._splines = {}
-
-        self.x = x
+        
         super().__init__(**kwargs)
 
         # need to be after for proper setter
@@ -325,7 +325,7 @@ class TDIOutput(FastLISAResponseParallelModule):
         else:
             x_in = x.copy()
 
-        return CubicSplineInterpolant(x_in, y, **kwargs, force_backend=self.backend.name.split("_")[-1])
+        return CubicSplineInterpolant(x_in, y, force_backend=self.backend.name.split("_")[-1], **kwargs)
     
     @property
     def num_bin(self) -> int:

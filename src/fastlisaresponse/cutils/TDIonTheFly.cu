@@ -1706,6 +1706,20 @@ double LISATDIonTheFly::get_phase_ref(double t, double *params, int bin_i)
     return phase_ref;
 }
 
+CUDA_DEVICE
+double GBTDIonTheFly::get_phase_ref(double t, double *params, int bin_i)
+{   
+    double f0    = params[f0_index];
+    if (N_store == NULL)
+    {
+#ifdef __CUDACC__
+#else
+        throw std::invalid_argument("N_store not set yet.\n");
+#endif
+    }
+    return 2.0 * M_PI * ((int(f0 * T) - int(N_store / 4)) / T) * t;
+}
+
 
 CUDA_DEVICE
 void LISATDIonTheFly::new_extract_phase(cmplx *M, double *phiR, int N, double *t_arr)
@@ -1852,6 +1866,7 @@ void LISATDIonTheFly::run_wave_tdi(void *buffer, int buffer_length, cmplx *tdi_c
     double *tdi_amp, double *tdi_phase, double *phi_ref, 
     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels)
 {
+    N_store = N;
     // printf("orbits inside: %e", orbits->armlength);
     if (orbits == NULL)
     {
