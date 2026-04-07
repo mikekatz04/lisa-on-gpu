@@ -1710,14 +1710,15 @@ CUDA_DEVICE
 double GBTDIonTheFly::get_phase_ref(double t, double *params, int bin_i)
 {   
     double f0    = params[f0_index];
-    if (N_store == NULL)
-    {
-#ifdef __CUDACC__
-#else
-        throw std::invalid_argument("N_store not set yet.\n");
-#endif
-    }
-    return 2.0 * M_PI * ((int(f0 * T) - int(N_store / 4)) / T) * t;
+//     if (N_store == NULL)
+//     {
+// #ifdef __CUDACC__
+// #else
+//         throw std::invalid_argument("N_store not set yet.\n");
+// #endif
+//     }
+    double t_diff = t - t_ref;
+    return 2.0 * M_PI * (int(f0 * T) / T) * t_diff;
 }
 
 
