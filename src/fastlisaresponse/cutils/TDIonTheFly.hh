@@ -137,7 +137,7 @@ class GBTDIonTheFly : public LISATDIonTheFly{
         CUDA_DEVICE
         double ucb_f(double t, double *params);
         int get_gb_buffer_size(int N);
-        double get_phase_ref(double t, double *params, int bin_i);
+        // double get_phase_ref(double t, double *params, int bin_i);
         // CUDA_DEVICE
         // void run_wave_tdi(
         //     cmplx *tdi_channels_arr, 
@@ -242,15 +242,17 @@ class WDMSettings{
     int num_channel;
     double df;
     double dt;
+    bool is_m_ref_n_ref_even;
 
     // TODO: add to this?
     CUDA_CALLABLE_MEMBER
-    WDMSettings(double df_, double dt_, int num_m_, int num_n_, int num_channel_){
+    WDMSettings(double df_, double dt_, int num_m_, int num_n_, int num_channel_, bool is_m_ref_n_ref_even_){
         num_m = num_m_;
         num_n = num_n_;
         num_channel = num_channel_;
         df = df_;
         dt = dt_;
+        is_m_ref_n_ref_even = is_m_ref_n_ref_even_;
     };
 };
 
@@ -263,8 +265,8 @@ class WDMDomain : public WDMSettings{
     int num_noise;
 
     CUDA_CALLABLE_MEMBER
-    WDMDomain(double *wdm_data_, double *wdm_noise_, double df_, double dt_, int num_m_, int num_n_, int num_channel_, int num_data_, int num_noise_):
-    WDMSettings(df_, dt_, num_m_, num_n_, num_channel_)
+    WDMDomain(double *wdm_data_, double *wdm_noise_, double df_, double dt_, int num_m_, int num_n_, int num_channel_, bool is_m_ref_n_ref_even_, int num_data_, int num_noise_):
+    WDMSettings(df_, dt_, num_m_, num_n_, num_channel_, is_m_ref_n_ref_even_)
     {
         wdm_data = wdm_data_;
         wdm_noise = wdm_noise_;
@@ -308,7 +310,7 @@ class WaveletLookupTable : public WDMSettings{
 
     CUDA_CALLABLE_MEMBER
     WaveletLookupTable(double *c_nm_all_, double *s_nm_all_, int num_f_, int num_fdot_, double df_interp_, double dfdot_interp_, double min_f_scaled_, double min_fdot_, 
-        double df_, double dt_, int num_m_, int num_n_, int num_channel_): WDMSettings(df_, dt_, num_m_, num_n_, num_channel_) {
+        double df_, double dt_, int num_m_, int num_n_, int num_channel_, bool is_m_ref_n_ref_even_): WDMSettings(df_, dt_, num_m_, num_n_, num_channel_, is_m_ref_n_ref_even_) {
         // n * num_m + m 
         c_nm_all = c_nm_all_;
         s_nm_all = s_nm_all_;
@@ -322,7 +324,7 @@ class WaveletLookupTable : public WDMSettings{
     CUDA_DEVICE
     double linear_interp(double f_scaled, double fdot, double *z_vals);
     CUDA_DEVICE
-    double get_w_mn_lookup(cmplx tdi_channel_val, double f, double fdot, int layer_m);
+    double get_w_mn_lookup(cmplx tdi_channel_val, double f, double fdot, int layer_m, int layer_n);
 };
 
 void fd_spline_run_wave_tdi_wrap(FDSplineTDIWaveform *tdi_on_fly, cmplx *tdi_channels_arr, 
@@ -331,6 +333,7 @@ void fd_spline_run_wave_tdi_wrap(FDSplineTDIWaveform *tdi_on_fly, cmplx *tdi_cha
 
 class GBComputationGroup{
   public:
+    void gb_wdm_fill_global_wrap(double *template_fill, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type);
     void gb_wdm_get_ll_wrap(double *d_h_out, double *h_h_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type);
 };
 

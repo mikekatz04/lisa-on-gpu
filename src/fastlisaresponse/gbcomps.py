@@ -150,3 +150,62 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         # TODO: phase maximize
 
         return like_out
+
+    def fill_global_wdm(self, templates, params, wdm_holder, data_index=None):
+        assert isinstance(templates, self.xp.ndarray)
+
+        if templates.ndim == 1:
+            num_templates = int(templates.shape[-1] / (self.wdm_lookup_table.nchannels * self.wdm_lookup_table.num_m * self.wdm_lookup_table.num_n))
+            assert num_templates * self.wdm_lookup_table.nchannels * self.wdm_lookup_table.num_m * self.wdm_lookup_table.num_n == templates.shape[-1]
+
+        else:
+            assert templates.ndim == 4
+            num_templates, nchannels, _num_m, _num_n = templates.shape
+            assert (
+                nchannels == self.wdm_lookup_table.nchannels
+                and _num_m == self.wdm_lookup_table.num_m
+                and _num_n == self.wdm_lookup_table.num_m
+            )
+            templates = templates.flatten()
+
+        params_tmp = self.xp.atleast_2d(self.xp.asarray(params))
+        num_bin = params_tmp.shape[0]
+        params_in = params_tmp.flatten().copy()
+
+        # TODO: move this part
+        # TODO: need to check for num_data, num_noise
+        self.cpp_wdm = self.backend.WDMDomainWrap(
+            wdm_holder.linear_data_arr[0],
+            wdm_holder.linear_psd_arr[0],
+            self.wdm_lookup_table.df, 
+            self.wdm_lookup_table.dt,
+            self.wdm_lookup_table.NF, 
+            self.wdm_lookup_table.NT,
+            self.tdi_config.nchannels,
+            self.wdm_lookup_table.is_m_ref_n_ref_even, 
+            num_templates, # datqa not needed here
+            num_templates  # noise not needed here
+        )
+
+        if data_index is None:
+            data_index = self.xp.zeros(num_bin, dtype=self.xp.int32)
+        else:
+            assert data_index.dtype == self.xp.int32
+            
+        assert data_index.max() < num_templates
+        nparams = 9
+
+        breakpoint()
+        self.backend.GBComputationGroupWrap().gb_wdm_fill_global(
+            templates, 
+            self.cpp_orbits,
+            self.cpp_tdi_config, 
+            self.cpp_wdm_lookup_table, 
+            self.cpp_wdm, 
+            params_in, 
+            data_index, 
+            num_bin,
+            nparams, 
+            self.T,
+            self.backend.TDITypeDict["XYZ"]
+        )

@@ -136,13 +136,13 @@ class WaveletLookupTableWrap : public ReturnPointerBase {
     // double min_f;
     // double min_fdot;
 
-    WaveletLookupTableWrap(array_type<double>c_nm_all_, array_type<double>s_nm_all_, int num_f_, int num_fdot_, double df_interp_, double dfdot_interp_, double min_f_, double min_fdot_, double df_, double dt_, int num_m_, int num_n_, int num_channel_)
+    WaveletLookupTableWrap(array_type<double>c_nm_all_, array_type<double>s_nm_all_, int num_f_, int num_fdot_, double df_interp_, double dfdot_interp_, double min_f_, double min_fdot_, double df_, double dt_, int num_m_, int num_n_, int num_channel_, bool is_m_ref_n_ref_even_)
     {
         
         wdm_lookup = new WaveletLookupTable(
             return_pointer_and_check_length(c_nm_all_, "c_nm_all", num_f_ * num_fdot_, 1),
             return_pointer_and_check_length(s_nm_all_, "s_nm_all", num_f_ * num_fdot_, 1),
-            num_f_, num_fdot_, df_interp_, dfdot_interp_, min_f_, min_fdot_, df_, dt_, num_m_, num_n_, num_channel_
+            num_f_, num_fdot_, df_interp_, dfdot_interp_, min_f_, min_fdot_, df_, dt_, num_m_, num_n_, num_channel_, is_m_ref_n_ref_even_
         );
     };
     ~WaveletLookupTableWrap(){
@@ -164,13 +164,13 @@ class WDMDomainWrap : public ReturnPointerBase {
     // double min_f;
     // double min_fdot;
 
-    WDMDomainWrap(array_type<double>wdm_data_, array_type<double>wdm_noise_, double df_, double dt_, int num_m_, int num_n_, int num_channel_, int num_data_, int num_noise_)
+    WDMDomainWrap(array_type<double>wdm_data_, array_type<double>wdm_noise_, double df_, double dt_, int num_m_, int num_n_, int num_channel_, bool is_m_ref_n_ref_even_, int num_data_, int num_noise_)
     {
         // TODO: adjust noise length check to TDI setups
         wdm = new WDMDomain(
             return_pointer_and_check_length(wdm_data_, "wdm_data", num_n_ * num_m_ * num_channel_ * num_data_, 1),
             return_pointer(wdm_noise_, "wdm_noise"),  // return_pointer_and_check_length(wdm_noise_, "wdm_noise", num_n_ * num_m_ * num_channel_ * num_noise_, 1),
-            df_, dt_, num_m_, num_n_, num_channel_, num_data_, num_noise_
+            df_, dt_, num_m_, num_n_, num_channel_, is_m_ref_n_ref_even_, num_data_, num_noise_
         );
     };
     ~WDMDomainWrap(){
@@ -181,6 +181,7 @@ class WDMDomainWrap : public ReturnPointerBase {
 
 class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBase {
   public:
+    void gb_wdm_fill_global(array_type<double>template_fill, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type);
     void gb_wdm_get_ll(array_type<double>d_h_out, array_type<double>h_h_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, array_type<int>noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type);
 };
 
