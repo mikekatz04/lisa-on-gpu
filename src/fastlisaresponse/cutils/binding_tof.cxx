@@ -234,8 +234,8 @@ void tdionthefly_part(py::module &m) {
 #endif 
 
     // Bind the constructor
-    .def(py::init<array_type<double>,array_type<double>,int,int,double,double,double,double, double, double, int, int, int>(), 
-         py::arg("c_nm_all"), py::arg("s_nm_all"), py::arg("num_f"), py::arg("num_fdot"), py::arg("df_interp"), py::arg("dfdot_interp"), py::arg("min_f"), py::arg("min_fdot"), py::arg("df"), py::arg("dt"), py::arg("num_m"), py::arg("num_n"), py::arg("num_channel"))
+    .def(py::init<array_type<double>,array_type<double>,int,int,double,double,double,double, double, double, int, int, int,bool>(), 
+         py::arg("c_nm_all"), py::arg("s_nm_all"), py::arg("num_f"), py::arg("num_fdot"), py::arg("df_interp"), py::arg("dfdot_interp"), py::arg("min_f"), py::arg("min_fdot"), py::arg("df"), py::arg("dt"), py::arg("num_m"), py::arg("num_n"), py::arg("num_channel"), py::arg("is_m_ref_n_ref_even"))
     // Bind member functions
     
     // You can also expose public data members directly using def_readwrite
@@ -249,8 +249,8 @@ void tdionthefly_part(py::module &m) {
     py::class_<WaveletLookupTable>(m, "WaveletLookupTableCPU")
 #endif
     // Bind the constructor
-    .def(py::init<double*,double*,int,int,double,double,double,double, double, double, int, int, int>(), 
-         py::arg("c_nm_all"), py::arg("s_nm_all"), py::arg("num_f"), py::arg("num_fdot"), py::arg("df_interp"), py::arg("dfdot_interp"), py::arg("min_f"), py::arg("min_fdot"), py::arg("df"), py::arg("dt"), py::arg("num_m"), py::arg("num_n"), py::arg("num_channel"))
+    .def(py::init<double*,double*,int,int,double,double,double,double, double, double, int, int, int, bool>(), 
+         py::arg("c_nm_all"), py::arg("s_nm_all"), py::arg("num_f"), py::arg("num_fdot"), py::arg("df_interp"), py::arg("dfdot_interp"), py::arg("min_f"), py::arg("min_fdot"), py::arg("df"), py::arg("dt"), py::arg("num_m"), py::arg("num_n"), py::arg("num_channel"), py::arg("is_m_ref_n_ref_even"))
     ;
 
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)

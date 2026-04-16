@@ -747,8 +747,12 @@ void gb_wdm_fill_global_kernel(double *template_fill, Orbits* orbits, TDIConfig 
                     for (int j = 0; j < 3; j += 1) // over channels
                     {
                         w_mn = wdm_lookup->get_w_mn_lookup(tdi_channel_val[j], f, fdot, layer_m, n);
+#ifdef __CUDACC__
                         atomicAdd(&template_fill[(j * total_points) + (layer_m * num_n + n)], w_mn);
-                        // printf("CHECK8 %e %e %d %d %e %e %e\n", wdm_lookup->df_interp, wdm_lookup->dfdot_interp, layer_m, j, tdi_channel_val[j].real(), tdi_channel_val[j].imag(), w_mn[j]);                
+                        // printf("CHECK8 %e %e %d %d %e %e %e\n", wdm_lookup->df_interp, wdm_lookup->dfdot_interp, layer_m, j, tdi_channel_val[j].real(), tdi_channel_val[j].imag(), w_mn[j]);
+#else
+                        template_fill[(j * total_points) + (layer_m * num_n + n)] += w_mn;
+#endif
                     }
                 }
             }

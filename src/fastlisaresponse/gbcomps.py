@@ -72,22 +72,24 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         """Set wdm lookup table."""
 
         self._wdm_lookup_table = wdm_lookup_table
-        self.c_nm_all = self.xp.asarray(wdm_lookup_table.table.real.copy())
-        self.s_nm_all = self.xp.asarray(wdm_lookup_table.table.imag.copy())
+        self.c_nm_all = self.xp.asarray(wdm_lookup_table.table_sin.copy())
+        self.s_nm_all = self.xp.asarray(wdm_lookup_table.table_cos.copy())
+
         self.cpp_wdm_lookup_table = self.backend.WaveletLookupTableWrap(
             self.c_nm_all, 
             self.s_nm_all, 
             wdm_lookup_table.f_steps, 
             wdm_lookup_table.fdot_steps, 
-            wdm_lookup_table.deltaf,  # NOT .df (that is the WDM basis info) 
-            wdm_lookup_table.d_fdot, 
-            wdm_lookup_table.min_f_scaled,
-            wdm_lookup_table.min_fdot,
-            wdm_lookup_table.df,
-            wdm_lookup_table.dt,
-            wdm_lookup_table.NF,
-            wdm_lookup_table.NT,
-            wdm_lookup_table.num_channel
+            wdm_lookup_table.delta_f,  # NOT .df (that is the WDM basis info) 
+            wdm_lookup_table.delta_fdot, 
+            wdm_lookup_table.f_vals_norm.min().item(),
+            wdm_lookup_table.fdot_vals.min().item(),
+            wdm_lookup_table.settings.layer_df,
+            wdm_lookup_table.settings.layer_dt,
+            wdm_lookup_table.settings.Nf,
+            wdm_lookup_table.settings.Nt,
+            wdm_lookup_table.nchannels,
+            wdm_lookup_table.is_m_ref_n_ref_even
         )
 
     @classmethod
@@ -158,15 +160,21 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             num_templates = int(templates.shape[-1] / (self.wdm_lookup_table.nchannels * self.wdm_lookup_table.num_m * self.wdm_lookup_table.num_n))
             assert num_templates * self.wdm_lookup_table.nchannels * self.wdm_lookup_table.num_m * self.wdm_lookup_table.num_n == templates.shape[-1]
 
-        else:
-            assert templates.ndim == 4
+        elif templates.ndim == 2:
+            raise ValueError("Template must be 3D (nchannels, Nf, Nt), 4D (num_templates, nchannels, Nf, Nt), or flattended to 1D.")
+        elif templates.ndim == 3:
+            num_templates = 1
+            nchannels, _num_m, _num_n = templates.shape
+
+        elif templates.ndim == 4:
             num_templates, nchannels, _num_m, _num_n = templates.shape
-            assert (
-                nchannels == self.wdm_lookup_table.nchannels
-                and _num_m == self.wdm_lookup_table.num_m
-                and _num_n == self.wdm_lookup_table.num_m
-            )
-            templates = templates.flatten()
+            
+        assert (
+            nchannels == self.wdm_lookup_table.nchannels
+            and _num_m == self.wdm_lookup_table.Nf
+            and _num_n == self.wdm_lookup_table.Nt
+        )
+        templates = templates.flatten()
 
         params_tmp = self.xp.atleast_2d(self.xp.asarray(params))
         num_bin = params_tmp.shape[0]
@@ -177,10 +185,10 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         self.cpp_wdm = self.backend.WDMDomainWrap(
             wdm_holder.linear_data_arr[0],
             wdm_holder.linear_psd_arr[0],
-            self.wdm_lookup_table.df, 
-            self.wdm_lookup_table.dt,
-            self.wdm_lookup_table.NF, 
-            self.wdm_lookup_table.NT,
+            self.wdm_lookup_table.settings.layer_df, 
+            self.wdm_lookup_table.settings.layer_dt,
+            self.wdm_lookup_table.settings.Nf,
+            self.wdm_lookup_table.settings.Nt, 
             self.tdi_config.nchannels,
             self.wdm_lookup_table.is_m_ref_n_ref_even, 
             num_templates, # datqa not needed here
@@ -195,7 +203,6 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         assert data_index.max() < num_templates
         nparams = 9
 
-        breakpoint()
         self.backend.GBComputationGroupWrap().gb_wdm_fill_global(
             templates, 
             self.cpp_orbits,
@@ -209,3 +216,4 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             self.T,
             self.backend.TDITypeDict["XYZ"]
         )
+        breakpoint()

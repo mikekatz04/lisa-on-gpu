@@ -17,23 +17,26 @@ from fastlisaresponse.gbcomps import GBWDMComputations
 
 if __name__ == "__main__":
 
-    force_backend = "cuda12x"
+    force_backend = "cpu"
 
     xp = np if force_backend == "cpu" else cp
     orbits = DefaultOrbits(force_backend=force_backend)
     orbits.configure(linear_interp_setup=True)
     tdi_config = TDIConfig("2nd generation", force_backend=force_backend)
-    dt = 10.0
+    dt = 5.0
     Tobs = 2 * YRSID_SI
-    Tobs = WAVELET_DURATION * int(Tobs / WAVELET_DURATION)
-    Nobs = int(Tobs / dt)
     N_sparse = 256
     t_tdi = xp.linspace(0.0, Tobs, N_sparse + 1)[1:-1]
-    Tobs = Nobs * dt
 
-    wdm_settings = WDMSettings(Tobs, dt)
-    wdm_lookup_table = WDMLookupTable(wdm_settings, 50, 20, 3)
-    
+    t_min = 4.0 * 3600.0 * 24.0
+    t_max = 5.0 * 3600.0 * 24.0
+    Nf, Nt, layer_dt = WDMSettings.adjust_to_even_bins(t_min, t_max, dt, Tobs)
+    Tobs = Nt * layer_dt
+    Nobs = Nt * Nf
+
+    wdm_settings = WDMSettings(Nf, Nt, dt)
+    wdm_lookup_table = WDMLookupTable(wdm_settings, 0.01, 0.1, 3, store_path="./wdm_lookup_table_without_fdot.pkl", num_layers_diff=1, fdot_max_factor=0.0, time_layers=8, batch_size_gen=200)
+    nchannels = 3
     gb_comps = GBWDMComputations(wdm_lookup_table, Tobs, orbits=orbits, tdi_config=tdi_config, force_backend=force_backend)
 
     num_bin = 3
@@ -52,9 +55,11 @@ if __name__ == "__main__":
     lam = xp.full(num_bin, 4.827342308)
     beta = xp.full(num_bin, -0.50923423)
 
+    t_ref = int(Nt / 2) * wdm_settings.layer_dt
     gb_gen = GBTDIonTheFly(
         t_tdi, 
         Tobs,
+        t_ref,
         1. / dt,
         num_bin,
         n_params=9,
@@ -68,6 +73,7 @@ if __name__ == "__main__":
     tdi_output = xp.zeros((num_bin, 3, len(data_t_arr))) 
 
     tdi_output[:, :, keep]= output.eval_tdi(tdi_t_arr)
+
 
     # import matplotlib.pyplot as plt
     # plt.plot(data_t_arr[:num_points], tdi_output[0,0])
@@ -84,8 +90,10 @@ if __name__ == "__main__":
     # fdot_arr = uniform_dist(wdm_lookup_table.fdot_vals[0], wdm_lookup_table.fdot_vals[-1]).rvs(size=num)
     # output = wdm_lookup_table.get_table_coeffs(f_arr, fdot_arr)
     # breakpoint()
-    wdm = td_signal.fft(window=tukey(tdi_output.shape[-1], alpha=0.05)).wdmtransform(settings=wdm_settings)
+    wdm = td_signal.wdmtransform(settings=wdm_settings, window=tukey(tdi_output.shape[-1], alpha=0.05))
     # fig, ax = wdm.heatmap()
+    
+    params = xp.array([amp, f0, fdot, fddot, phi0, inc, psi, lam, beta]).T
 
     from lisatools.datacontainer import DataResidualArray
     from lisatools.sensitivity import XYZ1SensitivityMatrix
@@ -94,17 +102,18 @@ if __name__ == "__main__":
     data_res = DataResidualArray(wdm)
     sens_mat = XYZ1SensitivityMatrix(wdm.settings)
 
-    num_container = 5
+    num_container = 1
     acs_list = []
     for i in range(num_container):
         analysis_container = AnalysisContainer(deepcopy(data_res), deepcopy(sens_mat))
         acs_list.append(analysis_container)
     
-    acs = AnalysisContainerArray(acs_list, gpus=[0])
+    acs = AnalysisContainerArray(acs_list)  # , gpus=[0])
     check_ll = acs.likelihood()
 
-    params = xp.array([amp, f0, fdot, fddot, phi0, inc, psi, lam, beta]).T
-
+    templates = np.zeros_like(data_res[:])
+    test = gb_comps.fill_global_wdm(templates, params, acs, data_index=None)
+    breakpoint()
     test = gb_comps.get_ll_wdm(params, acs, data_index=None, noise_index=None)
     # fig.savefig("check0.png")
     #plt.show()
