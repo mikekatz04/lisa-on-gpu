@@ -675,6 +675,9 @@ void gb_wdm_fill_global_kernel(double *template_fill, Orbits* orbits, TDIConfig 
     GBTDIonTheFly tdi_on_fly_here(orbits, tdi_config, T, t_ref);
     
     cmplx tdi_channel_val[3];
+    cmplx tdi_channel_val_up_dt[3];
+    cmplx tdi_channel_val_down_dt[3];
+    double eps_rel = 1e-9;
 
     //  RIGHT NOW I THINK WE DO NOT NEED FREQUENCY PER CHANNEL 
     //  BECAUSE DOPPLER SHIFTS ARE SMALL
@@ -688,7 +691,7 @@ void gb_wdm_fill_global_kernel(double *template_fill, Orbits* orbits, TDIConfig 
     
     tdi_on_fly_here.fill_link_arrays(link_Space_craft_rec, link_Space_craft_em);
     CUDA_SYNC_THREADS;
-    double tn;
+    double tn, tn_up_dt, tn_down_dt;
 
 #ifdef __CUDACC__
     int tid = threadIdx.x;
@@ -706,6 +709,9 @@ void gb_wdm_fill_global_kernel(double *template_fill, Orbits* orbits, TDIConfig 
     int num_m = wdm->num_m;
     int num_n = wdm->num_n;
     double w_mn;
+    double phase_mid, phase_up, phase_down;
+
+    double deriv_delta_t;
     int total_points = num_m * num_n;
     for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
     {
@@ -726,11 +732,31 @@ void gb_wdm_fill_global_kernel(double *template_fill, Orbits* orbits, TDIConfig 
             tn = n * dt;
             tdi_on_fly_here.get_tdi_Xf_single(&tdi_channel_val[0], tn, params, k, u, v, link_Space_craft_rec, link_Space_craft_em, bin_i);
             
-            // printf("CHECK5 %d\n", n);
-        
-            f = tdi_on_fly_here.get_f(tn, params, bin_i);
-            fdot = tdi_on_fly_here.get_fdot(tn, params, bin_i);
 
+            // numerical derivatives 
+
+            deriv_delta_t = tn * eps_rel;
+            tn_down_dt = tn - deriv_delta_t;
+            tn_up_dt = tn + deriv_delta_t;
+
+            tdi_on_fly_here.get_tdi_Xf_single(&tdi_channel_val_down_dt[0], tn_down_dt, params, k, u, v, link_Space_craft_rec, link_Space_craft_em, bin_i);
+            tdi_on_fly_here.get_tdi_Xf_single(&tdi_channel_val_up_dt[0], tn_up_dt, params, k, u, v, link_Space_craft_rec, link_Space_craft_em, bin_i);
+            
+            for (int i = 0; i < 3; i += 1)
+            {
+                phase_down = gcmplx::arg(tdi_channels_down[i]);
+                phase_mid = gcmplx::arg(tdi_channels[i]);
+                phase_up = gcmplx::arg(tdi_channels_up[i]);
+
+                if (phase_up - phase_down) > M_PI
+                {
+                    
+                }
+
+                f[i] = (phase_up - phase_down) / (2 * deriv_delta_t);
+                fdot[i] = (phase_up - 2 * phase_mid + phase_up) / (deriv_delta_t * );
+            }
+        
             // all threads have to be able to make it to CUDA_SYNC_THREADS;
             layer_m_here = int(f / wdm->df);
             // TODO: more/less layers?
@@ -810,6 +836,8 @@ void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIC
     GBTDIonTheFly tdi_on_fly_here(orbits, tdi_config, T, t_ref);
     
     cmplx tdi_channel_val[3];
+    cmplx tdi_channel_val_up_dt[3];
+    cmplx tdi_channel_val_down_dt[3];
     double w_mn[3];
 
     //  RIGHT NOW I THINK WE DO NOT NEED FREQUENCY PER CHANNEL 
