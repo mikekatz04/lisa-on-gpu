@@ -7,8 +7,7 @@ import abc
 from typing import Optional, Sequence, TypeVar, Union
 from ..utils.exceptions import *
 
-
-from gpubackendtools.gpubackendtools import BackendMethods, CpuBackend, Cuda11xBackend, Cuda12xBackend
+from gpubackendtools.gpubackendtools import BackendMethods, CpuBackend, Cuda11xBackend, Cuda12xBackend, Cuda13xBackend
 from gpubackendtools.exceptions import *
 
 @dataclasses.dataclass
@@ -205,6 +204,45 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
             xp=cupy,
         )
 
+class FastLISAResponseCuda13xBackend(Cuda13xBackend, FastLISAResponseBackend):
+    """Implementation of CUDA 13.x backend"""
+    _backend_name : str = "fastlisaresponse_backend_cuda13x"
+    _name = "fastlisaresponse_cuda13x"
+    
+    def __init__(self, *args, **kwargs):
+        Cuda13xBackend.__init__(self, *args, **kwargs)
+        FastLISAResponseBackend.__init__(self, self.cuda13x_module_loader())
+        
+    @staticmethod
+    def cuda13x_module_loader():
+        try:
+            import fastlisaresponse_backend_cuda13x.responselisa
+            
+        except (ModuleNotFoundError, ImportError) as e:
+            raise BackendUnavailableException(
+                "'cuda13x' backend could not be imported."
+            ) from e
+
+        try:
+            import cupy
+        except (ModuleNotFoundError, ImportError) as e:
+            raise MissingDependencies(
+                "'cuda13x' backend requires cupy", pip_deps=["cupy-cuda13x"]
+            ) from e
+        return FastLISAResponseBackendMethods(
+            LISAResponseWrap=fastlisaresponse_backend_cuda13x.responselisa.LISAResponseWrapGPU,
+            LISAResponseBase=fastlisaresponse_backend_cuda13x.responselisa.LISAResponseBaseGPU,
+            OrbitsWrap=fastlisaresponse_backend_cuda13x.responselisa.OrbitsWrapGPU_responselisa,
+            xp=cupy,
+        )
+        
+        
+KNOWN_BACKENDS = {
+    "cuda13x": FastLISAResponseCuda13xBackend,
+    "cuda12x": FastLISAResponseCuda12xBackend,
+    "cuda11x": FastLISAResponseCuda11xBackend,
+    "cpu": FastLISAResponseCpuBackend,
+}
 
 """List of existing backends, per default order of preference."""
 # TODO: __all__ ?
