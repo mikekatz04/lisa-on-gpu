@@ -742,20 +742,20 @@ void gb_wdm_fill_global_kernel(double *template_fill, Orbits* orbits, TDIConfig 
             tdi_on_fly_here.get_tdi_Xf_single(&tdi_channel_val_down_dt[0], tn_down_dt, params, k, u, v, link_Space_craft_rec, link_Space_craft_em, bin_i);
             tdi_on_fly_here.get_tdi_Xf_single(&tdi_channel_val_up_dt[0], tn_up_dt, params, k, u, v, link_Space_craft_rec, link_Space_craft_em, bin_i);
             
-            for (int i = 0; i < 3; i += 1)
-            {
-                phase_down = gcmplx::arg(tdi_channels_down[i]);
-                phase_mid = gcmplx::arg(tdi_channels[i]);
-                phase_up = gcmplx::arg(tdi_channels_up[i]);
+            // for (int i = 0; i < 3; i += 1)
+            // {
+            //     phase_down = gcmplx::arg(tdi_channels_down[i]);
+            //     phase_mid = gcmplx::arg(tdi_channels[i]);
+            //     phase_up = gcmplx::arg(tdi_channels_up[i]);
 
-                if (phase_up - phase_down) > M_PI
-                {
+            //     // if ((phase_up - phase_down) > M_PI)
+            //     // {
                     
-                }
+            //     // }
 
-                f[i] = (phase_up - phase_down) / (2 * deriv_delta_t);
-                fdot[i] = (phase_up - 2 * phase_mid + phase_up) / (deriv_delta_t * );
-            }
+            //     f[i] = (phase_up - phase_down) / (2 * deriv_delta_t);
+            //     fdot[i] = (phase_up - 2 * phase_mid + phase_up) / (deriv_delta_t * h);
+            // }
         
             // all threads have to be able to make it to CUDA_SYNC_THREADS;
             layer_m_here = int(f / wdm->df);
