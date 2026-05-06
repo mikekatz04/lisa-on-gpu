@@ -3,10 +3,10 @@ from fastlisaresponse.tdiconfig import TDIConfig
 from lisatools.detector import Orbits, EqualArmlengthOrbits
 from copy import deepcopy
 from lisatools.domains import WDMLookupTable
-
+from .response import ecliptic_to_icrs
 
 class GBWDMComputations(FastLISAResponseParallelModule):
-    def __init__(self, wdm_lookup_table, T, orbits=None, tdi_config=None, force_backend=None, d_d=0.0):
+    def __init__(self, wdm_lookup_table, T, t_ref, orbits=None, tdi_config=None, force_backend=None, d_d=0.0):
         
         super().__init__(force_backend=force_backend)
         # setup orbits
@@ -16,6 +16,7 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         # setup WDM c class
         self.wdm_lookup_table = wdm_lookup_table
         self.T = T
+        self.t_ref = t_ref
         self.d_d = d_d
         
     @property
@@ -72,16 +73,25 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         """Set wdm lookup table."""
 
         self._wdm_lookup_table = wdm_lookup_table
-        self.c_nm_all = self.xp.asarray(wdm_lookup_table.table_sin.copy())
-        self.s_nm_all = self.xp.asarray(wdm_lookup_table.table_cos.copy())
+        self.c_nm_all = self.xp.asarray(wdm_lookup_table.table_cos.copy())
+        self.s_nm_all = self.xp.asarray(wdm_lookup_table.table_sin.copy())
+        
+        delta_f = wdm_lookup_table.f_vals_norm[1] - wdm_lookup_table.f_vals_norm[0]
+        try:
+            delta_fdot = wdm_lookup_table.fdot_vals[1] - wdm_lookup_table.fdot_vals[0]
+        except IndexError:
+            # this happens when there is no fdot
+            delta_fdot = 1.0
+
+        is_m_ref_n_ref_even = False
 
         self.cpp_wdm_lookup_table = self.backend.WaveletLookupTableWrap(
             self.c_nm_all, 
             self.s_nm_all, 
             wdm_lookup_table.f_steps, 
             wdm_lookup_table.fdot_steps, 
-            wdm_lookup_table.delta_f,  # NOT .df (that is the WDM basis info) 
-            wdm_lookup_table.delta_fdot, 
+            delta_f,  # NOT .layer_df (that is the WDM basis info) 
+            delta_fdot, 
             wdm_lookup_table.f_vals_norm.min().item(),
             wdm_lookup_table.fdot_vals.min().item(),
             wdm_lookup_table.settings.layer_df,
@@ -89,7 +99,7 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             wdm_lookup_table.settings.Nf,
             wdm_lookup_table.settings.Nt,
             wdm_lookup_table.nchannels,
-            wdm_lookup_table.is_m_ref_n_ref_even
+            is_m_ref_n_ref_even
         )
 
     @classmethod
@@ -132,6 +142,7 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         nparams = 9
 
         breakpoint()
+        deriv_delta_t = 500.0  # seconds
         self.backend.GBComputationGroupWrap().gb_wdm_get_ll(
             self.d_h_out, 
             self.h_h_out, 
@@ -145,7 +156,8 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             num_bin,
             nparams, 
             self.T,
-            self.backend.TDITypeDict["XYZ"]
+            self.backend.TDITypeDict["XYZ"],
+            deriv_delta_t
         )
 
         like_out = -1. / 2. * (self.d_d + self.h_h_out - 2 * self.d_h_out)
@@ -153,12 +165,15 @@ class GBWDMComputations(FastLISAResponseParallelModule):
 
         return like_out
 
-    def fill_global_wdm(self, templates, params, wdm_holder, data_index=None):
+    def fill_global_wdm(self, templates, params, wdm_holder, convert_to_ra_dec: bool = True, data_index=None):
         assert isinstance(templates, self.xp.ndarray)
 
         if templates.ndim == 1:
-            num_templates = int(templates.shape[-1] / (self.wdm_lookup_table.nchannels * self.wdm_lookup_table.num_m * self.wdm_lookup_table.num_n))
-            assert num_templates * self.wdm_lookup_table.nchannels * self.wdm_lookup_table.num_m * self.wdm_lookup_table.num_n == templates.shape[-1]
+            num_templates = int(templates.shape[-1] / (self.wdm_lookup_table.nchannels * self.wdm_lookup_table.settings.Nf * self.wdm_lookup_table.settings.Nt))
+            assert num_templates * self.wdm_lookup_table.nchannels * self.wdm_lookup_table.settings.Nf * self.wdm_lookup_table.settings.Nt == templates.shape[-1]
+            nchannels = self.wdm_lookup_table.nchannels
+            _num_m = self.wdm_lookup_table.settings.Nf
+            _num_n = self.wdm_lookup_table.settings.Nt
 
         elif templates.ndim == 2:
             raise ValueError("Template must be 3D (nchannels, Nf, Nt), 4D (num_templates, nchannels, Nf, Nt), or flattended to 1D.")
@@ -174,9 +189,17 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             and _num_m == self.wdm_lookup_table.Nf
             and _num_n == self.wdm_lookup_table.Nt
         )
-        templates = templates.flatten()
-
+        # templates = templates.flatten()
+       
         params_tmp = self.xp.atleast_2d(self.xp.asarray(params))
+        
+        if convert_to_ra_dec:
+            lam = params[:, -2].copy()
+            beta = params[:, -1].copy()
+            lam, beta = ecliptic_to_icrs(lam, beta)
+            params[:, -2] = lam
+            params[:, -1] = beta
+
         num_bin = params_tmp.shape[0]
         params_in = params_tmp.flatten().copy()
 
@@ -190,8 +213,8 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             self.wdm_lookup_table.settings.Nf,
             self.wdm_lookup_table.settings.Nt, 
             self.tdi_config.nchannels,
-            self.wdm_lookup_table.is_m_ref_n_ref_even, 
-            num_templates, # datqa not needed here
+            True, 
+            num_templates, # data not needed here
             num_templates  # noise not needed here
         )
 
@@ -202,6 +225,8 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             
         assert data_index.max() < num_templates
         nparams = 9
+
+        deriv_delta_t = 500.0  # seconds
 
         self.backend.GBComputationGroupWrap().gb_wdm_fill_global(
             templates, 
@@ -214,6 +239,7 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             num_bin,
             nparams, 
             self.T,
-            self.backend.TDITypeDict["XYZ"]
+            self.t_ref,
+            self.backend.TDITypeDict["XYZ"],
+            deriv_delta_t
         )
-        breakpoint()
