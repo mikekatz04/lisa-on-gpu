@@ -423,8 +423,8 @@ void WDMDomain::get_inner_product_value(double *d_h, double *h_h, double wdm_tem
 {
     double wdm_data_nm = get_pixel_data_value(m, n, channel, data_index);
     double wdm_noise_nm = get_pixel_noise_value(m, n, channel, noise_index);
-    double val_d_h = wdm_data_nm * wdm_template_nm * wdm_noise_nm;
-    double val_h_h = wdm_template_nm * wdm_template_nm * wdm_noise_nm;
+    double val_d_h = wdm_data_nm * wdm_template_nm * wdm_noise_nm * 0.25;
+    double val_h_h = wdm_template_nm * wdm_template_nm * wdm_noise_nm * 0.25;
     
     *d_h = val_d_h;
     *h_h = val_h_h;
@@ -441,8 +441,11 @@ void WDMDomain::get_inner_product_value_cross_channel(double *d_h, double *h_h, 
     double wdm_noise_nm_ij = get_pixel_noise_value_cross_channel(m, n, channel_i, channel_j, noise_index);
     // printf("CHECK16 %d %d %d %d %e %e %e\n", n, m, channel_i, channel_j, wdm_data_nm_i, wdm_template_nm_j, wdm_noise_nm_ij);
     
-    double val_d_h = wdm_data_nm_i * wdm_template_nm_j * wdm_noise_nm_ij;
-    double val_h_h = wdm_template_nm_i * wdm_template_nm_j * wdm_noise_nm_ij;
+    // 0.25 factor is needed. Check python code
+    double val_d_h = wdm_data_nm_i * wdm_template_nm_j * wdm_noise_nm_ij * 0.25;
+    double val_h_h = wdm_template_nm_i * wdm_template_nm_j * wdm_noise_nm_ij * 0.25;
+    // printf("CHECK16 %e %e %d %d %d %d %e %e %e\n", val_d_h, val_h_h, n, m, channel_i, channel_j, wdm_data_nm_i, wdm_template_nm_j, wdm_noise_nm_ij);
+    
     *d_h = val_d_h;
     *h_h = val_h_h;
 }
@@ -513,17 +516,32 @@ double WaveletLookupTable::get_w_mn_lookup(cmplx tdi_channel_val, double f, doub
     double _s_nm = linear_interp(f_scaled, fdot, s_nm_all);
     double c_nm, s_nm;
 
-    if ((layer_m + layer_n) % 2 == 0)
+    bool is_m_plus_n_even = (layer_m + layer_n) % 2 == 0;
+    bool is_m_even = (layer_m) % 2 == 0;
+
+    // TODO: remove if else here to make faster on GPU???
+    if (!is_m_plus_n_even && is_m_even)
     {
-        // reorder
-        s_nm = _c_nm;
-        c_nm = -_s_nm;
+        s_nm = _s_nm;
+        c_nm = -_c_nm;
     }
-    else
+    else if (!is_m_plus_n_even && !is_m_even)
     {
         // no reorder
         s_nm = _s_nm;
         c_nm = _c_nm;
+    }
+
+    else if (is_m_plus_n_even && is_m_even)
+    {
+        s_nm = _c_nm;
+        c_nm = _s_nm;
+    }
+
+    else if (is_m_plus_n_even && !is_m_even)
+    {
+        s_nm = -_c_nm;
+        c_nm = _s_nm;
     }
 
     double w_mn = c_nm * tdi_channel_val.real() + s_nm * tdi_channel_val.imag(); // I think with Aexp(-I Phi) it should be + s_nm
@@ -567,12 +585,12 @@ void WDMDomain::add_ip_contrib(double *d_h_tmp, double *h_h_tmp, double *w_mn, i
         {
             for (int channel_j = 0; channel_j < 3; channel_j += 1)
             {
-                // printf("CHECK12 %d %d %d %d\n", n, layer_m, channel_i, channel_j);
-    
+
                 // TODO: change from 9 to 6 calculations?
                 get_inner_product_value_cross_channel(&d_h_val, &h_h_val, w_mn[channel_i], w_mn[channel_j], layer_m, n, channel_i, channel_j, data_index, noise_index);                
                 d_h_tmp[tid] += d_h_val;
-                h_h_tmp[tid] += h_h_val;    
+                h_h_tmp[tid] += h_h_val;  
+                
             }
         } 
     }
@@ -961,6 +979,7 @@ void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIC
     {
 
         data_index = data_index_all[bin_i];
+        noise_index = noise_index_all[bin_i];
         for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
         {
             params[i] = params_all[bin_i * nparams + i];
@@ -982,8 +1001,10 @@ void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIC
                 continue;
             }
             int diff_iter = 0;
-            avg_f = (f[0] + f[1] + f[2] / 3.);
+
             // MUST BE OVER ALL CHANNELS BECAUSE PER CHANNEL COULD CHANGE PIXEL
+            avg_f = ((f[0] + f[1] + f[2]) / 3.);
+
             layer_m = int(avg_f / wdm->df);
             for (int diff = -num_diff; diff <= +num_diff; diff += 1)
             {
@@ -999,6 +1020,7 @@ void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIC
                 }
                 diff_iter += 1;
             }
+            if (n % 250 == 0) printf("CHECK24 %d, %.12e %.12e\n", n, d_h_tmp[tid], h_h_tmp[tid]);
         }
         CUDA_SYNC_THREADS;
         

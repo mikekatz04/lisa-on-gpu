@@ -106,42 +106,60 @@ class GBWDMComputations(FastLISAResponseParallelModule):
     def supported_backends(cls):
         return ["fastlisaresponse_" + _tmp for _tmp in cls.GPU_RECOMMENDED()]
 
-    def get_ll_wdm(self, params, wdm_holder, data_index=None, noise_index=None):
-        params_tmp = self.xp.atleast_2d(self.xp.asarray(params))
+    def get_ll_wdm(self, params, wdm_holder, data_index=None, noise_index=None, convert_to_ra_dec: bool = True):
+        
+        params_tmp = self.xp.asarray(self.xp.atleast_2d(params)).copy()
         num_bin = params_tmp.shape[0]
-        params_in = params_tmp.flatten().copy()
-
+        
         self.d_h_out = self.xp.zeros(num_bin)
         self.h_h_out = self.xp.zeros(num_bin)
 
+        if convert_to_ra_dec:
+            lam = params_tmp[:, -2].copy()
+            beta = params_tmp[:, -1].copy()
+            lam, beta = ecliptic_to_icrs(lam, beta)
+            params_tmp[:, -2] = lam
+            params_tmp[:, -1] = beta
+
+        num_data = num_noise = len(wdm_holder)
+        
         # TODO: move this part
         # TODO: need to check for num_data, num_noise
-        num_data = num_noise = len(wdm_holder)
         self.cpp_wdm = self.backend.WDMDomainWrap(
             wdm_holder.linear_data_arr[0],
             wdm_holder.linear_psd_arr[0],
-            self.wdm_lookup_table.df, 
-            self.wdm_lookup_table.dt,
-            self.wdm_lookup_table.NF, 
-            self.wdm_lookup_table.NT,
-            self.tdi_config.nchannels, 
+            self.wdm_lookup_table.settings.layer_df, 
+            self.wdm_lookup_table.settings.layer_dt,
+            self.wdm_lookup_table.settings.Nf,
+            self.wdm_lookup_table.settings.Nt, 
+            self.tdi_config.nchannels,
+            True, 
             num_data, 
             num_noise
         )
 
         if data_index is None:
             data_index = self.xp.zeros(num_bin, dtype=self.xp.int32)
-        else:
-            assert data_index.dtype == self.xp.int32
+        elif data_index.dtype == self.xp.int64:
+            _data_index = data_index.copy().astype(self.xp.int32)
+            del data_index
+            data_index = _data_index
             
         if noise_index is None:
             noise_index = self.xp.zeros(num_bin, dtype=self.xp.int32)
-        else:
-            assert noise_index.dtype == self.xp.int32
-            
+        elif noise_index.dtype == self.xp.int64:
+            _noise_index = noise_index.copy().astype(self.xp.int32)
+            del noise_index
+            noise_index = _noise_index
+
+        assert noise_index.dtype == self.xp.int32
+        
+        assert data_index.max() < num_data
+        assert noise_index.max() < num_noise
         nparams = 9
 
-        breakpoint()
+        params_in = params_tmp.flatten().copy()
+
         deriv_delta_t = 500.0  # seconds
         self.backend.GBComputationGroupWrap().gb_wdm_get_ll(
             self.d_h_out, 
@@ -156,13 +174,13 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             num_bin,
             nparams, 
             self.T,
+            self.t_ref,
             self.backend.TDITypeDict["XYZ"],
             deriv_delta_t
         )
 
         like_out = -1. / 2. * (self.d_d + self.h_h_out - 2 * self.d_h_out)
         # TODO: phase maximize
-
         return like_out
 
     def fill_global_wdm(self, templates, params, wdm_holder, convert_to_ra_dec: bool = True, data_index=None):
@@ -191,14 +209,14 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         )
         # templates = templates.flatten()
        
-        params_tmp = self.xp.atleast_2d(self.xp.asarray(params))
+        params_tmp = self.xp.atleast_2d(self.xp.asarray(params)).copy()
         
         if convert_to_ra_dec:
-            lam = params[:, -2].copy()
-            beta = params[:, -1].copy()
+            lam = params_tmp[:, -2].copy()
+            beta = params_tmp[:, -1].copy()
             lam, beta = ecliptic_to_icrs(lam, beta)
-            params[:, -2] = lam
-            params[:, -1] = beta
+            params_tmp[:, -2] = lam
+            params_tmp[:, -1] = beta
 
         num_bin = params_tmp.shape[0]
         params_in = params_tmp.flatten().copy()
@@ -220,8 +238,10 @@ class GBWDMComputations(FastLISAResponseParallelModule):
 
         if data_index is None:
             data_index = self.xp.zeros(num_bin, dtype=self.xp.int32)
-        else:
-            assert data_index.dtype == self.xp.int32
+        elif data_index.dtype == self.xp.int64:
+            _data_index = data_index.copy().astype(self.xp.int32)
+            del data_index
+            data_index = _data_index
             
         assert data_index.max() < num_templates
         nparams = 9
