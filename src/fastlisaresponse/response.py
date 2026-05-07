@@ -422,7 +422,7 @@ class pyResponseTDI(FastLISAResponseParallelModule):
                 "Input waveform is longer than available orbital information. Trimming to fit orbital information."
             )
 
-            max_ind = np.where(t_data <= self.response_orbits.t.max())[0][-1]  # np.where(t_data <= self.response_orbits.sc_t.max())[0][-1]
+            max_ind = self.xp.where(t_data <= self.response_orbits.t.max())[0][-1]  # np.where(t_data <= self.response_orbits.sc_t.max())[0][-1]
 
             t_data = t_data[:max_ind]
             input_in = input_in[:max_ind]
@@ -504,12 +504,11 @@ class pyResponseTDI(FastLISAResponseParallelModule):
 
         assert np.abs(t0_shift_to_data) < self.dt
 
-        t_arr = np.arange(len(input_in)) * self.dt + (t0 + t0_shift_to_data)
+        t_arr = self.xp.arange(len(input_in)) * self.dt + (t0 + t0_shift_to_data)
         t_arr, input_in = self._data_time_check(t_arr, input_in)
 
         assert len(input_in) >= self.num_pts
         y_gw = self.xp.zeros((self.nlinks * self.num_pts,), dtype=self.xp.float64)
-
         self.response_gen(
             y_gw,
             t_arr,
