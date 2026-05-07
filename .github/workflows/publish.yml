@@ -115,6 +115,13 @@ jobs:
             cuda_major: 12
             cuda_minor: 4
             reqpython: '>=3.10'
+          - release: cuda13x
+            os: ubuntu-latest
+            arch: x86_64
+            kind: cuda_plugin
+            cuda_major: 13
+            cuda_minor: 4
+            reqpython: '>=3.10'
           - release: cpu
             os: ubuntu-latest
             arch: aarch64

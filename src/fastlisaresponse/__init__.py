@@ -31,13 +31,14 @@ except (ModuleNotFoundError, ImportError):
 from . import cutils, utils
 
 from gpubackendtools import Globals
-from .cutils import FastLISAResponseCpuBackend, FastLISAResponseCuda11xBackend, FastLISAResponseCuda12xBackend
+from .cutils import FastLISAResponseCpuBackend, FastLISAResponseCuda11xBackend, FastLISAResponseCuda12xBackend, FastLISAResponseCuda13xBackend
 
 
 add_backends = {
     "fastlisaresponse_cpu": FastLISAResponseCpuBackend,
     "fastlisaresponse_cuda11x": FastLISAResponseCuda11xBackend,
     "fastlisaresponse_cuda12x": FastLISAResponseCuda12xBackend,
+    "fastlisaresponse_cuda13x": FastLISAResponseCuda13xBackend,
 }
 
 Globals().backends_manager.add_backends(add_backends)

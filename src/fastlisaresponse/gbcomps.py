@@ -3,10 +3,10 @@ from fastlisaresponse.tdiconfig import TDIConfig
 from lisatools.detector import Orbits, EqualArmlengthOrbits
 from copy import deepcopy
 from lisatools.domains import WDMLookupTable
-
+from .response import ecliptic_to_icrs
 
 class GBWDMComputations(FastLISAResponseParallelModule):
-    def __init__(self, wdm_lookup_table, T, orbits=None, tdi_config=None, force_backend=None, d_d=0.0):
+    def __init__(self, wdm_lookup_table, T, t_ref, orbits=None, tdi_config=None, force_backend=None, d_d=0.0):
         
         super().__init__(force_backend=force_backend)
         # setup orbits
@@ -16,6 +16,7 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         # setup WDM c class
         self.wdm_lookup_table = wdm_lookup_table
         self.T = T
+        self.t_ref = t_ref
         self.d_d = d_d
         
     @property
@@ -72,64 +73,94 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         """Set wdm lookup table."""
 
         self._wdm_lookup_table = wdm_lookup_table
-        self.c_nm_all = self.xp.asarray(wdm_lookup_table.table.real.copy())
-        self.s_nm_all = self.xp.asarray(wdm_lookup_table.table.imag.copy())
+        self.c_nm_all = self.xp.asarray(wdm_lookup_table.table_cos.copy())
+        self.s_nm_all = self.xp.asarray(wdm_lookup_table.table_sin.copy())
+        
+        delta_f = wdm_lookup_table.f_vals_norm[1] - wdm_lookup_table.f_vals_norm[0]
+        try:
+            delta_fdot = wdm_lookup_table.fdot_vals[1] - wdm_lookup_table.fdot_vals[0]
+        except IndexError:
+            # this happens when there is no fdot
+            delta_fdot = 1.0
+
+        is_m_ref_n_ref_even = False
+
         self.cpp_wdm_lookup_table = self.backend.WaveletLookupTableWrap(
             self.c_nm_all, 
             self.s_nm_all, 
             wdm_lookup_table.f_steps, 
             wdm_lookup_table.fdot_steps, 
-            wdm_lookup_table.deltaf,  # NOT .df (that is the WDM basis info) 
-            wdm_lookup_table.d_fdot, 
-            wdm_lookup_table.min_f_scaled,
-            wdm_lookup_table.min_fdot,
-            wdm_lookup_table.df,
-            wdm_lookup_table.dt,
-            wdm_lookup_table.NF,
-            wdm_lookup_table.NT,
-            wdm_lookup_table.num_channel
+            delta_f,  # NOT .layer_df (that is the WDM basis info) 
+            delta_fdot, 
+            wdm_lookup_table.f_vals_norm.min().item(),
+            wdm_lookup_table.fdot_vals.min().item(),
+            wdm_lookup_table.settings.layer_df,
+            wdm_lookup_table.settings.layer_dt,
+            wdm_lookup_table.settings.Nf,
+            wdm_lookup_table.settings.Nt,
+            wdm_lookup_table.nchannels,
+            is_m_ref_n_ref_even
         )
 
     @classmethod
     def supported_backends(cls):
         return ["fastlisaresponse_" + _tmp for _tmp in cls.GPU_RECOMMENDED()]
 
-    def get_ll_wdm(self, params, wdm_holder, data_index=None, noise_index=None):
-        params_tmp = self.xp.atleast_2d(self.xp.asarray(params))
+    def get_ll_wdm(self, params, wdm_holder, data_index=None, noise_index=None, convert_to_ra_dec: bool = True):
+        
+        params_tmp = self.xp.asarray(self.xp.atleast_2d(params)).copy()
         num_bin = params_tmp.shape[0]
-        params_in = params_tmp.flatten().copy()
-
+        
         self.d_h_out = self.xp.zeros(num_bin)
         self.h_h_out = self.xp.zeros(num_bin)
 
+        if convert_to_ra_dec:
+            lam = params_tmp[:, -2].copy()
+            beta = params_tmp[:, -1].copy()
+            lam, beta = ecliptic_to_icrs(lam, beta)
+            params_tmp[:, -2] = lam
+            params_tmp[:, -1] = beta
+
+        num_data = num_noise = len(wdm_holder)
+        
         # TODO: move this part
         # TODO: need to check for num_data, num_noise
-        num_data = num_noise = len(wdm_holder)
         self.cpp_wdm = self.backend.WDMDomainWrap(
             wdm_holder.linear_data_arr[0],
             wdm_holder.linear_psd_arr[0],
-            self.wdm_lookup_table.df, 
-            self.wdm_lookup_table.dt,
-            self.wdm_lookup_table.NF, 
-            self.wdm_lookup_table.NT,
-            self.tdi_config.nchannels, 
+            self.wdm_lookup_table.settings.layer_df, 
+            self.wdm_lookup_table.settings.layer_dt,
+            self.wdm_lookup_table.settings.Nf,
+            self.wdm_lookup_table.settings.Nt, 
+            self.tdi_config.nchannels,
+            True, 
             num_data, 
             num_noise
         )
 
         if data_index is None:
             data_index = self.xp.zeros(num_bin, dtype=self.xp.int32)
-        else:
-            assert data_index.dtype == self.xp.int32
+        elif data_index.dtype == self.xp.int64:
+            _data_index = data_index.copy().astype(self.xp.int32)
+            del data_index
+            data_index = _data_index
             
         if noise_index is None:
             noise_index = self.xp.zeros(num_bin, dtype=self.xp.int32)
-        else:
-            assert noise_index.dtype == self.xp.int32
-            
+        elif noise_index.dtype == self.xp.int64:
+            _noise_index = noise_index.copy().astype(self.xp.int32)
+            del noise_index
+            noise_index = _noise_index
+
+        assert noise_index.dtype == self.xp.int32
+        
+        assert data_index.max() < num_data
+        assert noise_index.max() < num_noise
         nparams = 9
 
-        breakpoint()
+        params_in = params_tmp.flatten().copy()
+
+        deriv_delta_t = 500.0  # seconds
         self.backend.GBComputationGroupWrap().gb_wdm_get_ll(
             self.d_h_out, 
             self.h_h_out, 
@@ -143,10 +174,92 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             num_bin,
             nparams, 
             self.T,
-            self.backend.TDITypeDict["XYZ"]
+            self.t_ref,
+            self.backend.TDITypeDict["XYZ"],
+            deriv_delta_t
         )
 
         like_out = -1. / 2. * (self.d_d + self.h_h_out - 2 * self.d_h_out)
         # TODO: phase maximize
-
         return like_out
+
+    def fill_global_wdm(self, templates, params, wdm_holder, convert_to_ra_dec: bool = True, data_index=None):
+        assert isinstance(templates, self.xp.ndarray)
+
+        if templates.ndim == 1:
+            num_templates = int(templates.shape[-1] / (self.wdm_lookup_table.nchannels * self.wdm_lookup_table.settings.Nf * self.wdm_lookup_table.settings.Nt))
+            assert num_templates * self.wdm_lookup_table.nchannels * self.wdm_lookup_table.settings.Nf * self.wdm_lookup_table.settings.Nt == templates.shape[-1]
+            nchannels = self.wdm_lookup_table.nchannels
+            _num_m = self.wdm_lookup_table.settings.Nf
+            _num_n = self.wdm_lookup_table.settings.Nt
+
+        elif templates.ndim == 2:
+            raise ValueError("Template must be 3D (nchannels, Nf, Nt), 4D (num_templates, nchannels, Nf, Nt), or flattended to 1D.")
+        elif templates.ndim == 3:
+            num_templates = 1
+            nchannels, _num_m, _num_n = templates.shape
+
+        elif templates.ndim == 4:
+            num_templates, nchannels, _num_m, _num_n = templates.shape
+            
+        assert (
+            nchannels == self.wdm_lookup_table.nchannels
+            and _num_m == self.wdm_lookup_table.Nf
+            and _num_n == self.wdm_lookup_table.Nt
+        )
+        # templates = templates.flatten()
+       
+        params_tmp = self.xp.atleast_2d(self.xp.asarray(params)).copy()
+        
+        if convert_to_ra_dec:
+            lam = params_tmp[:, -2].copy()
+            beta = params_tmp[:, -1].copy()
+            lam, beta = ecliptic_to_icrs(lam, beta)
+            params_tmp[:, -2] = lam
+            params_tmp[:, -1] = beta
+
+        num_bin = params_tmp.shape[0]
+        params_in = params_tmp.flatten().copy()
+
+        # TODO: move this part
+        # TODO: need to check for num_data, num_noise
+        self.cpp_wdm = self.backend.WDMDomainWrap(
+            wdm_holder.linear_data_arr[0],
+            wdm_holder.linear_psd_arr[0],
+            self.wdm_lookup_table.settings.layer_df, 
+            self.wdm_lookup_table.settings.layer_dt,
+            self.wdm_lookup_table.settings.Nf,
+            self.wdm_lookup_table.settings.Nt, 
+            self.tdi_config.nchannels,
+            True, 
+            num_templates, # data not needed here
+            num_templates  # noise not needed here
+        )
+
+        if data_index is None:
+            data_index = self.xp.zeros(num_bin, dtype=self.xp.int32)
+        elif data_index.dtype == self.xp.int64:
+            _data_index = data_index.copy().astype(self.xp.int32)
+            del data_index
+            data_index = _data_index
+            
+        assert data_index.max() < num_templates
+        nparams = 9
+
+        deriv_delta_t = 500.0  # seconds
+
+        self.backend.GBComputationGroupWrap().gb_wdm_fill_global(
+            templates, 
+            self.cpp_orbits,
+            self.cpp_tdi_config, 
+            self.cpp_wdm_lookup_table, 
+            self.cpp_wdm, 
+            params_in, 
+            data_index, 
+            num_bin,
+            nparams, 
+            self.T,
+            self.t_ref,
+            self.backend.TDITypeDict["XYZ"],
+            deriv_delta_t
+        )

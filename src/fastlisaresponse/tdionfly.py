@@ -8,6 +8,7 @@ from gpubackendtools import wrapper
         
 import time
 import h5py
+from .response import ecliptic_to_icrs
 
 try:
     import cupy as cp
@@ -620,8 +621,10 @@ class GBTDIonTheFly(TDIonTheFly):
         self._wave_gen = self.backend.GBTDIonTheFlyWrap(self.cpp_orbits, self.cpp_tdi_config, self.T, self.t_ref)
         return self._wave_gen
     
-    def __call__(self, amp, f0, fdot0, fddot0, phi0, inc, psi, lam, beta, return_spline: bool = False) -> TDIOutput:
+    def __call__(self, amp, f0, fdot0, fddot0, phi0, inc, psi, lam, beta, convert_to_ra_dec: bool = True, return_spline: bool = False) -> TDIOutput:
         
+        if convert_to_ra_dec:
+            lam, beta = ecliptic_to_icrs(lam, beta)
         params = self.xp.asarray([amp, f0, fdot0, fddot0, phi0, inc, psi, lam, beta]).T.flatten().copy()
 
         assert len(params) == 9 * self.num_sub
