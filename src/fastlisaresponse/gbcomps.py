@@ -96,10 +96,13 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             wdm_lookup_table.fdot_vals.min().item(),
             wdm_lookup_table.settings.layer_df,
             wdm_lookup_table.settings.layer_dt,
-            wdm_lookup_table.settings.Nf,
-            wdm_lookup_table.settings.Nt,
+            wdm_lookup_table.settings.Nf,  # calculates Nf_active inside
+            wdm_lookup_table.settings.Nt,  # calculates Nt_active inside
             wdm_lookup_table.nchannels,
-            is_m_ref_n_ref_even
+            wdm_lookup_table.settings.ind_min_t,
+            wdm_lookup_table.settings.ind_max_t,
+            wdm_lookup_table.settings.ind_min_f,
+            wdm_lookup_table.settings.ind_max_f,
         )
 
     @classmethod
@@ -130,10 +133,13 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             wdm_holder.linear_psd_arr[0],
             self.wdm_lookup_table.settings.layer_df, 
             self.wdm_lookup_table.settings.layer_dt,
-            self.wdm_lookup_table.settings.Nf,
-            self.wdm_lookup_table.settings.Nt, 
+            self.wdm_lookup_table.settings.Nf, # calculates Nf_active inside
+            self.wdm_lookup_table.settings.Nt, # calculates Nt_active inside
             self.tdi_config.nchannels,
-            True, 
+            self.wdm_lookup_table.settings.ind_min_t,
+            self.wdm_lookup_table.settings.ind_max_t,
+            self.wdm_lookup_table.settings.ind_min_f,
+            self.wdm_lookup_table.settings.ind_max_f,
             num_data, 
             num_noise
         )
@@ -187,25 +193,25 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         assert isinstance(templates, self.xp.ndarray)
 
         if templates.ndim == 1:
-            num_templates = int(templates.shape[-1] / (self.wdm_lookup_table.nchannels * self.wdm_lookup_table.settings.Nf * self.wdm_lookup_table.settings.Nt))
-            assert num_templates * self.wdm_lookup_table.nchannels * self.wdm_lookup_table.settings.Nf * self.wdm_lookup_table.settings.Nt == templates.shape[-1]
+            num_templates = int(templates.shape[-1] / (self.wdm_lookup_table.nchannels * self.wdm_lookup_table.settings.Nf_active * self.wdm_lookup_table.settings.Nt_active))
+            assert num_templates * self.wdm_lookup_table.nchannels * self.wdm_lookup_table.settings.Nf_active * self.wdm_lookup_table.settings.Nt_active == templates.shape[-1]
             nchannels = self.wdm_lookup_table.nchannels
-            _num_m = self.wdm_lookup_table.settings.Nf
-            _num_n = self.wdm_lookup_table.settings.Nt
+            _Nf_active = self.wdm_lookup_table.settings.Nf_active
+            _Nt_active = self.wdm_lookup_table.settings.Nt_active
 
         elif templates.ndim == 2:
-            raise ValueError("Template must be 3D (nchannels, Nf, Nt), 4D (num_templates, nchannels, Nf, Nt), or flattended to 1D.")
+            raise ValueError("Template must be 3D (nchannels, Nf_active, Nt_active), 4D (num_templates, nchannels, Nf_active, Nt_active), or flattended to 1D.")
         elif templates.ndim == 3:
             num_templates = 1
-            nchannels, _num_m, _num_n = templates.shape
+            nchannels, _Nf_active, _Nt_active = templates.shape
 
         elif templates.ndim == 4:
-            num_templates, nchannels, _num_m, _num_n = templates.shape
+            num_templates, nchannels, _Nf_active, _Nt_active = templates.shape
             
         assert (
             nchannels == self.wdm_lookup_table.nchannels
-            and _num_m == self.wdm_lookup_table.Nf
-            and _num_n == self.wdm_lookup_table.Nt
+            and _Nf_active == self.wdm_lookup_table.Nf_active
+            and _Nt_active == self.wdm_lookup_table.Nt_active
         )
         # templates = templates.flatten()
        
@@ -228,10 +234,13 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             wdm_holder.linear_psd_arr[0],
             self.wdm_lookup_table.settings.layer_df, 
             self.wdm_lookup_table.settings.layer_dt,
-            self.wdm_lookup_table.settings.Nf,
-            self.wdm_lookup_table.settings.Nt, 
+            self.wdm_lookup_table.settings.Nf, # calculates Nf_active inside
+            self.wdm_lookup_table.settings.Nt, # calculates Nt_active inside
             self.tdi_config.nchannels,
-            True, 
+            self.wdm_lookup_table.settings.ind_min_t,
+            self.wdm_lookup_table.settings.ind_max_t,
+            self.wdm_lookup_table.settings.ind_min_f,
+            self.wdm_lookup_table.settings.ind_max_f,
             num_templates, # data not needed here
             num_templates  # noise not needed here
         )

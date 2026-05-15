@@ -237,22 +237,32 @@ class FDSplineTDIWaveform : public LISATDIonTheFly {
 
 class WDMSettings{
   public:
-    int num_n;
-    int num_m;
+    int Nt;
+    int Nf;
     int num_channel;
-    double df;
-    double dt;
-    bool is_m_ref_n_ref_even;
+    double layer_df;
+    double layer_dt;
+    int ind_min_t;
+    int ind_max_t;
+    int ind_min_f;
+    int ind_max_f;
+    int Nf_active;
+    int Nt_active;
 
     // TODO: add to this?
     CUDA_CALLABLE_MEMBER
-    WDMSettings(double df_, double dt_, int num_m_, int num_n_, int num_channel_, bool is_m_ref_n_ref_even_){
-        num_m = num_m_;
-        num_n = num_n_;
+    WDMSettings(double layer_df_, double layer_dt_, int Nf_, int Nt_, int num_channel_, int ind_min_t_, int ind_max_t_, int ind_min_f_, int ind_max_f_){
+        Nf = Nf_;
+        Nt = Nt_;
         num_channel = num_channel_;
-        df = df_;
-        dt = dt_;
-        is_m_ref_n_ref_even = is_m_ref_n_ref_even_;
+        layer_df = layer_df_;
+        layer_dt = layer_dt_;
+        ind_min_t = ind_min_t_;
+        ind_max_t = ind_max_t_;
+        ind_min_f = ind_min_f_;
+        ind_max_f = ind_max_f_;
+        Nf_active = ind_max_f - ind_min_f + 1; // inclusive
+        Nt_active = ind_max_t - ind_min_t + 1; // inclusive
     };
 };
 
@@ -265,8 +275,8 @@ class WDMDomain : public WDMSettings{
     int num_noise;
 
     CUDA_CALLABLE_MEMBER
-    WDMDomain(double *wdm_data_, double *wdm_noise_, double df_, double dt_, int num_m_, int num_n_, int num_channel_, bool is_m_ref_n_ref_even_, int num_data_, int num_noise_):
-    WDMSettings(df_, dt_, num_m_, num_n_, num_channel_, is_m_ref_n_ref_even_)
+    WDMDomain(double *wdm_data_, double *wdm_noise_, double layer_df_, double layer_dt_, int Nf_, int Nt_, int num_channel_, int ind_min_t_, int ind_max_t_, int ind_min_f_, int ind_max_f_, int num_data_, int num_noise_):
+    WDMSettings(layer_df_, layer_dt_, Nf_, Nt_, num_channel_, ind_min_t_, ind_max_t_, ind_min_f_, ind_max_f_)
     {
         wdm_data = wdm_data_;
         wdm_noise = wdm_noise_;
@@ -310,8 +320,8 @@ class WaveletLookupTable : public WDMSettings{
 
     CUDA_CALLABLE_MEMBER
     WaveletLookupTable(double *c_nm_all_, double *s_nm_all_, int num_f_, int num_fdot_, double df_interp_, double dfdot_interp_, double min_f_scaled_, double min_fdot_, 
-        double df_, double dt_, int num_m_, int num_n_, int num_channel_, bool is_m_ref_n_ref_even_): WDMSettings(df_, dt_, num_m_, num_n_, num_channel_, is_m_ref_n_ref_even_) {
-        // n * num_m + m 
+        double layer_df_, double layer_dt_, int Nf_, int Nt_, int num_channel_, int ind_min_t_, int ind_max_t_, int ind_min_f_, int ind_max_f_): WDMSettings(layer_df_, layer_dt_, Nf_, Nt_, num_channel_, ind_min_t_, ind_max_t_, ind_min_f_, ind_max_f_) {
+        // n * Nf + m 
         c_nm_all = c_nm_all_;
         s_nm_all = s_nm_all_;
         num_f = num_f_;

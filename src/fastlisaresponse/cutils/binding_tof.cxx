@@ -76,10 +76,9 @@ void FDSplineTDIWaveformWrap::run_wave_tdi_wrap(
 void GBComputationGroupWrap::gb_wdm_fill_global(array_type<double>template_fill, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
 {
     // from the parent class
-    printf("CHECKCHECK44\n"); 
     
     gb_wdm_fill_global_wrap(
-        return_pointer_and_check_length(template_fill, "template_fill", wdm_wrap->wdm->num_m * wdm_wrap->wdm->num_n, 3), 
+        return_pointer_and_check_length(template_fill, "template_fill", wdm_wrap->wdm->Nf_active * wdm_wrap->wdm->Nt_active, 3), 
         orbits_wrap->orbits, 
         tdi_config_wrap->tdi_config, 
         wdm_lookup_wrap->wdm_lookup, 
@@ -236,8 +235,8 @@ void tdionthefly_part(py::module &m) {
 #endif 
 
     // Bind the constructor
-    .def(py::init<array_type<double>,array_type<double>,int,int,double,double,double,double, double, double, int, int, int,bool>(), 
-         py::arg("c_nm_all"), py::arg("s_nm_all"), py::arg("num_f"), py::arg("num_fdot"), py::arg("df_interp"), py::arg("dfdot_interp"), py::arg("min_f"), py::arg("min_fdot"), py::arg("df"), py::arg("dt"), py::arg("num_m"), py::arg("num_n"), py::arg("num_channel"), py::arg("is_m_ref_n_ref_even"))
+    .def(py::init<array_type<double>,array_type<double>,int,int,double,double,double,double, double, double, int, int, int, int, int, int, int>(), 
+         py::arg("c_nm_all"), py::arg("s_nm_all"), py::arg("num_f"), py::arg("num_fdot"), py::arg("df_interp"), py::arg("dfdot_interp"), py::arg("min_f"), py::arg("min_fdot"), py::arg("layer_df"), py::arg("layer_dt"), py::arg("Nf"), py::arg("Nt"), py::arg("num_channel"), py::arg("ind_min_t"), py::arg("ind_max_t"), py::arg("ind_min_f"), py::arg("ind_max_f"))
     // Bind member functions
     
     // You can also expose public data members directly using def_readwrite
@@ -251,8 +250,8 @@ void tdionthefly_part(py::module &m) {
     py::class_<WaveletLookupTable>(m, "WaveletLookupTableCPU")
 #endif
     // Bind the constructor
-    .def(py::init<double*,double*,int,int,double,double,double,double, double, double, int, int, int, bool>(), 
-         py::arg("c_nm_all"), py::arg("s_nm_all"), py::arg("num_f"), py::arg("num_fdot"), py::arg("df_interp"), py::arg("dfdot_interp"), py::arg("min_f"), py::arg("min_fdot"), py::arg("df"), py::arg("dt"), py::arg("num_m"), py::arg("num_n"), py::arg("num_channel"), py::arg("is_m_ref_n_ref_even"))
+    .def(py::init<double*,double*,int,int,double,double,double,double, double, double, int, int, int, int, int, int, int>(), 
+         py::arg("c_nm_all"), py::arg("s_nm_all"), py::arg("num_f"), py::arg("num_fdot"), py::arg("df_interp"), py::arg("dfdot_interp"), py::arg("min_f"), py::arg("min_fdot"), py::arg("layer_df"), py::arg("layer_dt"), py::arg("Nf"), py::arg("Nt"), py::arg("num_channel"), py::arg("ind_min_t"), py::arg("ind_max_t"), py::arg("ind_min_f"), py::arg("ind_max_f"))
     ;
 
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
@@ -262,8 +261,8 @@ void tdionthefly_part(py::module &m) {
 #endif 
 
     // Bind the constructor
-    .def(py::init<array_type<double>,array_type<double>, double, double, int, int, int, bool, int, int>(), 
-         py::arg("wdm_data"), py::arg("wdm_noise"), py::arg("df"), py::arg("dt"), py::arg("num_m"), py::arg("num_n"), py::arg("num_channel"), py::arg("is_m_ref_n_ref_even"), py::arg("num_data"), py::arg("num_noise"))
+    .def(py::init<array_type<double>,array_type<double>, double, double, int, int, int, int, int, int, int, int, int>(), 
+         py::arg("wdm_data"), py::arg("wdm_noise"), py::arg("layer_df"), py::arg("layer_dt"), py::arg("Nf"), py::arg("Nt"), py::arg("num_channel"), py::arg("ind_min_t"), py::arg("ind_max_t"), py::arg("ind_min_f"), py::arg("ind_max_f"), py::arg("num_data"), py::arg("num_noise"))
     // Bind member functions
     
     // You can also expose public data members directly using def_readwrite
@@ -278,8 +277,8 @@ void tdionthefly_part(py::module &m) {
 #endif
 
     // Bind the constructor
-    .def(py::init<double*,double*, double, double, int, int, int, bool, int, int>(), 
-         py::arg("wdm_data"), py::arg("wdm_noise"), py::arg("df"), py::arg("dt"), py::arg("num_m"), py::arg("num_n"), py::arg("num_channel"), py::arg("is_m_ref_n_ref_even"), py::arg("num_data"), py::arg("num_noise"))
+    .def(py::init<double*,double*, double, double, int, int, int, int, int, int, int, int, int>(), 
+         py::arg("wdm_data"), py::arg("wdm_noise"), py::arg("layer_df"), py::arg("layer_dt"), py::arg("Nf"), py::arg("Nt"), py::arg("num_channel"), py::arg("ind_min_t"), py::arg("ind_max_t"), py::arg("ind_min_f"), py::arg("ind_max_f"), py::arg("num_data"), py::arg("num_noise"))
     ;
 
     #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)

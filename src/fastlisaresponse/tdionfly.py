@@ -590,7 +590,7 @@ class GBTDIonTheFly(TDIonTheFly):
         *args, 
         **kwargs
     ): 
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, n_params=9, **kwargs)
 
         self.t_arr = self.xp.atleast_2d(self.xp.asarray(t))
         self.T = T

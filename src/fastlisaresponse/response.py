@@ -771,7 +771,7 @@ class ResponseWrapper(FastLISAResponseParallelModule):
     def supported_backends(cls):
         return ["fastlisaresponse_" + _tmp for _tmp in cls.GPU_RECOMMENDED()]
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args, convert_to_ra_dec: bool = True, **kwargs):
         """Run the waveform and response generation
 
         Args:
@@ -809,7 +809,10 @@ class ResponseWrapper(FastLISAResponseParallelModule):
         if self.flip_hx:
             h = h.real - 1j * h.imag
 
-        ra, dec = ecliptic_to_icrs(lam, beta)
+        if convert_to_ra_dec:
+            ra, dec = ecliptic_to_icrs(lam, beta)
+        else:
+            ra, dec = lam, beta
 
         # TODO: make this customizable
         # self.response_model.get_projections(h, lam, beta, t0=self.t0, t_buffer=self.t_buffer)
