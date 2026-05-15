@@ -334,7 +334,7 @@ class WaveletLookupTable : public WDMSettings{
     CUDA_DEVICE
     double get_wdm_in_channel_over_layers(cmplx tdi_channel_val, double f, double fdot, int m, int n);
     CUDA_DEVICE
-    double linear_interp(double f_scaled, double fdot, double *z_vals);
+    double linear_interp(double f_scaled, double fdot, double *z_vals, int layer_n);
     CUDA_DEVICE
     double get_w_mn_lookup(cmplx tdi_channel_val, double f, double fdot, int layer_m, int layer_n);
 };

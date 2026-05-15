@@ -73,8 +73,20 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         """Set wdm lookup table."""
 
         self._wdm_lookup_table = wdm_lookup_table
-        self.c_nm_all = self.xp.asarray(wdm_lookup_table.table_cos.copy())
-        self.s_nm_all = self.xp.asarray(wdm_lookup_table.table_sin.copy())
+        # Tables are (Nt, num_fdot, num_f); the C lookup indexes by layer_n,
+        # so the underlying buffer must be contiguous in this layout.
+        Nt = wdm_lookup_table.settings.Nt
+        num_fdot = wdm_lookup_table.fdot_steps
+        num_f = wdm_lookup_table.f_steps
+        expected_shape = (Nt, num_fdot, num_f)
+        assert wdm_lookup_table.table_cos.shape == expected_shape, (
+            f"table_cos shape {wdm_lookup_table.table_cos.shape} != {expected_shape}"
+        )
+        assert wdm_lookup_table.table_sin.shape == expected_shape, (
+            f"table_sin shape {wdm_lookup_table.table_sin.shape} != {expected_shape}"
+        )
+        self.c_nm_all = self.xp.ascontiguousarray(self.xp.asarray(wdm_lookup_table.table_cos))
+        self.s_nm_all = self.xp.ascontiguousarray(self.xp.asarray(wdm_lookup_table.table_sin))
         
         delta_f = wdm_lookup_table.f_vals_norm[1] - wdm_lookup_table.f_vals_norm[0]
         try:

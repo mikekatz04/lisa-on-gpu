@@ -452,8 +452,13 @@ void WDMDomain::get_inner_product_value_cross_channel(double *d_h, double *h_h, 
 }
 
 CUDA_DEVICE
-double WaveletLookupTable::linear_interp(double f_scaled, double fdot, double *z_vals)
+double WaveletLookupTable::linear_interp(double f_scaled, double fdot, double *z_vals, int layer_n)
 {
+    // Table layout is (Nt, num_fdot, num_f). Offset by layer_n to the correct
+    // time-pixel slice; the Python lookup is genuinely n-dependent because of
+    // the (m + n) parity swap baked in at table-construction time.
+    double *z_slice = z_vals + (size_t)layer_n * (size_t)num_fdot * (size_t)num_f;
+
     if (num_fdot > 1)
     {
         int f_index = int((f_scaled - min_f_scaled) / df_interp) ;
@@ -461,20 +466,20 @@ double WaveletLookupTable::linear_interp(double f_scaled, double fdot, double *z
         bool bad = false;
 
         // printf("CHECK18 %e %e %d %d %d %d %e %e %e %e\n", f_scaled, fdot, f_index, fdot_index, num_f, num_fdot, df_interp, dfdot_interp, min_f_scaled, min_fdot);
-        
+
         if ((f_index < 0) || (f_index >= num_f) || (fdot_index < 0) || (fdot_index >= num_fdot))
         {
             bad = true;
     #ifdef __CUDACC__
             f_index = 0;
             fdot_index = 0;
-        
+
     #else
             // throw std::invalid_argument("Asking for value outside interp domain.");
     #endif
         }
 
-        if (bad) 
+        if (bad)
         {
             return 0.0;
         }
@@ -483,11 +488,11 @@ double WaveletLookupTable::linear_interp(double f_scaled, double fdot, double *z
         double y1 = df_interp * fdot_index;
         double y2 = df_interp * (fdot_index + 1);
 
-        double z11 = z_vals[fdot_index * num_f + f_index];
-        double z12 = z_vals[(fdot_index + 1) * num_f + f_index];
-        double z21 = z_vals[fdot_index * num_f + (f_index + 1)];
-        double z22 = z_vals[(fdot_index + 1) * num_f + (f_index + 1)];
-        
+        double z11 = z_slice[fdot_index * num_f + f_index];
+        double z12 = z_slice[(fdot_index + 1) * num_f + f_index];
+        double z21 = z_slice[fdot_index * num_f + (f_index + 1)];
+        double z22 = z_slice[(fdot_index + 1) * num_f + (f_index + 1)];
+
         double f_x_y1 = (x2 - f_scaled) / (x2 - x1) * z11 + (f_scaled - x1) / (x2 - x1) * z21;
         double f_x_y2 = (x2 - f_scaled) / (x2 - x1) * z21 + (f_scaled - x1) / (x2 - x1) * z22;
 
@@ -499,8 +504,8 @@ double WaveletLookupTable::linear_interp(double f_scaled, double fdot, double *z
         int f_index = int((f_scaled - min_f_scaled) / df_interp) ;
         double x1 = (df_interp * f_index) + min_f_scaled;
         double x2 = (df_interp * (f_index + 1)) + min_f_scaled;
-        double z1 = z_vals[f_index];
-        double z2 = z_vals[f_index + 1];
+        double z1 = z_slice[f_index];
+        double z2 = z_slice[f_index + 1];
 
         double f_y = z1 + (f_scaled - x1) * (z2 - z1) / (x2 - x1);
         // printf("%d %e %e %e %e %e %e %e\n", f_index, f_scaled, min_f_scaled, df_interp, x1, x2, z1, z2);
@@ -512,9 +517,9 @@ CUDA_DEVICE
 double WaveletLookupTable::get_w_mn_lookup(cmplx tdi_channel_val, double f, double fdot, int layer_m, int layer_n)
 {
     double f_scaled = f - layer_m * layer_df;
-    // printf("CHECK10 %e %d %d %e\n", f_scaled, layer_m, int(f / df_interp), f); 
-    double _c_nm = linear_interp(f_scaled, fdot, c_nm_all);
-    double _s_nm = linear_interp(f_scaled, fdot, s_nm_all);
+    // printf("CHECK10 %e %d %d %e\n", f_scaled, layer_m, int(f / df_interp), f);
+    double _c_nm = linear_interp(f_scaled, fdot, c_nm_all, layer_n);
+    double _s_nm = linear_interp(f_scaled, fdot, s_nm_all, layer_n);
     double c_nm, s_nm;
 
     bool is_m_plus_n_even = (layer_m + layer_n) % 2 == 0;
