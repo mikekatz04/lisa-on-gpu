@@ -149,6 +149,18 @@ class WaveletLookupTableWrap : public ReturnPointerBase {
         delete wdm_lookup;
     };
 
+    // Diagnostic: directly evaluate w_mn for caller-supplied (amp, phi, f, fdot, m, n).
+    // Mirrors the C kernel post-conj/shift: tdi_channel_val = amp * (cos(phi) + i*sin(phi)).
+    // CPU-only — used for unit tests against the Python lookup.
+    void get_w_mn_arr(
+        array_type<double> out,
+        array_type<double> amp_arr,
+        array_type<double> phi_arr,
+        array_type<double> f_arr,
+        array_type<double> fdot_arr,
+        array_type<int> m_arr,
+        array_type<int> n_arr,
+        int N);
 };
 
 
@@ -185,6 +197,16 @@ class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBas
   public:
     void gb_wdm_fill_global(array_type<double>template_fill, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t);
     void gb_wdm_get_ll(array_type<double>d_h_out, array_type<double>h_h_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, array_type<int>noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t);
+
+    // Diagnostic — see TDIonTheFly.hh for layout.
+    void gb_wdm_eval_inputs(
+        OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+        array_type<double> params_all, array_type<double> tn_arr,
+        int num_bin, int nparams, int num_t, int nchannels,
+        double T, double t_ref, double deriv_delta_t,
+        array_type<double> amp_out, array_type<double> phi_out,
+        array_type<double> f_out, array_type<double> fdot_out,
+        array_type<double> phase_ref_out);
 };
 
 #endif // __BINDING_TOF_HPP__

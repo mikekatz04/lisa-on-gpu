@@ -347,6 +347,22 @@ class GBComputationGroup{
   public:
     void gb_wdm_fill_global_wrap(double *template_fill, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t);
     void gb_wdm_get_ll_wrap(double *d_h_out, double *h_h_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t);
+
+    // Diagnostic: evaluate the per-pixel inputs (|M|, arg(M_mod), f, fdot, phase_ref)
+    // that the fill_global / get_ll kernels feed into the WDM lookup, without doing
+    // the lookup itself. Mirrors fast_wdm_inner: calls get_tdi_Xf_single + numerical
+    // differentiation of phase_ref + tdi_phase across +/- deriv_delta_t.
+    //
+    // Layouts (all C-contiguous, 1-bin compatible if num_bin == 1):
+    //   amp_out, phi_out, f_out, fdot_out: (num_bin, num_t, nchannels)
+    //   phase_ref_out:                     (num_bin, num_t)
+    void gb_wdm_eval_inputs_wrap(
+        Orbits *orbits, TDIConfig *tdi_config,
+        double *params_all, double *tn_arr,
+        int num_bin, int nparams, int num_t, int nchannels,
+        double T, double t_ref, double deriv_delta_t,
+        double *amp_out, double *phi_out, double *f_out, double *fdot_out,
+        double *phase_ref_out);
 };
 
 #endif // __TDI_ON_THE_FLY_HH__

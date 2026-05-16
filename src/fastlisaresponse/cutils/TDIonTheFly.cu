@@ -525,30 +525,26 @@ double WaveletLookupTable::get_w_mn_lookup(cmplx tdi_channel_val, double f, doub
     bool is_m_plus_n_even = (layer_m + layer_n) % 2 == 0;
     bool is_m_even = (layer_m) % 2 == 0;
 
-    // TODO: remove if else here to make faster on GPU???
-    if (!is_m_plus_n_even && is_m_even)
+    // Build pre-applies an (m+n)-parity swap to the table. After lookup, the
+    // (m+n)-odd branches use the values as-is and the (m+n)-even branches swap
+    // sin/cos. The m-parity refinement should NOT add a sign flip — it did in
+    // the previous version, producing a sign flip on every n-odd pixel that
+    // showed up as the every-other-row mismatch vs the WDM-transformed
+    // injection. Drop the negations so all four branches produce the same form
+    // (amp * (cos_coeff*sin(phi) + sin_coeff*cos(phi))).
+    if (!is_m_plus_n_even)
     {
-        s_nm = _s_nm;
-        c_nm = -_c_nm;
-    }
-    else if (!is_m_plus_n_even && !is_m_even)
-    {
-        // no reorder
+        // (m+n) odd: table already stores swapped values; consume directly.
         s_nm = _s_nm;
         c_nm = _c_nm;
     }
-
-    else if (is_m_plus_n_even && is_m_even)
+    else
     {
+        // (m+n) even: undo the build-time swap.
         s_nm = _c_nm;
         c_nm = _s_nm;
     }
-
-    else if (is_m_plus_n_even && !is_m_even)
-    {
-        s_nm = -_c_nm;
-        c_nm = _s_nm;
-    }
+    (void)is_m_even;  // retained for future use; the m-parity sign-flip was wrong.
 
     double w_mn = c_nm * tdi_channel_val.real() + s_nm * tdi_channel_val.imag(); // I think with Aexp(-I Phi) it should be + s_nm
     // printf("CHECK WMN: %e %d %e %e %e %e %e %e %e %e %e %e\n\n", f, layer_m, layer_df, c_nm, s_nm, _c_nm, _s_nm, f_scaled, fdot, tdi_channel_val.real(), tdi_channel_val.imag(), w_mn);
@@ -733,15 +729,28 @@ void fast_wdm_inner(GBTDIonTheFly tdi_on_fly_here, cmplx *tdi_channel_val, doubl
     double residual_frequency, residual_fdot;
     double tdi_frequency, tdi_fdot;
     cmplx I(0.0, 1.0);
-    
+
     tdi_on_fly_here.get_tdi_Xf_single(&tdi_channel_val[0], tn, params, k, u, v, link_Space_craft_rec, link_Space_craft_em, bin_i);
+#ifndef __CUDACC__
+    // DEBUG: print raw TDI at n=28 (tn = 28*layer_dt + t_ref = 286720 + 7889400 = 8176120)
+    if (((tn > 8176119.0) && (tn < 8176121.0))) {
+        printf("[C-RAW] chan=0 |M_raw|=%.12e arg(M_raw)=%.12e (real,imag)=(%.6e, %.6e)\n",
+               gcmplx::abs(tdi_channel_val[0]), gcmplx::arg(tdi_channel_val[0]),
+               tdi_channel_val[0].real(), tdi_channel_val[0].imag());
+    }
+#endif
     for (int i = 0; i < 3; i += 1)
     {
-        // to adjust to TDI on the fly conventions 
+        // to adjust to TDI on the fly conventions
         // and take conj so real part is cos and imag is sin
         tdi_channel_val[i] = gcmplx::conj((tdi_channel_val[i] * gcmplx::exp(-I * M_PI / 2.)));
     }
     phase_ref = tdi_on_fly_here.get_phase_ref(tn, params, bin_i);
+#ifndef __CUDACC__
+    if (((tn > 8176119.0) && (tn < 8176121.0))) {
+        printf("[C-PHASEREF] tn=%.6e phase_ref=%.12e (mod 2pi=%.6e)\n", tn, phase_ref, phase_ref - 2*M_PI*floor(phase_ref/(2*M_PI)));
+    }
+#endif
 
     // printf("CHECK1010 %d %d %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e\n", bin_i, n, tn, gcmplx::abs(tdi_channel_val[0]), gcmplx::arg(tdi_channel_val[0]), params[0], params[1], params[2], params[3], params[4], params[5], params[6], params[7], params[8]);
 
@@ -846,7 +855,10 @@ void gb_wdm_fill_global_kernel(double *template_fill, Orbits* orbits, TDIConfig 
     Vec k(0.0, 0.0, 0.0);
     Vec u(0.0, 0.0, 0.0);
     Vec v(0.0, 0.0, 0.0);
-    int total_points = Nf * Nt;
+    // Channel stride must match the Python-side allocation, which is
+    // (nchannel, Nf_active, Nt_active) — not the full (Nf, Nt) grid.
+    int Nf_active = wdm->Nf_active;
+    int total_points = Nf_active * Nt_active;
     for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
     {
 
@@ -862,10 +874,11 @@ void gb_wdm_fill_global_kernel(double *template_fill, Orbits* orbits, TDIConfig 
     
         for (int n = THREAD_START + n_min; n <= n_max; n += BLOCK_INCR)
         {
-            // printf("CHECK4 %d\n", n);
-            tn = n * layer_dt;
+            // Absolute time: WDM pixel n corresponds to t = n*layer_dt + t_ref so
+            // orbits/TDI see the same epoch the Python wrap uses.
+            tn = n * layer_dt + t_ref;
             fast_wdm_inner(tdi_on_fly_here, &tdi_channel_val[0], &f[0], &fdot[0], tn, params, k, u, v, link_Space_craft_rec, link_Space_craft_em, bin_i, deriv_delta_t);
-        
+
             if ((tdi_channel_val[0] == 0.0))
             {
                 // if uniquely zero then it is out of orbit bounds
@@ -884,8 +897,11 @@ void gb_wdm_fill_global_kernel(double *template_fill, Orbits* orbits, TDIConfig 
 #ifdef __CUDACC__
                         atomicAdd(&template_fill[(i * total_points) + ((layer_m_here - m_min) * Nt_active + (n - n_min))], w_mn);
 #else
-                        // printf("CHECK8 %d %d %d %d %d %d %e\n", i, total_points, layer_m_here, Nt, n, (i * total_points) + (layer_m_here * Nt + n), w_mn);
-                        // if (tn == 63072570.0) printf("CHECK9 %d %d %d %.12e %.12e %.12e %.12e %.12e\n", i, layer_m_here, n, tn, gcmplx::abs(tdi_channel_val[i]), gcmplx::arg(tdi_channel_val[i]), f[i], fdot[i], w_mn);
+                        // DEBUG: chan 0, n=28, m=61 (the loudest python pixel)
+                        if ((i == 0) && (n == 28) && (layer_m_here == 61)) {
+                            printf("[C-DEBUG] chan=0 n=28 m=61 diff=%d  f=%.12e fdot=%.12e |M|=%.12e arg(M)=%.12e w_mn=%.6e layer_m_base=%d\n",
+                                   diff, f[i], fdot[i], gcmplx::abs(tdi_channel_val[i]), gcmplx::arg(tdi_channel_val[i]), w_mn, layer_m);
+                        }
 
                         template_fill[(i * total_points) + ((layer_m_here - m_min) * Nt_active + (n - n_min))] += w_mn;
 #endif
@@ -896,6 +912,66 @@ void gb_wdm_fill_global_kernel(double *template_fill, Orbits* orbits, TDIConfig 
         }
     }
 };
+
+// Diagnostic: evaluate the per-pixel inputs (|M|, arg(M_mod), f, fdot, phase_ref)
+// that gb_wdm_fill_global_kernel feeds into the WDM lookup, without doing the lookup.
+// CPU-only — used to compare C-side numerical-derivative inputs against Python splines.
+void GBComputationGroup::gb_wdm_eval_inputs_wrap(
+    Orbits *orbits, TDIConfig *tdi_config,
+    double *params_all, double *tn_arr,
+    int num_bin, int nparams, int num_t, int nchannels,
+    double T, double t_ref, double deriv_delta_t,
+    double *amp_out, double *phi_out, double *f_out, double *fdot_out,
+    double *phase_ref_out)
+{
+#ifdef __CUDACC__
+    // GPU build: not implemented; the diagnostic is CPU-only.
+    return;
+#else
+    GBTDIonTheFly tdi_on_fly_here(orbits, tdi_config, T, t_ref);
+
+    int link_Space_craft_rec[NLINKS];
+    int link_Space_craft_em[NLINKS];
+    tdi_on_fly_here.fill_link_arrays(link_Space_craft_rec, link_Space_craft_em);
+
+    cmplx tdi_channel_val[3];
+    double f[3] = {0.};
+    double fdot[3] = {0.};
+
+    for (int bin_i = 0; bin_i < num_bin; ++bin_i)
+    {
+        double *params = &params_all[bin_i * nparams];
+        Vec k(0.0, 0.0, 0.0), u(0.0, 0.0, 0.0), v(0.0, 0.0, 0.0);
+        tdi_on_fly_here.get_sky_vectors(&k, &u, &v, params);
+
+        for (int t_i = 0; t_i < num_t; ++t_i)
+        {
+            double tn = tn_arr[t_i];
+
+            fast_wdm_inner(tdi_on_fly_here, &tdi_channel_val[0], &f[0], &fdot[0],
+                           tn, params, k, u, v,
+                           link_Space_craft_rec, link_Space_craft_em, bin_i,
+                           deriv_delta_t);
+
+            phase_ref_out[bin_i * num_t + t_i] =
+                tdi_on_fly_here.get_phase_ref(tn, params, bin_i);
+
+            for (int chan = 0; chan < nchannels; ++chan)
+            {
+                int idx = (bin_i * num_t + t_i) * nchannels + chan;
+                // Note: tdi_channel_val has already been conj'd and rotated by exp(-Iπ/2)
+                // inside fast_wdm_inner, so arg(M_mod) is what we report (matches the
+                // value the lookup actually consumes).
+                amp_out[idx]  = gcmplx::abs(tdi_channel_val[chan]);
+                phi_out[idx]  = gcmplx::arg(tdi_channel_val[chan]);
+                f_out[idx]    = f[chan];
+                fdot_out[idx] = fdot[chan];
+            }
+        }
+    }
+#endif
+}
+
 
 void GBComputationGroup::gb_wdm_fill_global_wrap(double *template_fill, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
 {
@@ -1016,10 +1092,11 @@ void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIC
     
         for (int n = THREAD_START + n_min; n <= n_max; n += BLOCK_INCR)
         {
-            // printf("CHECK4 %d\n", n);
-            tn = n * layer_dt;
+            // Absolute time: WDM pixel n corresponds to t = n*layer_dt + t_ref so
+            // orbits/TDI see the same epoch the Python wrap uses.
+            tn = n * layer_dt + t_ref;
             fast_wdm_inner(tdi_on_fly_here, &tdi_channel_val[0], &f[0], &fdot[0], tn, params, k, u, v, link_Space_craft_rec, link_Space_craft_em, bin_i, deriv_delta_t);
-        
+
             if ((tdi_channel_val[0] == 0.0))
             {
                 // if uniquely zero then it is out of orbit bounds
