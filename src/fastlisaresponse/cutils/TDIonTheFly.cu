@@ -781,9 +781,27 @@ void fast_wdm_inner(GBTDIonTheFly tdi_on_fly_here, cmplx *tdi_channel_val, doubl
         tdi_phase_mid = -gcmplx::arg(tdi_channel_val[i] * gcmplx::exp(I * phase_ref));
         tdi_phase_up = -gcmplx::arg(tdi_channel_val_up_dt[i] * gcmplx::exp(I * phase_ref_up));
 
+        // gcmplx::arg returns values in (-pi, pi]. When the residual TDI phase
+        // happens to cross the ±pi boundary between t-Δt and t+Δt, the central
+        // difference is off by ±2pi, giving a spurious 1/(2*Δt) frequency
+        // offset (≈ 1 mHz at Δt=500 s — large enough to misroute pixels by many
+        // m-layers and to spoil null-channel cancellations). Unwrap the diff
+        // around each anchor using tdi_phase_mid.
+        //
+        // TODO: sweep deriv_delta_t (e.g. 50–2000 s) against the analytic
+        // python spline (use compare_inputs_current.py) and verify that this
+        // unwrap holds for all reasonable Δt — no further outliers should
+        // appear in |Δf| beyond the expected truncation error.
+        double dphi_up = tdi_phase_up - tdi_phase_mid;
+        if (dphi_up >  M_PI) dphi_up -= 2.0 * M_PI;
+        else if (dphi_up < -M_PI) dphi_up += 2.0 * M_PI;
+        double dphi_down = tdi_phase_down - tdi_phase_mid;
+        if (dphi_down >  M_PI) dphi_down -= 2.0 * M_PI;
+        else if (dphi_down < -M_PI) dphi_down += 2.0 * M_PI;
+
         // # if we assume constant over window
-        // # we can also 
-        tdi_frequency = (tdi_phase_up - tdi_phase_down) / (2 * deriv_delta_t) / (2. * M_PI);
+        // # we can also
+        tdi_frequency = (dphi_up - dphi_down) / (2 * deriv_delta_t) / (2. * M_PI);
         f[i] = residual_frequency + tdi_frequency;
         // if ((n == 1458) && (i == 0)) printf("CHECK555 %d %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e\n", n, f[i], residual_frequency, tdi_frequency, deriv_delta_t, phase_ref_up, phase_ref_down, tdi_phase_down, tdi_phase_up);
     
