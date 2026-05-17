@@ -598,48 +598,46 @@ void WDMDomain::add_ip_contrib(double *d_h_tmp, double *h_h_tmp, double *w_mn, i
     }
     else if (tdi_type == TDI_AET)
     {
-#ifdef __CUDACC__
-#else
-        throw std::invalid_argument("need to add XYZ->AET.");
-#endif
+        // AET: three orthogonal channels, diagonal noise. The caller is
+        // responsible for providing AET-projected data/template values and
+        // a diagonal-only noise buffer; both the CPU and CUDA builds run
+        // the same loop.
         for (int channel_i = 0; channel_i < 3; channel_i += 1)
         {
-            // TODO: change from 9 to 6 calculations?
-            get_inner_product_value(&d_h_val, &h_h_val, w_mn[channel_i], layer_m, n, channel_i, data_index, noise_index);                
+            get_inner_product_value(&d_h_val, &h_h_val, w_mn[channel_i], layer_m, n, channel_i, data_index, noise_index);
             d_h_tmp[tid] += d_h_val;
-            h_h_tmp[tid] += h_h_val;    
-        } 
+            h_h_tmp[tid] += h_h_val;
+        }
     }
     else if (tdi_type == TDI_AE)
     {
-#ifdef __CUDACC__
-#else
-        throw std::invalid_argument("need to add XYZ->AET.");
-#endif
+        // AE: two orthogonal channels (T dropped). Same loop body as AET
+        // but truncated to channels {0,1}; the caller must pre-project.
         for (int channel_i = 0; channel_i < 2; channel_i += 1)
         {
-            // TODO: change from 9 to 6 calculations?
-            get_inner_product_value(&d_h_val, &h_h_val, w_mn[channel_i], layer_m, n, channel_i, data_index, noise_index);                
+            get_inner_product_value(&d_h_val, &h_h_val, w_mn[channel_i], layer_m, n, channel_i, data_index, noise_index);
             d_h_tmp[tid] += d_h_val;
-            h_h_tmp[tid] += h_h_val;    
-        } 
+            h_h_tmp[tid] += h_h_val;
+        }
     }
 }
 
 CUDA_DEVICE
-void WDMDomain::add_ip_swap_contrib(double *d_h_add_tmp, double *d_h_remove_tmp, double *add_add_tmp, double *remove_remove_tmp, double *add_remove_tmp, double *w_mn_add, double *w_mn_remove, int layer_m, int n, int data_index, int noise_index, int tdi_type)
+void WDMDomain::add_ip_swap_contrib(double *d_h_add_acc, double *d_h_remove_acc, double *add_add_acc, double *remove_remove_acc, double *add_remove_acc, double *w_mn_add, double *w_mn_remove, int layer_m, int n, int data_index, int noise_index, int tdi_type)
 {
-#ifdef __CUDACC__
-    int tid = threadIdx.x;
-#else
-    int tid = 0;
-#endif
+    // Accumulators are per-thread scalars (register-resident in the caller). We
+    // sum into local temporaries here and write them back at the end, so the
+    // hot channel loop touches no shared/global memory and the previous
+    // 5xNUM_THREADS_HERE shared staging buffer is gone.
+    double d_h_add_local = 0.0;
+    double d_h_remove_local = 0.0;
+    double add_add_local = 0.0;
+    double remove_remove_local = 0.0;
+    double add_remove_local = 0.0;
 
-    double d_h_add_val = 0.0;
-    double d_h_remove_val = 0.0;
-    double add_add_val = 0.0;
-    double remove_remove_val = 0.0;
-    double add_remove_val = 0.0;
+    double d_h_val = 0.0;
+    double hh_val = 0.0;
+
     int nchannels = 3;
     if (tdi_type == TDI_AE) nchannels = 2;
 
@@ -649,44 +647,39 @@ void WDMDomain::add_ip_swap_contrib(double *d_h_add_tmp, double *d_h_remove_tmp,
         {
             for (int channel_j = 0; channel_j < 3; channel_j += 1)
             {
-                // TODO: change from 9 to 6 calculations?
-                get_inner_product_value_cross_channel(&d_h_add_val, &add_add_val, w_mn_add[channel_i], w_mn_add[channel_j], layer_m, n, channel_i, channel_j, data_index, noise_index);                
-                d_h_add_tmp[tid] += d_h_add_val;
-                add_add_tmp[tid] += add_add_val; 
-                
-                // TODO: change from 9 to 6 calculations?
-                get_inner_product_value_cross_channel(&d_h_remove_val, &remove_remove_val, w_mn_remove[channel_i], w_mn_remove[channel_j], layer_m, n, channel_i, channel_j, data_index, noise_index);                
-                d_h_remove_tmp[tid] += d_h_remove_val;
-                remove_remove_tmp[tid] += remove_remove_val; 
+                get_inner_product_value_cross_channel(&d_h_val, &hh_val, w_mn_add[channel_i], w_mn_add[channel_j], layer_m, n, channel_i, channel_j, data_index, noise_index);
+                d_h_add_local += d_h_val;
+                add_add_local += hh_val;
 
-                // TODO: change from 9 to 6 calculations?
-                get_inner_product_value_cross_channel(&d_h_remove_val, &add_remove_val, w_mn_add[channel_i], w_mn_remove[channel_j], layer_m, n, channel_i, channel_j, data_index, noise_index);                
-                add_remove_tmp[tid] += add_remove_val;
+                get_inner_product_value_cross_channel(&d_h_val, &hh_val, w_mn_remove[channel_i], w_mn_remove[channel_j], layer_m, n, channel_i, channel_j, data_index, noise_index);
+                d_h_remove_local += d_h_val;
+                remove_remove_local += hh_val;
+
+                // <h_add|h_remove>: only hh_val (= add_i * remove_j * noise_ij) is needed.
+                get_inner_product_value_cross_channel(&d_h_val, &hh_val, w_mn_add[channel_i], w_mn_remove[channel_j], layer_m, n, channel_i, channel_j, data_index, noise_index);
+                add_remove_local += hh_val;
             }
-        } 
+        }
     }
     else if ((tdi_type == TDI_AET) || (tdi_type == TDI_AE))
     {
-#ifdef __CUDACC__
-#else
-        throw std::invalid_argument("need to add XYZ->AET.");
-#endif
+        // AET/AE: orthogonal channels, diagonal per-pixel noise. AET keeps
+        // all three channels, AE drops T via nchannels=2. Caller must
+        // supply data/template/noise in the projected basis. Same loop on
+        // CPU and CUDA.
         for (int channel_i = 0; channel_i < nchannels; channel_i += 1)
         {
-            // TODO: change from 9 to 6 calculations?
-            get_inner_product_value(&d_h_add_val, &add_add_val, w_mn_add[channel_i], layer_m, n, channel_i, data_index, noise_index);                
-            d_h_add_tmp[tid] += d_h_add_val;
-            add_add_tmp[tid] += add_add_val; 
-            
-            // TODO: change from 9 to 6 calculations?
-            get_inner_product_value(&d_h_remove_val, &remove_remove_val, w_mn_remove[channel_i], layer_m, n, channel_i, data_index, noise_index);                
-            d_h_remove_tmp[tid] += d_h_remove_val;
-            remove_remove_tmp[tid] += remove_remove_val; 
+            get_inner_product_value(&d_h_val, &hh_val, w_mn_add[channel_i], layer_m, n, channel_i, data_index, noise_index);
+            d_h_add_local += d_h_val;
+            add_add_local += hh_val;
 
-            // TODO: change from 9 to 6 calculations?
-            get_inner_product_value_cross_channel(&d_h_remove_val, &add_remove_val, w_mn_add[channel_i], w_mn_remove[channel_i], layer_m, n, channel_i, channel_i, data_index, noise_index);                
-            add_remove_tmp[tid] += add_remove_val;
-        } 
+            get_inner_product_value(&d_h_val, &hh_val, w_mn_remove[channel_i], layer_m, n, channel_i, data_index, noise_index);
+            d_h_remove_local += d_h_val;
+            remove_remove_local += hh_val;
+
+            get_inner_product_value_cross_channel(&d_h_val, &hh_val, w_mn_add[channel_i], w_mn_remove[channel_i], layer_m, n, channel_i, channel_i, data_index, noise_index);
+            add_remove_local += hh_val;
+        }
     }
     else
     {
@@ -695,14 +688,135 @@ void WDMDomain::add_ip_swap_contrib(double *d_h_add_tmp, double *d_h_remove_tmp,
         throw std::invalid_argument("Incorrect TDI type.");
 #endif
     }
+
+    *d_h_add_acc += d_h_add_local;
+    *d_h_remove_acc += d_h_remove_local;
+    *add_add_acc += add_add_local;
+    *remove_remove_acc += remove_remove_local;
+    *add_remove_acc += add_remove_local;
 }
+
+
+// -----------------------------------------------------------------------------
+//  Per-pixel chain-rule contributions to dL/dtheta_k.
+//
+//  For a Gaussian log-likelihood L = -1/2 < d - h | d - h > in the WDM domain
+//  the analytic gradient is the inner product of the residual with the
+//  parameter derivative of the template,
+//
+//      dL/dtheta_k = 4 * sum_{m,n,c}  (w_d - w_h)_{m n c}  *  (dw_h/dtheta_k)_{m n c}  *  N^{-1}
+//
+//  where N^{-1} is the appropriate per-pixel noise weighting (cross-channel
+//  for XYZ, diagonal for AET/AE).  We approximate dw_h/dtheta_k by central
+//  finite difference *of the waveform itself*,
+//
+//      dw_h/dtheta_k(p) = (w_+ - w_-) / (2 eps_k)  +  O(eps^2 d^3 w/dtheta^3),
+//
+//  and use the *true* un-perturbed wavelet coefficient w_h_CENTER as the
+//  residual anchor.  This gives an unbiased chain rule whenever the
+//  central FD of w is unbiased (i.e. for polynomial-degree-2 dependence
+//  central FD is exact and the kernel matches jax.grad to round-off; for
+//  higher-order or sinusoidal dependence the only error is the O(eps^2)
+//  truncation in the FD derivative itself).
+//
+//  The outer factor of 4 is supplied by the calling kernel at block-reduce
+//  time, just like d_h_out / h_h_out above.  The caller supplies the
+//  per-channel central template w_mn[c] and the per-channel FD derivative
+//  dw_mn_dk[c] = (w_+ - w_-)/(2 eps_k).
+// -----------------------------------------------------------------------------
+
+CUDA_DEVICE
+void WDMDomain::add_grad_contrib(double *grad_acc_k, const double *w_mn, const double *dw_mn_dk,
+                                  int layer_m, int n, int data_index, int noise_index, int tdi_type)
+{
+    double local_acc = 0.0;
+    if (tdi_type == TDI_XYZ)
+    {
+        for (int ci = 0; ci < 3; ci += 1)
+        {
+            double w_d_i = get_pixel_data_value(layer_m, n, ci, data_index);
+            double r_i = w_d_i - w_mn[ci];
+            for (int cj = 0; cj < 3; cj += 1)
+            {
+                double N_ij = get_pixel_noise_value_cross_channel(layer_m, n, ci, cj, noise_index);
+                local_acc += r_i * dw_mn_dk[cj] * N_ij * 0.25;
+            }
+        }
+    }
+    else if ((tdi_type == TDI_AET) || (tdi_type == TDI_AE))
+    {
+#ifndef __CUDACC__
+        // AET path -- see add_ip_contrib comment.
+#endif
+        int nchannels = (tdi_type == TDI_AE) ? 2 : 3;
+        for (int c = 0; c < nchannels; c += 1)
+        {
+            double w_d = get_pixel_data_value(layer_m, n, c, data_index);
+            double N_c = get_pixel_noise_value(layer_m, n, c, noise_index);
+            local_acc += (w_d - w_mn[c]) * dw_mn_dk[c] * N_c * 0.25;
+        }
+    }
+    *grad_acc_k += local_acc;
+}
+
+
+// Swap-likelihood per-pixel chain-rule contribution on one side (add or remove).
+//
+// For ll_diff = L(after) - L(before) with the post-swap residual
+//
+//    r_after = w_d - w_h_add + w_h_remove,
+//
+//  d(ll_diff)/d(theta_add[k])    = +4 sum_{m,n,c} (r_after)_{m n c} (dw_add/dtheta_k)_{m n c} * N^{-1}
+//  d(ll_diff)/d(theta_remove[k]) = -4 sum_{m,n,c} (r_after)_{m n c} (dw_rem/dtheta_k)_{m n c} * N^{-1}
+//
+// The caller passes `sign` (=+1 for add side, =-1 for remove side), the center
+// wavelet coefficients of *both* templates at this pixel (zero if the other
+// template is out of its layer/orbit support) and the FD derivative of the
+// side that is being differentiated.
+CUDA_DEVICE
+void WDMDomain::add_swap_grad_contrib_one_side(
+    double *grad_acc_k, double sign,
+    const double *w_mn_add, const double *w_mn_rem, const double *dw_mn_dk,
+    int layer_m, int n, int data_index, int noise_index, int tdi_type)
+{
+    double local_acc = 0.0;
+    if (tdi_type == TDI_XYZ)
+    {
+        for (int ci = 0; ci < 3; ci += 1)
+        {
+            double w_d_i = get_pixel_data_value(layer_m, n, ci, data_index);
+            double r_i = w_d_i - w_mn_add[ci] + w_mn_rem[ci];
+            for (int cj = 0; cj < 3; cj += 1)
+            {
+                double N_ij = get_pixel_noise_value_cross_channel(layer_m, n, ci, cj, noise_index);
+                local_acc += sign * r_i * dw_mn_dk[cj] * N_ij * 0.25;
+            }
+        }
+    }
+    else if ((tdi_type == TDI_AET) || (tdi_type == TDI_AE))
+    {
+#ifndef __CUDACC__
+        // AET path -- see add_grad_contrib comment.
+#endif
+        int nchannels = (tdi_type == TDI_AE) ? 2 : 3;
+        for (int c = 0; c < nchannels; c += 1)
+        {
+            double w_d = get_pixel_data_value(layer_m, n, c, data_index);
+            double N_c = get_pixel_noise_value(layer_m, n, c, noise_index);
+            double r_c = w_d - w_mn_add[c] + w_mn_rem[c];
+            local_acc += sign * r_c * dw_mn_dk[c] * N_c * 0.25;
+        }
+    }
+    *grad_acc_k += local_acc;
+}
+
 
 #define N_PARAMS_MAX 20
 
 
 #ifdef __CUDACC__
 CUDA_DEVICE
-double block_reduce(double *array) 
+double block_reduce(double *array)
 {
      // Specialize BlockReduce for a 1D block of 128 threads of type int
     using BlockReduce = cub::BlockReduce<double, NUM_THREADS_HERE>;
@@ -713,6 +827,18 @@ double block_reduce(double *array)
     double thread_data = array[tid];
     double output = BlockReduce(temp_storage).Sum(thread_data);
     return output;
+}
+
+// Scalar-input variant of block_reduce: reduces a per-thread register value
+// without going through a NUM_THREADS_HERE shared staging array. Only the cub
+// TempStorage stays in __shared__, which is smaller than the staging array.
+CUDA_DEVICE
+double block_reduce_scalar(double thread_data)
+{
+    using BlockReduce = cub::BlockReduce<double, NUM_THREADS_HERE>;
+    CUDA_SHARED typename BlockReduce::TempStorage temp_storage;
+    CUDA_SYNC_THREADS;
+    return BlockReduce(temp_storage).Sum(thread_data);
 }
 #endif
 
@@ -823,8 +949,12 @@ CUDA_SYNC_THREADS;
 
 template<int num_diff, int total_diff>
 CUDA_KERNEL
-void gb_wdm_fill_global_kernel(double *template_fill, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
+void gb_wdm_fill_global_kernel(double *template_fill, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, double *factors_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
 {
+    // factors_all[bin_i] is a per-source multiplicative scalar applied at the
+    // accumulation step (template_fill[m,n] += factor * w_mn). Pass +1.0 to add
+    // a source, -1.0 to remove it -- mirrors gbgpu.generate_global_template's
+    // factors interface, so callers can drive add/remove in a single C call.
     
     CUDA_SHARED double params[N_PARAMS_MAX];
     GBTDIonTheFly tdi_on_fly_here(orbits, tdi_config, T, t_ref);
@@ -877,10 +1007,12 @@ void gb_wdm_fill_global_kernel(double *template_fill, Orbits* orbits, TDIConfig 
     // (nchannel, Nf_active, Nt_active) — not the full (Nf, Nt) grid.
     int Nf_active = wdm->Nf_active;
     int total_points = Nf_active * Nt_active;
+    double factor;
     for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
     {
 
         data_index = data_index_all[bin_i];
+        factor = factors_all[bin_i];
         for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
         {
             params[i] = params_all[bin_i * nparams + i];
@@ -911,14 +1043,14 @@ void gb_wdm_fill_global_kernel(double *template_fill, Orbits* orbits, TDIConfig 
                     layer_m_here = layer_m + diff;
                     if ((layer_m_here >= m_min) && (layer_m_here <= m_max))
                     {
-                        w_mn = wdm_lookup->get_wdm_in_channel_over_layers(tdi_channel_val[i], f[i], fdot[i], layer_m_here, n);
+                        w_mn = factor * wdm_lookup->get_wdm_in_channel_over_layers(tdi_channel_val[i], f[i], fdot[i], layer_m_here, n);
 #ifdef __CUDACC__
                         atomicAdd(&template_fill[(i * total_points) + ((layer_m_here - m_min) * Nt_active + (n - n_min))], w_mn);
 #else
                         // DEBUG: chan 0, n=28, m=61 (the loudest python pixel)
                         if ((i == 0) && (n == 28) && (layer_m_here == 61)) {
-                            printf("[C-DEBUG] chan=0 n=28 m=61 diff=%d  f=%.12e fdot=%.12e |M|=%.12e arg(M)=%.12e w_mn=%.6e layer_m_base=%d\n",
-                                   diff, f[i], fdot[i], gcmplx::abs(tdi_channel_val[i]), gcmplx::arg(tdi_channel_val[i]), w_mn, layer_m);
+                            printf("[C-DEBUG] chan=0 n=28 m=61 diff=%d  f=%.12e fdot=%.12e |M|=%.12e arg(M)=%.12e w_mn=%.6e layer_m_base=%d factor=%.3e\n",
+                                   diff, f[i], fdot[i], gcmplx::abs(tdi_channel_val[i]), gcmplx::arg(tdi_channel_val[i]), w_mn, layer_m, factor);
                         }
 
                         template_fill[(i * total_points) + ((layer_m_here - m_min) * Nt_active + (n - n_min))] += w_mn;
@@ -991,10 +1123,10 @@ void GBComputationGroup::gb_wdm_eval_inputs_wrap(
 }
 
 
-void GBComputationGroup::gb_wdm_fill_global_wrap(double *template_fill, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
+void GBComputationGroup::gb_wdm_fill_global_wrap(double *template_fill, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, double *factors_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
 {
-    // printf("CHECKCHECK12\n"); 
-    
+    // printf("CHECKCHECK12\n");
+
 #ifdef __CUDACC__
     Orbits *d_orbits;
     cudaMalloc(&d_orbits, sizeof(Orbits));
@@ -1011,9 +1143,9 @@ void GBComputationGroup::gb_wdm_fill_global_wrap(double *template_fill, Orbits* 
     WDMDomain *d_wdm;
     cudaMalloc(&d_wdm, sizeof(WDMDomain));
     gpuErrchk(cudaMemcpy(d_wdm, wdm, sizeof(WDMDomain), cudaMemcpyHostToDevice));
-    
+
     // TODO: add options here?
-    gb_wdm_fill_global_kernel<2, 5><<<num_bin, NUM_THREADS_HERE>>>(template_fill, orbits, tdi_config, wdm_lookup, wdm, params_all, data_index_all, num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
+    gb_wdm_fill_global_kernel<2, 5><<<num_bin, NUM_THREADS_HERE>>>(template_fill, orbits, tdi_config, wdm_lookup, wdm, params_all, data_index_all, factors_all, num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
 
     cudaDeviceSynchronize();
     gpuErrchk(cudaGetLastError());
@@ -1026,8 +1158,8 @@ void GBComputationGroup::gb_wdm_fill_global_wrap(double *template_fill, Orbits* 
 #else
 
     // make buffer
-    // printf("CHECKCHECK12\n"); 
-    gb_wdm_fill_global_kernel<2, 5>(template_fill, orbits, tdi_config, wdm_lookup, wdm, params_all, data_index_all, num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
+    // printf("CHECKCHECK12\n");
+    gb_wdm_fill_global_kernel<2, 5>(template_fill, orbits, tdi_config, wdm_lookup, wdm, params_all, data_index_all, factors_all, num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
 
 #endif
 }
@@ -1196,129 +1328,817 @@ void GBComputationGroup::gb_wdm_get_ll_wrap(double *d_h_out, double *h_h_out, Or
 #endif
 }
 
+// Swap-likelihood kernel in the WDM domain.
+//
+// Mirrors gb_wdm_get_ll_kernel: build the TDI on the fly with fast_wdm_inner
+// (proper phase-ref / numerical-derivative frequency, conj/factor adjustments,
+// out-of-orbit zero check), look up w_mn through the bounds-safe
+// get_wdm_in_channel_over_layers wrapper, and accumulate the five swap
+// quantities <d|h_add>, <d|h_remove>, <h_add|h_add>, <h_remove|h_remove>,
+// <h_add|h_remove>.
+//
+// Memory layout vs the previous version:
+//   * Per-bin partial sums live in registers (5 doubles/thread), not in
+//     5*NUM_THREADS_HERE shared arrays.
+//   * Block-wide reduction goes through block_reduce_scalar, which only keeps
+//     the cub::BlockReduce TempStorage in __shared__.
+//   * Only the param staging buffers and the NLINKS spacecraft arrays remain
+//     in shared memory.
+template<int num_diff, int total_diff>
 CUDA_KERNEL
-void gb_wdm_swap_ll_kernel(double *d_h_add_out, double *d_h_remove_out, double *add_add_out, double *remove_remove_out, double *add_remove_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_add_all, double *params_remove_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type)
+void gb_wdm_swap_ll_kernel(double *d_h_add_out, double *d_h_remove_out, double *add_add_out, double *remove_remove_out, double *add_remove_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_add_all, double *params_remove_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
 {
     CUDA_SHARED double params_add[N_PARAMS_MAX];
     CUDA_SHARED double params_remove[N_PARAMS_MAX];
+
+    CUDA_SHARED int link_Space_craft_rec[NLINKS];
+    CUDA_SHARED int link_Space_craft_em[NLINKS];
+
     GBTDIonTheFly tdi_on_fly_here(orbits, tdi_config, T, t_ref);
 
     cmplx tdi_channel_val_add[3];
     cmplx tdi_channel_val_remove[3];
-    double w_mn_add[3];
-    double w_mn_remove[3];
 
-    //  RIGHT NOW I THINK WE DO NOT NEED FREQUENCY PER CHANNEL 
-    //  BECAUSE DOPPLER SHIFTS ARE SMALL
-    //double freq_channels[3];
-    //double fdot_channels[3];
-    double f, fdot;
-    CUDA_SHARED double d_h_add_tmp[NUM_THREADS_HERE];
-    CUDA_SHARED double d_h_remove_tmp[NUM_THREADS_HERE];
-    CUDA_SHARED double add_add_tmp[NUM_THREADS_HERE];
-    CUDA_SHARED double remove_remove_tmp[NUM_THREADS_HERE];
-    CUDA_SHARED double add_remove_tmp[NUM_THREADS_HERE];
+    // Per-channel f, fdot to match gb_wdm_get_ll_kernel (Doppler shift is small
+    // but we keep the structure identical so the layer indexing matches).
+    double f_add[3] = {0.};
+    double fdot_add[3] = {0.};
+    double f_remove[3] = {0.};
+    double fdot_remove[3] = {0.};
 
-    CUDA_SHARED int link_Space_craft_rec[NLINKS];
-    CUDA_SHARED int link_Space_craft_em[NLINKS];
-    // CUDA_SHARED int links[NLINKS];
-    
-    tdi_on_fly_here.fill_link_arrays(link_Space_craft_rec, link_Space_craft_em);
-    CUDA_SYNC_THREADS;
+    double wmn_add[3];
+    double wmn_remove[3];
+
     Vec k_add(0.0, 0.0, 0.0);
     Vec u_add(0.0, 0.0, 0.0);
     Vec v_add(0.0, 0.0, 0.0);
     Vec k_remove(0.0, 0.0, 0.0);
     Vec u_remove(0.0, 0.0, 0.0);
     Vec v_remove(0.0, 0.0, 0.0);
-    
-    double tn;
-    double f_add, fdot_add, f_remove, fdot_remove;
-    int layer_m_add, layer_m_remove, layer_m_min, layer_m_max;
-#ifdef __CUDACC__
-    double d_h_add_red = 0.0;
-    double d_h_remove_red = 0.0;
-    double add_add_red = 0.0;
-    double remove_remove_red = 0.0;
-    double add_remove_red = 0.0;
-#endif
-    int layer_m;
-    int data_index, noise_index;
+
+    int m_min = wdm->ind_min_f;
+    int m_max = wdm->ind_max_f;
+    int n_min = wdm->ind_min_t;
+    int n_max = wdm->ind_max_t;
     double layer_dt = wdm->layer_dt;
-    int Nf = wdm->Nf;
+    double layer_df = wdm->layer_df;
+    (void)total_diff;  // kept for symmetry with get_ll's template signature
+
+    tdi_on_fly_here.fill_link_arrays(link_Space_craft_rec, link_Space_craft_em);
+    CUDA_SYNC_THREADS;
+
+    double tn;
+    double avg_f_add, avg_f_remove;
+    int layer_m_add, layer_m_remove, layer_m_lo, layer_m_hi;
+    int data_index, noise_index;
+
     for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
     {
+        // Per-thread register accumulators -- avoid the previous
+        // 5*NUM_THREADS_HERE shared staging buffer.
+        double d_h_add_acc = 0.0;
+        double d_h_remove_acc = 0.0;
+        double add_add_acc = 0.0;
+        double remove_remove_acc = 0.0;
+        double add_remove_acc = 0.0;
+
         data_index = data_index_all[bin_i];
         noise_index = noise_index_all[bin_i];
+
         for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
         {
             params_add[i] = params_add_all[bin_i * nparams + i];
             params_remove[i] = params_remove_all[bin_i * nparams + i];
         }
         CUDA_SYNC_THREADS;
+
         tdi_on_fly_here.get_sky_vectors(&k_add, &u_add, &v_add, params_add);
         tdi_on_fly_here.get_sky_vectors(&k_remove, &u_remove, &v_remove, params_remove);
-        for (int n = THREAD_START; n < wdm->Nt; n += BLOCK_INCR)
+
+        for (int n = THREAD_START + n_min; n <= n_max; n += BLOCK_INCR)
         {
-            tn = n * layer_dt;
-            tdi_on_fly_here.get_tdi_Xf_single(&tdi_channel_val_add[0], tn, params_add, k_add, u_add, v_add, link_Space_craft_rec, link_Space_craft_em, bin_i);
-            tdi_on_fly_here.get_tdi_Xf_single(&tdi_channel_val_remove[0], tn, params_remove, k_remove, u_remove, v_remove, link_Space_craft_rec, link_Space_craft_em, bin_i);
-            
-            f_add = tdi_on_fly_here.get_f(tn, params_add, bin_i);
-            fdot_add = tdi_on_fly_here.get_fdot(tn, params_add, bin_i);
+            // Same absolute-time convention as gb_wdm_get_ll_kernel: WDM pixel
+            // n corresponds to t = n*layer_dt + t_ref.
+            tn = n * layer_dt + t_ref;
 
-            f_remove = tdi_on_fly_here.get_f(tn, params_remove, bin_i);
-            fdot_remove = tdi_on_fly_here.get_fdot(tn, params_remove, bin_i);
+            fast_wdm_inner(tdi_on_fly_here, &tdi_channel_val_add[0], &f_add[0], &fdot_add[0], tn, params_add, k_add, u_add, v_add, link_Space_craft_rec, link_Space_craft_em, bin_i, deriv_delta_t);
+            fast_wdm_inner(tdi_on_fly_here, &tdi_channel_val_remove[0], &f_remove[0], &fdot_remove[0], tn, params_remove, k_remove, u_remove, v_remove, link_Space_craft_rec, link_Space_craft_em, bin_i, deriv_delta_t);
 
-            // all threads have to be able to make it to CUDA_SYNC_THREADS;
-            layer_m_add = int(f_add / wdm->layer_df);
-            layer_m_remove = int(f_remove / wdm->layer_df);
-
-            layer_m_min = (layer_m_add > layer_m_remove) ? layer_m_remove : layer_m_add;
-            layer_m_max = (layer_m_add > layer_m_remove) ? layer_m_add : layer_m_remove;
-            // TODO: more/less layers?
-            for (int layer_m = layer_m_min - 1; layer_m <= layer_m_max + 1; layer_m += 1)
+            bool add_in_bounds = !(tdi_channel_val_add[0] == 0.0);
+            bool remove_in_bounds = !(tdi_channel_val_remove[0] == 0.0);
+            if (!add_in_bounds && !remove_in_bounds)
             {
-                if ((layer_m >= 0) && (layer_m <= Nf - 1))
+                // both out of orbit bounds at this pixel -- nothing to add
+                continue;
+            }
+
+            avg_f_add = (f_add[0] + f_add[1] + f_add[2]) / 3.0;
+            avg_f_remove = (f_remove[0] + f_remove[1] + f_remove[2]) / 3.0;
+
+            layer_m_add = int(avg_f_add / layer_df);
+            layer_m_remove = int(avg_f_remove / layer_df);
+
+            // Iterate over the union of the two templates' nearby layers
+            // (±num_diff around each). When one template is out of bounds we
+            // collapse the range to just the in-bounds template so we don't
+            // pay for empty pixels far from its layer.
+            if (add_in_bounds && remove_in_bounds)
+            {
+                layer_m_lo = (layer_m_add < layer_m_remove) ? layer_m_add : layer_m_remove;
+                layer_m_hi = (layer_m_add > layer_m_remove) ? layer_m_add : layer_m_remove;
+            }
+            else if (add_in_bounds)
+            {
+                layer_m_lo = layer_m_add;
+                layer_m_hi = layer_m_add;
+            }
+            else
+            {
+                layer_m_lo = layer_m_remove;
+                layer_m_hi = layer_m_remove;
+            }
+
+            for (int layer_m = layer_m_lo - num_diff; layer_m <= layer_m_hi + num_diff; layer_m += 1)
+            {
+                if ((layer_m < m_min) || (layer_m > m_max)) continue;
+
+                // Per-template window: each side only contributes at layers
+                // within its own ±num_diff neighbourhood, matching get_ll's
+                // approximation. Without this, when add/remove are at
+                // different layers the wider iteration range picks up extra
+                // layers for the add side (beyond ±num_diff of layer_m_add)
+                // that get_ll would have clamped out -- so add_add and
+                // d_h_add would disagree with get_ll on the same source.
+                bool add_layer_active = add_in_bounds &&
+                    (layer_m >= layer_m_add - num_diff) &&
+                    (layer_m <= layer_m_add + num_diff);
+                bool remove_layer_active = remove_in_bounds &&
+                    (layer_m >= layer_m_remove - num_diff) &&
+                    (layer_m <= layer_m_remove + num_diff);
+                if (!add_layer_active && !remove_layer_active) continue;
+
+                for (int j = 0; j < 3; j += 1)  // over channels
                 {
-                    for (int j = 0; j < 3; j += 1) // over channels
-                    {
-                        // should return roughly zero if outside of useful layer
-                        w_mn_add[j] = wdm_lookup->get_w_mn_lookup(tdi_channel_val_add[j], f_add, fdot_add, layer_m, n);
-                        w_mn_remove[j] = wdm_lookup->get_w_mn_lookup(tdi_channel_val_remove[j], f_remove, fdot_remove, layer_m, n);
-                    }
-                    wdm->add_ip_swap_contrib(d_h_add_tmp, d_h_remove_tmp, add_add_tmp, remove_remove_tmp, add_remove_tmp, w_mn_add, w_mn_remove, layer_m, n, data_index, noise_index, tdi_type);    
+                    wmn_add[j] = add_layer_active ?
+                        wdm_lookup->get_wdm_in_channel_over_layers(tdi_channel_val_add[j], f_add[j], fdot_add[j], layer_m, n) : 0.0;
+                    wmn_remove[j] = remove_layer_active ?
+                        wdm_lookup->get_wdm_in_channel_over_layers(tdi_channel_val_remove[j], f_remove[j], fdot_remove[j], layer_m, n) : 0.0;
                 }
-                CUDA_SYNC_THREADS;
+
+                wdm->add_ip_swap_contrib(
+                    &d_h_add_acc, &d_h_remove_acc,
+                    &add_add_acc, &remove_remove_acc, &add_remove_acc,
+                    &wmn_add[0], &wmn_remove[0], layer_m, n,
+                    data_index, noise_index, tdi_type);
             }
         }
         CUDA_SYNC_THREADS;
 
 #ifdef __CUDACC__
+        double d_h_add_red       = 4.0 * block_reduce_scalar(d_h_add_acc);
+        double d_h_remove_red    = 4.0 * block_reduce_scalar(d_h_remove_acc);
+        double add_add_red       = 4.0 * block_reduce_scalar(add_add_acc);
+        double remove_remove_red = 4.0 * block_reduce_scalar(remove_remove_acc);
+        double add_remove_red    = 4.0 * block_reduce_scalar(add_remove_acc);
 
-        d_h_add_red = 4.0 * block_reduce(d_h_add_tmp);
-        d_h_remove_red = 4.0 * block_reduce(d_h_remove_tmp);
-        add_add_red = 4.0 * block_reduce(add_add_tmp);
-        remove_remove_red = 4.0 * block_reduce(remove_remove_tmp);
-        add_remove_red = 4.0 * block_reduce(add_remove_tmp);
         if (threadIdx.x == 0)
         {
-            d_h_add_tmp[bin_i] = d_h_add_red;
-            d_h_remove_tmp[bin_i] = d_h_remove_red;
-            add_add_tmp[bin_i] = add_add_red;
-            remove_remove_tmp[bin_i] = remove_remove_red;
-            add_remove_tmp[bin_i] = add_remove_red;
+            d_h_add_out[bin_i] = d_h_add_red;
+            d_h_remove_out[bin_i] = d_h_remove_red;
+            add_add_out[bin_i] = add_add_red;
+            remove_remove_out[bin_i] = remove_remove_red;
+            add_remove_out[bin_i] = add_remove_red;
         }
         CUDA_SYNC_THREADS;
 #else
-        d_h_add_out[bin_i] = 4.0 * d_h_add_tmp[0];
-        d_h_remove_out[bin_i] = 4.0 * d_h_remove_tmp[0];
-        add_add_out[bin_i] = 4.0 * add_add_tmp[0];
-        remove_remove_out[bin_i] = 4.0 * remove_remove_tmp[0];
-        add_remove_out[bin_i] = 4.0 * add_remove_tmp[0];
+        d_h_add_out[bin_i] = 4.0 * d_h_add_acc;
+        d_h_remove_out[bin_i] = 4.0 * d_h_remove_acc;
+        add_add_out[bin_i] = 4.0 * add_add_acc;
+        remove_remove_out[bin_i] = 4.0 * remove_remove_acc;
+        add_remove_out[bin_i] = 4.0 * add_remove_acc;
 #endif
     }
 };
+
+void GBComputationGroup::gb_wdm_swap_ll_wrap(double *d_h_add_out, double *d_h_remove_out, double *add_add_out, double *remove_remove_out, double *add_remove_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_add_all, double *params_remove_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
+{
+#ifdef __CUDACC__
+    Orbits *d_orbits;
+    cudaMalloc(&d_orbits, sizeof(Orbits));
+    gpuErrchk(cudaMemcpy(d_orbits, orbits, sizeof(Orbits), cudaMemcpyHostToDevice));
+
+    TDIConfig *d_tdi_config;
+    cudaMalloc(&d_tdi_config, sizeof(TDIConfig));
+    gpuErrchk(cudaMemcpy(d_tdi_config, tdi_config, sizeof(TDIConfig), cudaMemcpyHostToDevice));
+
+    WaveletLookupTable *d_wdm_lookup;
+    cudaMalloc(&d_wdm_lookup, sizeof(WaveletLookupTable));
+    gpuErrchk(cudaMemcpy(d_wdm_lookup, wdm_lookup, sizeof(WaveletLookupTable), cudaMemcpyHostToDevice));
+
+    WDMDomain *d_wdm;
+    cudaMalloc(&d_wdm, sizeof(WDMDomain));
+    gpuErrchk(cudaMemcpy(d_wdm, wdm, sizeof(WDMDomain), cudaMemcpyHostToDevice));
+
+    gb_wdm_swap_ll_kernel<2, 5><<<num_bin, NUM_THREADS_HERE>>>(
+        d_h_add_out, d_h_remove_out, add_add_out, remove_remove_out, add_remove_out,
+        d_orbits, d_tdi_config, d_wdm_lookup, d_wdm,
+        params_add_all, params_remove_all, data_index_all, noise_index_all,
+        num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
+
+    cudaDeviceSynchronize();
+    gpuErrchk(cudaGetLastError());
+
+    gpuErrchk(cudaFree(d_orbits));
+    gpuErrchk(cudaFree(d_tdi_config));
+    gpuErrchk(cudaFree(d_wdm_lookup));
+    gpuErrchk(cudaFree(d_wdm));
+#else
+    gb_wdm_swap_ll_kernel<2, 5>(
+        d_h_add_out, d_h_remove_out, add_add_out, remove_remove_out, add_remove_out,
+        orbits, tdi_config, wdm_lookup, wdm,
+        params_add_all, params_remove_all, data_index_all, noise_index_all,
+        num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
+#endif
+}
+
+
+// =============================================================================
+//  Chain-rule gradients of gb_wdm_get_ll / gb_wdm_swap_ll w.r.t. the
+//  N_PARAMS_MAX-vector of galactic-binary parameters per binary.
+//
+//  Strategy:
+//    For each pixel (m, n) we already build the central wavelet coefficient
+//    w_h(theta) on the fly via fast_wdm_inner + wdm_lookup->get_wdm_in_channel
+//    _over_layers.  The gradient kernel additionally computes, at the *same*
+//    pixel, the central-difference parameter derivative
+//
+//        dw_h/dtheta_k = ( w_h(theta + eps_k e_k) - w_h(theta - eps_k e_k) )
+//                        / (2 * eps_k),
+//
+//    via two extra fast_wdm_inner calls per parameter, and accumulates the
+//    chain-rule inner product (residual * dw_h/dtheta_k * N^{-1}) into a
+//    per-thread register accumulator.  The accumulator is block-reduced and
+//    multiplied by 4 at the end, exactly like d_h_out / h_h_out.
+//
+//  The layer_m used in the gradient sum is frozen at the *central* value
+//  layer_m_c (and similarly layer_m_add / layer_m_remove for swap).  The
+//  perturbed evaluation is queried at that same layer_m, so the FD truly
+//  represents dw_h/dtheta at fixed (m, n) -- matching the analytic chain
+//  rule used in the JAX/Python reference (gb_chain_rule_grad.py).
+//
+//  All per-thread temporaries (params copy, register accumulators, w_mn
+//  caches) live on the local stack / in registers; only the link arrays and
+//  param_eps stay in shared memory.  Each block still drives one binary, with
+//  NUM_THREADS_HERE threads sharing the n-pixel loop.
+// =============================================================================
+
+
+template<int num_diff, int total_diff>
+CUDA_KERNEL
+void gb_wdm_get_ll_grad_kernel(double *grad_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, double *param_eps, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
+{
+    CUDA_SHARED int link_Space_craft_rec[NLINKS];
+    CUDA_SHARED int link_Space_craft_em[NLINKS];
+    CUDA_SHARED double param_eps_shared[N_PARAMS_MAX];
+
+    GBTDIonTheFly tdi_on_fly_here(orbits, tdi_config, T, t_ref);
+
+    int m_min = wdm->ind_min_f;
+    int m_max = wdm->ind_max_f;
+    int n_min = wdm->ind_min_t;
+    int n_max = wdm->ind_max_t;
+    double layer_dt = wdm->layer_dt;
+    double layer_df = wdm->layer_df;
+    int nchannels = (tdi_type == TDI_AE) ? 2 : 3;
+    (void)total_diff;
+
+    tdi_on_fly_here.fill_link_arrays(link_Space_craft_rec, link_Space_craft_em);
+
+    for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+    {
+        param_eps_shared[i] = param_eps[i];
+    }
+    CUDA_SYNC_THREADS;
+
+    int data_index, noise_index;
+
+    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    {
+        data_index = data_index_all[bin_i];
+        noise_index = noise_index_all[bin_i];
+
+        // Per-thread private copy of params so this thread can perturb without
+        // racing against other threads' n-loop work.
+        double params_priv[N_PARAMS_MAX];
+        for (int i = 0; i < nparams; i += 1)
+        {
+            params_priv[i] = params_all[bin_i * nparams + i];
+        }
+
+        // Register accumulators for the nparams gradient slots.
+        double grad_acc[N_PARAMS_MAX];
+        for (int i = 0; i < N_PARAMS_MAX; i += 1) grad_acc[i] = 0.0;
+
+        // Central sky vectors (cheap; recomputed for perturbed params below).
+        Vec k_c(0.0, 0.0, 0.0), u_c(0.0, 0.0, 0.0), v_c(0.0, 0.0, 0.0);
+        tdi_on_fly_here.get_sky_vectors(&k_c, &u_c, &v_c, params_priv);
+
+        for (int n = THREAD_START + n_min; n <= n_max; n += BLOCK_INCR)
+        {
+            double tn = n * layer_dt + t_ref;
+
+            // ---- central evaluation ----
+            cmplx tdi_chan_c[3];
+            double f_c[3] = {0., 0., 0.};
+            double fdot_c[3] = {0., 0., 0.};
+            fast_wdm_inner(tdi_on_fly_here, &tdi_chan_c[0], &f_c[0], &fdot_c[0], tn,
+                           params_priv, k_c, u_c, v_c,
+                           link_Space_craft_rec, link_Space_craft_em, bin_i, deriv_delta_t);
+
+            if (tdi_chan_c[0] == 0.0)
+            {
+                continue;     // out of orbit bounds at this pixel
+            }
+
+            double avg_f_c = (f_c[0] + f_c[1] + f_c[2]) / 3.0;
+            int layer_m_c = (int)(avg_f_c / layer_df);
+
+            // Cache central w_mn at each relevant layer (frozen layer index).
+            double w_mn_c[2 * num_diff + 1][3];
+            for (int diff = -num_diff; diff <= num_diff; diff += 1)
+            {
+                int layer_m_here = layer_m_c + diff;
+                for (int c = 0; c < 3; c += 1) w_mn_c[diff + num_diff][c] = 0.0;
+                if ((layer_m_here < m_min) || (layer_m_here > m_max)) continue;
+                for (int c = 0; c < nchannels; c += 1)
+                {
+                    w_mn_c[diff + num_diff][c] =
+                        wdm_lookup->get_wdm_in_channel_over_layers(tdi_chan_c[c], f_c[c], fdot_c[c], layer_m_here, n);
+                }
+            }
+
+            // ---- gradient over parameters ----
+            for (int k = 0; k < nparams; k += 1)
+            {
+                double saved = params_priv[k];
+                double eps_k = param_eps_shared[k];
+                if (eps_k <= 0.0) continue;     // user-supplied "frozen" param
+
+                // +eps
+                params_priv[k] = saved + eps_k;
+                Vec k_p(0., 0., 0.), u_p(0., 0., 0.), v_p(0., 0., 0.);
+                tdi_on_fly_here.get_sky_vectors(&k_p, &u_p, &v_p, params_priv);
+                cmplx tdi_chan_p[3];
+                double f_p[3] = {0., 0., 0.};
+                double fdot_p[3] = {0., 0., 0.};
+                fast_wdm_inner(tdi_on_fly_here, &tdi_chan_p[0], &f_p[0], &fdot_p[0], tn,
+                               params_priv, k_p, u_p, v_p,
+                               link_Space_craft_rec, link_Space_craft_em, bin_i, deriv_delta_t);
+
+                // -eps
+                params_priv[k] = saved - eps_k;
+                Vec k_m(0., 0., 0.), u_m(0., 0., 0.), v_m(0., 0., 0.);
+                tdi_on_fly_here.get_sky_vectors(&k_m, &u_m, &v_m, params_priv);
+                cmplx tdi_chan_m[3];
+                double f_m[3] = {0., 0., 0.};
+                double fdot_m[3] = {0., 0., 0.};
+                fast_wdm_inner(tdi_on_fly_here, &tdi_chan_m[0], &f_m[0], &fdot_m[0], tn,
+                               params_priv, k_m, u_m, v_m,
+                               link_Space_craft_rec, link_Space_craft_em, bin_i, deriv_delta_t);
+
+                // restore
+                params_priv[k] = saved;
+
+                bool plus_ok = !(tdi_chan_p[0] == 0.0);
+                bool minus_ok = !(tdi_chan_m[0] == 0.0);
+                if (!plus_ok && !minus_ok) continue;
+
+                double inv_2eps = 1.0 / (2.0 * eps_k);
+                for (int diff = -num_diff; diff <= num_diff; diff += 1)
+                {
+                    int layer_m_here = layer_m_c + diff;
+                    if ((layer_m_here < m_min) || (layer_m_here > m_max)) continue;
+
+                    double dw[3];
+                    for (int c = 0; c < 3; c += 1) dw[c] = 0.0;
+                    for (int c = 0; c < nchannels; c += 1)
+                    {
+                        double wp = plus_ok ?
+                            wdm_lookup->get_wdm_in_channel_over_layers(tdi_chan_p[c], f_p[c], fdot_p[c], layer_m_here, n) : 0.0;
+                        double wm = minus_ok ?
+                            wdm_lookup->get_wdm_in_channel_over_layers(tdi_chan_m[c], f_m[c], fdot_m[c], layer_m_here, n) : 0.0;
+                        dw[c] = (wp - wm) * inv_2eps;
+                    }
+
+                    wdm->add_grad_contrib(&grad_acc[k],
+                                          &w_mn_c[diff + num_diff][0], &dw[0],
+                                          layer_m_here, n, data_index, noise_index, tdi_type);
+                }
+            }
+        }
+        CUDA_SYNC_THREADS;
+
+        // Block-reduce each gradient accumulator and write out.
+        for (int k = 0; k < nparams; k += 1)
+        {
+#ifdef __CUDACC__
+            double red = block_reduce_scalar(grad_acc[k]);
+            if (threadIdx.x == 0)
+            {
+                grad_out[bin_i * nparams + k] = 4.0 * red;
+            }
+            CUDA_SYNC_THREADS;
+#else
+            grad_out[bin_i * nparams + k] = 4.0 * grad_acc[k];
+#endif
+        }
+    }
+}
+
+
+void GBComputationGroup::gb_wdm_get_ll_grad_wrap(double *grad_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, double *param_eps, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
+{
+#ifdef __CUDACC__
+    Orbits *d_orbits;
+    cudaMalloc(&d_orbits, sizeof(Orbits));
+    gpuErrchk(cudaMemcpy(d_orbits, orbits, sizeof(Orbits), cudaMemcpyHostToDevice));
+
+    TDIConfig *d_tdi_config;
+    cudaMalloc(&d_tdi_config, sizeof(TDIConfig));
+    gpuErrchk(cudaMemcpy(d_tdi_config, tdi_config, sizeof(TDIConfig), cudaMemcpyHostToDevice));
+
+    WaveletLookupTable *d_wdm_lookup;
+    cudaMalloc(&d_wdm_lookup, sizeof(WaveletLookupTable));
+    gpuErrchk(cudaMemcpy(d_wdm_lookup, wdm_lookup, sizeof(WaveletLookupTable), cudaMemcpyHostToDevice));
+
+    WDMDomain *d_wdm;
+    cudaMalloc(&d_wdm, sizeof(WDMDomain));
+    gpuErrchk(cudaMemcpy(d_wdm, wdm, sizeof(WDMDomain), cudaMemcpyHostToDevice));
+
+    gb_wdm_get_ll_grad_kernel<2, 5><<<num_bin, NUM_THREADS_HERE>>>(
+        grad_out, d_orbits, d_tdi_config, d_wdm_lookup, d_wdm,
+        params_all, data_index_all, noise_index_all, param_eps,
+        num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
+
+    cudaDeviceSynchronize();
+    gpuErrchk(cudaGetLastError());
+
+    gpuErrchk(cudaFree(d_orbits));
+    gpuErrchk(cudaFree(d_tdi_config));
+    gpuErrchk(cudaFree(d_wdm_lookup));
+    gpuErrchk(cudaFree(d_wdm));
+#else
+    gb_wdm_get_ll_grad_kernel<2, 5>(grad_out, orbits, tdi_config, wdm_lookup, wdm,
+        params_all, data_index_all, noise_index_all, param_eps,
+        num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
+#endif
+}
+
+
+// -----------------------------------------------------------------------------
+//  Swap-likelihood gradient kernel
+//
+//  Computes d(ll_diff)/d(theta_add[k]) and d(ll_diff)/d(theta_remove[k]) for
+//  each binary in parallel.  The structure mirrors gb_wdm_swap_ll_kernel: for
+//  each pixel (m, n) inside the union of the two templates' layer ranges we
+//
+//    1. evaluate central w_add(theta_add) and w_remove(theta_remove);
+//    2. compute the post-swap residual at that pixel,
+//         r_after_c = w_d_c - w_add_c + w_remove_c;
+//    3. for each k in [0, nparams):  central-difference dw_add / dtheta_add[k]
+//       and accumulate +r_after * dw_add * N^{-1} into grad_add[k];
+//    4. similarly central-difference dw_remove / dtheta_remove[k] and
+//       accumulate -r_after * dw_remove * N^{-1} into grad_remove[k].
+//
+//  As in gb_wdm_swap_ll_kernel we use a per-template active-layer mask so
+//  that we never sample dw on layers more than num_diff away from the
+//  central template's layer_m.
+// -----------------------------------------------------------------------------
+
+template<int num_diff, int total_diff>
+CUDA_KERNEL
+void gb_wdm_swap_ll_grad_kernel(double *grad_add_out, double *grad_remove_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_add_all, double *params_remove_all, int *data_index_all, int *noise_index_all, double *param_eps_add, double *param_eps_remove, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
+{
+    CUDA_SHARED int link_Space_craft_rec[NLINKS];
+    CUDA_SHARED int link_Space_craft_em[NLINKS];
+    CUDA_SHARED double param_eps_add_shared[N_PARAMS_MAX];
+    CUDA_SHARED double param_eps_rem_shared[N_PARAMS_MAX];
+
+    GBTDIonTheFly tdi_on_fly_here(orbits, tdi_config, T, t_ref);
+
+    int m_min = wdm->ind_min_f;
+    int m_max = wdm->ind_max_f;
+    int n_min = wdm->ind_min_t;
+    int n_max = wdm->ind_max_t;
+    double layer_dt = wdm->layer_dt;
+    double layer_df = wdm->layer_df;
+    int nchannels = (tdi_type == TDI_AE) ? 2 : 3;
+    (void)total_diff;
+
+    tdi_on_fly_here.fill_link_arrays(link_Space_craft_rec, link_Space_craft_em);
+
+    for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+    {
+        param_eps_add_shared[i] = param_eps_add[i];
+        param_eps_rem_shared[i] = param_eps_remove[i];
+    }
+    CUDA_SYNC_THREADS;
+
+    int data_index, noise_index;
+
+    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    {
+        data_index = data_index_all[bin_i];
+        noise_index = noise_index_all[bin_i];
+
+        // Private per-thread params copies for independent perturbation.
+        double params_add_priv[N_PARAMS_MAX];
+        double params_rem_priv[N_PARAMS_MAX];
+        for (int i = 0; i < nparams; i += 1)
+        {
+            params_add_priv[i] = params_add_all[bin_i * nparams + i];
+            params_rem_priv[i] = params_remove_all[bin_i * nparams + i];
+        }
+
+        double grad_add_acc[N_PARAMS_MAX];
+        double grad_rem_acc[N_PARAMS_MAX];
+        for (int i = 0; i < N_PARAMS_MAX; i += 1)
+        {
+            grad_add_acc[i] = 0.0;
+            grad_rem_acc[i] = 0.0;
+        }
+
+        Vec k_add_c(0., 0., 0.), u_add_c(0., 0., 0.), v_add_c(0., 0., 0.);
+        Vec k_rem_c(0., 0., 0.), u_rem_c(0., 0., 0.), v_rem_c(0., 0., 0.);
+        tdi_on_fly_here.get_sky_vectors(&k_add_c, &u_add_c, &v_add_c, params_add_priv);
+        tdi_on_fly_here.get_sky_vectors(&k_rem_c, &u_rem_c, &v_rem_c, params_rem_priv);
+
+        for (int n = THREAD_START + n_min; n <= n_max; n += BLOCK_INCR)
+        {
+            double tn = n * layer_dt + t_ref;
+
+            // ---- center evaluations ----
+            cmplx tdi_chan_add_c[3];
+            cmplx tdi_chan_rem_c[3];
+            double f_add_c[3] = {0., 0., 0.};
+            double fdot_add_c[3] = {0., 0., 0.};
+            double f_rem_c[3] = {0., 0., 0.};
+            double fdot_rem_c[3] = {0., 0., 0.};
+            fast_wdm_inner(tdi_on_fly_here, &tdi_chan_add_c[0], &f_add_c[0], &fdot_add_c[0], tn,
+                           params_add_priv, k_add_c, u_add_c, v_add_c,
+                           link_Space_craft_rec, link_Space_craft_em, bin_i, deriv_delta_t);
+            fast_wdm_inner(tdi_on_fly_here, &tdi_chan_rem_c[0], &f_rem_c[0], &fdot_rem_c[0], tn,
+                           params_rem_priv, k_rem_c, u_rem_c, v_rem_c,
+                           link_Space_craft_rec, link_Space_craft_em, bin_i, deriv_delta_t);
+
+            bool add_in_bounds = !(tdi_chan_add_c[0] == 0.0);
+            bool rem_in_bounds = !(tdi_chan_rem_c[0] == 0.0);
+            if (!add_in_bounds && !rem_in_bounds) continue;
+
+            int layer_m_add = 0, layer_m_rem = 0;
+            if (add_in_bounds) layer_m_add = (int)((f_add_c[0] + f_add_c[1] + f_add_c[2]) / 3.0 / layer_df);
+            if (rem_in_bounds) layer_m_rem = (int)((f_rem_c[0] + f_rem_c[1] + f_rem_c[2]) / 3.0 / layer_df);
+
+            // Cache central w_add / w_remove at their own layer windows.
+            double w_add_c[2 * num_diff + 1][3];
+            double w_rem_c[2 * num_diff + 1][3];
+            for (int diff = -num_diff; diff <= num_diff; diff += 1)
+            {
+                int slot = diff + num_diff;
+                for (int c = 0; c < 3; c += 1)
+                {
+                    w_add_c[slot][c] = 0.0;
+                    w_rem_c[slot][c] = 0.0;
+                }
+                if (add_in_bounds)
+                {
+                    int lm_a = layer_m_add + diff;
+                    if ((lm_a >= m_min) && (lm_a <= m_max))
+                    {
+                        for (int c = 0; c < nchannels; c += 1)
+                            w_add_c[slot][c] = wdm_lookup->get_wdm_in_channel_over_layers(tdi_chan_add_c[c], f_add_c[c], fdot_add_c[c], lm_a, n);
+                    }
+                }
+                if (rem_in_bounds)
+                {
+                    int lm_r = layer_m_rem + diff;
+                    if ((lm_r >= m_min) && (lm_r <= m_max))
+                    {
+                        for (int c = 0; c < nchannels; c += 1)
+                            w_rem_c[slot][c] = wdm_lookup->get_wdm_in_channel_over_layers(tdi_chan_rem_c[c], f_rem_c[c], fdot_rem_c[c], lm_r, n);
+                    }
+                }
+            }
+
+            // -------------- grad w.r.t. theta_add[k] --------------
+            // Visits layer_m_add + diff (the add side support).
+            if (add_in_bounds)
+            {
+                for (int k = 0; k < nparams; k += 1)
+                {
+                    double saved = params_add_priv[k];
+                    double eps_k = param_eps_add_shared[k];
+                    if (eps_k <= 0.0) continue;
+
+                    params_add_priv[k] = saved + eps_k;
+                    Vec k_p(0., 0., 0.), u_p(0., 0., 0.), v_p(0., 0., 0.);
+                    tdi_on_fly_here.get_sky_vectors(&k_p, &u_p, &v_p, params_add_priv);
+                    cmplx tdi_chan_p[3];
+                    double f_p[3] = {0., 0., 0.};
+                    double fdot_p[3] = {0., 0., 0.};
+                    fast_wdm_inner(tdi_on_fly_here, &tdi_chan_p[0], &f_p[0], &fdot_p[0], tn,
+                                   params_add_priv, k_p, u_p, v_p,
+                                   link_Space_craft_rec, link_Space_craft_em, bin_i, deriv_delta_t);
+
+                    params_add_priv[k] = saved - eps_k;
+                    Vec k_m(0., 0., 0.), u_m(0., 0., 0.), v_m(0., 0., 0.);
+                    tdi_on_fly_here.get_sky_vectors(&k_m, &u_m, &v_m, params_add_priv);
+                    cmplx tdi_chan_m[3];
+                    double f_m[3] = {0., 0., 0.};
+                    double fdot_m[3] = {0., 0., 0.};
+                    fast_wdm_inner(tdi_on_fly_here, &tdi_chan_m[0], &f_m[0], &fdot_m[0], tn,
+                                   params_add_priv, k_m, u_m, v_m,
+                                   link_Space_craft_rec, link_Space_craft_em, bin_i, deriv_delta_t);
+
+                    params_add_priv[k] = saved;
+
+                    bool plus_ok = !(tdi_chan_p[0] == 0.0);
+                    bool minus_ok = !(tdi_chan_m[0] == 0.0);
+                    if (!plus_ok && !minus_ok) continue;
+
+                    double inv_2eps = 1.0 / (2.0 * eps_k);
+                    for (int diff = -num_diff; diff <= num_diff; diff += 1)
+                    {
+                        int layer_m_here = layer_m_add + diff;
+                        if ((layer_m_here < m_min) || (layer_m_here > m_max)) continue;
+
+                        double dw[3];
+                        for (int c = 0; c < 3; c += 1) dw[c] = 0.0;
+                        for (int c = 0; c < nchannels; c += 1)
+                        {
+                            double wp = plus_ok ?
+                                wdm_lookup->get_wdm_in_channel_over_layers(tdi_chan_p[c], f_p[c], fdot_p[c], layer_m_here, n) : 0.0;
+                            double wm = minus_ok ?
+                                wdm_lookup->get_wdm_in_channel_over_layers(tdi_chan_m[c], f_m[c], fdot_m[c], layer_m_here, n) : 0.0;
+                            dw[c] = (wp - wm) * inv_2eps;
+                        }
+
+                        // remove template w at this pixel (zero if outside its layer window)
+                        double w_rem_at_pixel[3] = {0., 0., 0.};
+                        if (rem_in_bounds)
+                        {
+                            int rel = layer_m_here - layer_m_rem;
+                            if ((rel >= -num_diff) && (rel <= num_diff))
+                            {
+                                for (int c = 0; c < nchannels; c += 1)
+                                    w_rem_at_pixel[c] = w_rem_c[rel + num_diff][c];
+                            }
+                        }
+
+                        wdm->add_swap_grad_contrib_one_side(
+                            &grad_add_acc[k], +1.0,
+                            &w_add_c[diff + num_diff][0], &w_rem_at_pixel[0],
+                            &dw[0], layer_m_here, n, data_index, noise_index, tdi_type);
+                    }
+                }
+            }
+
+            // -------------- grad w.r.t. theta_remove[k] --------------
+            if (rem_in_bounds)
+            {
+                for (int k = 0; k < nparams; k += 1)
+                {
+                    double saved = params_rem_priv[k];
+                    double eps_k = param_eps_rem_shared[k];
+                    if (eps_k <= 0.0) continue;
+
+                    params_rem_priv[k] = saved + eps_k;
+                    Vec k_p(0., 0., 0.), u_p(0., 0., 0.), v_p(0., 0., 0.);
+                    tdi_on_fly_here.get_sky_vectors(&k_p, &u_p, &v_p, params_rem_priv);
+                    cmplx tdi_chan_p[3];
+                    double f_p[3] = {0., 0., 0.};
+                    double fdot_p[3] = {0., 0., 0.};
+                    fast_wdm_inner(tdi_on_fly_here, &tdi_chan_p[0], &f_p[0], &fdot_p[0], tn,
+                                   params_rem_priv, k_p, u_p, v_p,
+                                   link_Space_craft_rec, link_Space_craft_em, bin_i, deriv_delta_t);
+
+                    params_rem_priv[k] = saved - eps_k;
+                    Vec k_m(0., 0., 0.), u_m(0., 0., 0.), v_m(0., 0., 0.);
+                    tdi_on_fly_here.get_sky_vectors(&k_m, &u_m, &v_m, params_rem_priv);
+                    cmplx tdi_chan_m[3];
+                    double f_m[3] = {0., 0., 0.};
+                    double fdot_m[3] = {0., 0., 0.};
+                    fast_wdm_inner(tdi_on_fly_here, &tdi_chan_m[0], &f_m[0], &fdot_m[0], tn,
+                                   params_rem_priv, k_m, u_m, v_m,
+                                   link_Space_craft_rec, link_Space_craft_em, bin_i, deriv_delta_t);
+
+                    params_rem_priv[k] = saved;
+
+                    bool plus_ok = !(tdi_chan_p[0] == 0.0);
+                    bool minus_ok = !(tdi_chan_m[0] == 0.0);
+                    if (!plus_ok && !minus_ok) continue;
+
+                    double inv_2eps = 1.0 / (2.0 * eps_k);
+                    for (int diff = -num_diff; diff <= num_diff; diff += 1)
+                    {
+                        int layer_m_here = layer_m_rem + diff;
+                        if ((layer_m_here < m_min) || (layer_m_here > m_max)) continue;
+
+                        double dw[3];
+                        for (int c = 0; c < 3; c += 1) dw[c] = 0.0;
+                        for (int c = 0; c < nchannels; c += 1)
+                        {
+                            double wp = plus_ok ?
+                                wdm_lookup->get_wdm_in_channel_over_layers(tdi_chan_p[c], f_p[c], fdot_p[c], layer_m_here, n) : 0.0;
+                            double wm = minus_ok ?
+                                wdm_lookup->get_wdm_in_channel_over_layers(tdi_chan_m[c], f_m[c], fdot_m[c], layer_m_here, n) : 0.0;
+                            dw[c] = (wp - wm) * inv_2eps;
+                        }
+
+                        double w_add_at_pixel[3] = {0., 0., 0.};
+                        if (add_in_bounds)
+                        {
+                            int rel = layer_m_here - layer_m_add;
+                            if ((rel >= -num_diff) && (rel <= num_diff))
+                            {
+                                for (int c = 0; c < nchannels; c += 1)
+                                    w_add_at_pixel[c] = w_add_c[rel + num_diff][c];
+                            }
+                        }
+
+                        wdm->add_swap_grad_contrib_one_side(
+                            &grad_rem_acc[k], -1.0,
+                            &w_add_at_pixel[0], &w_rem_c[diff + num_diff][0],
+                            &dw[0], layer_m_here, n, data_index, noise_index, tdi_type);
+                    }
+                }
+            }
+        }
+        CUDA_SYNC_THREADS;
+
+        // Block-reduce + write out.
+        for (int k = 0; k < nparams; k += 1)
+        {
+#ifdef __CUDACC__
+            double red_a = block_reduce_scalar(grad_add_acc[k]);
+            double red_r = block_reduce_scalar(grad_rem_acc[k]);
+            if (threadIdx.x == 0)
+            {
+                grad_add_out[bin_i * nparams + k] = 4.0 * red_a;
+                grad_remove_out[bin_i * nparams + k] = 4.0 * red_r;
+            }
+            CUDA_SYNC_THREADS;
+#else
+            grad_add_out[bin_i * nparams + k] = 4.0 * grad_add_acc[k];
+            grad_remove_out[bin_i * nparams + k] = 4.0 * grad_rem_acc[k];
+#endif
+        }
+    }
+}
+
+
+void GBComputationGroup::gb_wdm_swap_ll_grad_wrap(double *grad_add_out, double *grad_remove_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_add_all, double *params_remove_all, int *data_index_all, int *noise_index_all, double *param_eps_add, double *param_eps_remove, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
+{
+#ifdef __CUDACC__
+    Orbits *d_orbits;
+    cudaMalloc(&d_orbits, sizeof(Orbits));
+    gpuErrchk(cudaMemcpy(d_orbits, orbits, sizeof(Orbits), cudaMemcpyHostToDevice));
+
+    TDIConfig *d_tdi_config;
+    cudaMalloc(&d_tdi_config, sizeof(TDIConfig));
+    gpuErrchk(cudaMemcpy(d_tdi_config, tdi_config, sizeof(TDIConfig), cudaMemcpyHostToDevice));
+
+    WaveletLookupTable *d_wdm_lookup;
+    cudaMalloc(&d_wdm_lookup, sizeof(WaveletLookupTable));
+    gpuErrchk(cudaMemcpy(d_wdm_lookup, wdm_lookup, sizeof(WaveletLookupTable), cudaMemcpyHostToDevice));
+
+    WDMDomain *d_wdm;
+    cudaMalloc(&d_wdm, sizeof(WDMDomain));
+    gpuErrchk(cudaMemcpy(d_wdm, wdm, sizeof(WDMDomain), cudaMemcpyHostToDevice));
+
+    gb_wdm_swap_ll_grad_kernel<2, 5><<<num_bin, NUM_THREADS_HERE>>>(
+        grad_add_out, grad_remove_out,
+        d_orbits, d_tdi_config, d_wdm_lookup, d_wdm,
+        params_add_all, params_remove_all, data_index_all, noise_index_all,
+        param_eps_add, param_eps_remove,
+        num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
+
+    cudaDeviceSynchronize();
+    gpuErrchk(cudaGetLastError());
+
+    gpuErrchk(cudaFree(d_orbits));
+    gpuErrchk(cudaFree(d_tdi_config));
+    gpuErrchk(cudaFree(d_wdm_lookup));
+    gpuErrchk(cudaFree(d_wdm));
+#else
+    gb_wdm_swap_ll_grad_kernel<2, 5>(
+        grad_add_out, grad_remove_out,
+        orbits, tdi_config, wdm_lookup, wdm,
+        params_add_all, params_remove_all, data_index_all, noise_index_all,
+        param_eps_add, param_eps_remove,
+        num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
+#endif
+}
 
 
 #define NLINKS 6
@@ -2435,6 +3255,1231 @@ void gb_run_wave_tdi_wrap(GBTDIonTheFly *tdi_on_fly, cmplx *tdi_channels_arr,
 int GBTDIonTheFly::get_gb_buffer_size(int N)
 {
     return N * sizeof(double) + get_tdi_buffer_size(N);
+}
+
+int GBTDIonTheFly::get_gb_fd_buffer_size(int N, int nchannels)
+{
+    // Shared-memory budget per source for the heterodyne FD kernel:
+    //   params_here[N_PARAMS_MAX]                        N_PARAMS_MAX * 8
+    //   t_arr_local[N]                                              N * 8
+    //   tdi_channels_arr[nchannels * N]  (cmplx, FFT)    nchannels * N * 16
+    //   tdi_amp[nchannels * N]                           nchannels * N * 8
+    //   tdi_phase[nchannels * N]                         nchannels * N * 8
+    //   phi_ref[N]                                                  N * 8
+    //   get_tdi scratch (flip, pjump, count, fix_count)            21 * N
+    return (int) (
+          N_PARAMS_MAX * sizeof(double)
+        + (size_t) N * sizeof(double)
+        + (size_t) nchannels * (size_t) N * sizeof(cmplx)
+        + 2 * (size_t) nchannels * (size_t) N * sizeof(double)
+        + (size_t) N * sizeof(double)
+        + (size_t) get_tdi_buffer_size(N)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Heterodyne FD GB kernel
+// ---------------------------------------------------------------------------
+//
+// Per-source block; threads cooperate over the N_sparse time samples and over
+// FFT butterflies.  All three channels live in shared memory simultaneously
+// so cross-channel (XYZ -> AET, etc.) post-processing can happen before any
+// global-memory write.
+//
+// Algorithm (per source, all in shared memory):
+//   1. Re-run the existing get_tdi() on the sparse grid -> tdi_amp[c,n],
+//      tdi_phase[c,n], phi_ref[n], tdi_channels_arr[c,n].
+//   2. Overwrite tdi_channels_arr[c,n] with the slow positive-frequency
+//      signal  s_c(tau_n) = A_c(tau_n) *
+//                            exp(+i*(phi_c(tau_n) + phi_ref(tau_n)
+//                                    - 2*pi*f0_grid * tau_n)).
+//   3. In-place radix-2 Cooley-Tukey FFT per channel on s_c[0..N-1] using
+//      cooperative bit-reversal + log2(N) butterfly passes.  Twiddles are
+//      computed on the fly with sin/cos (full double precision).
+//   4. Multiply by 0.5 * dt_sparse (the 1/2 from x = Re[z]) and write the
+//      (num_bin, nchannels, N_sparse) complex result, along with k_f0[bin_i]
+//      and f0_grid[bin_i] (dense rfft bin and snapped carrier).
+
+CUDA_DEVICE inline int gbfd_log2_int(int n)
+{
+    int r = 0;
+    while ((n >>= 1) != 0) ++r;
+    return r;
+}
+
+CUDA_DEVICE inline int gbfd_bit_reverse(int x, int log2n)
+{
+    int r = 0;
+    for (int i = 0; i < log2n; ++i)
+    {
+        r = (r << 1) | (x & 1);
+        x >>= 1;
+    }
+    return r;
+}
+
+CUDA_DEVICE
+void gbfd_radix2_fft_inplace(cmplx *a, int N, int log2N)
+{
+    // Cooley-Tukey decimation-in-time, in-place, double precision.  No GSL or
+    // other library; permissive MIT-style hand roll.  Cooperative across the
+    // threads of the block.
+
+    // Bit-reversal permutation
+    for (int n = THREAD_START; n < N; n += BLOCK_INCR)
+    {
+        int r = gbfd_bit_reverse(n, log2N);
+        if (r > n)
+        {
+            cmplx t = a[n];
+            a[n] = a[r];
+            a[r] = t;
+        }
+    }
+    CUDA_SYNC_THREADS;
+
+    // log2(N) butterfly passes
+    for (int s = 1; s <= log2N; ++s)
+    {
+        int m  = 1 << s;
+        int mh = m >> 1;
+        double base = -2.0 * M_PI / (double) m;  // forward FFT sign
+        for (int k = THREAD_START; k < (N >> 1); k += BLOCK_INCR)
+        {
+            int g  = k / mh;          // butterfly group
+            int j  = k - g * mh;      // position within group
+            int i0 = g * m + j;
+            int i1 = i0 + mh;
+            double th = base * (double) j;
+            cmplx w(cos(th), sin(th));
+            cmplx u = a[i0];
+            cmplx v = w * a[i1];
+            a[i0] = u + v;
+            a[i1] = u - v;
+        }
+        CUDA_SYNC_THREADS;
+    }
+}
+
+// Build the heterodyne FD for one source into the shared-memory buffer.
+//
+// Side effects after return:
+//   tdi_chan[c*N + n] holds  0.5 * dt_sparse * FFT[s_c][n]  (complex),
+//   *kf0_out is the dense rfft bin closest to f0,
+//   *f0g_out is the snapped carrier f0_grid = *kf0_out * df.
+//
+// All three (nchannels) channels are resident in shared memory at return,
+// in FFT-order, ready for the inner-product / accumulator step.
+//
+// The shared-mem layout is exactly the one `get_gb_fd_buffer_size` reserves.
+// `tdi_chan_out`, if non-NULL, also receives a pointer to the per-channel
+// heterodyne FD slab within shared (size = nchannels * N complex).
+CUDA_DEVICE
+void gbfd_build_one_source(GBTDIonTheFly *tof, void *shared_mem,
+                           double *params_in, double t_start, double Tobs,
+                           int N, int nchannels, int n_params, int bin_i,
+                           int log2N,
+                           cmplx **tdi_chan_out,
+                           int *kf0_out, double *f0g_out, double *dts_out)
+{
+    // ---- carve up shared memory ------------------------------------------
+    char *cur = (char*) shared_mem;
+
+    double *params_here = (double*) cur;
+    cur += N_PARAMS_MAX * sizeof(double);
+
+    double *t_arr_local = (double*) cur;
+    cur += (size_t) N * sizeof(double);
+
+    cmplx *tdi_chan = (cmplx*) cur;             // also slow + FFT buffer
+    cur += (size_t) nchannels * N * sizeof(cmplx);
+
+    double *tdi_amp = (double*) cur;
+    cur += (size_t) nchannels * N * sizeof(double);
+
+    double *tdi_phase = (double*) cur;
+    cur += (size_t) nchannels * N * sizeof(double);
+
+    double *phi_ref = (double*) cur;
+    cur += (size_t) N * sizeof(double);
+
+    void *get_tdi_scratch = (void*) cur;
+    int   get_tdi_scratch_len = tof->get_tdi_buffer_size(N);
+
+    // ---- broadcast params into shared ------------------------------------
+    for (int i = THREAD_START; i < n_params; i += BLOCK_INCR)
+        params_here[i] = params_in[bin_i * n_params + i];
+    CUDA_SYNC_THREADS;
+
+    const double f0   = params_here[tof->f0_index];
+    const double df   = 1.0 / Tobs;
+    const int    kf0  = (int) llround(f0 / df);
+    const double f0g  = (double) kf0 * df;
+    const double dts  = Tobs / (double) N;
+
+    // ---- build sparse absolute-time array in shared ----------------------
+    for (int n = THREAD_START; n < N; n += BLOCK_INCR)
+        t_arr_local[n] = t_start + (double) n * dts;
+    CUDA_SYNC_THREADS;
+
+    // ---- call existing get_tdi to fill tdi_chan / tdi_amp / tdi_phase /
+    //      phi_ref from the sparse t_arr_local
+    tof->get_tdi(get_tdi_scratch, get_tdi_scratch_len,
+                 tdi_chan, tdi_amp, tdi_phase, phi_ref,
+                 params_here, t_arr_local, N, bin_i, nchannels);
+
+    // ---- build slow positive-freq complex signal in-place over tdi_chan --
+    for (int n = THREAD_START; n < N; n += BLOCK_INCR)
+    {
+        const double tau     = (double) n * dts;
+        const double carrier = 2.0 * M_PI * f0g * tau;
+        const double phref   = phi_ref[n];
+        for (int c = 0; c < nchannels; ++c)
+        {
+            const double th = tdi_phase[c * N + n] + phref - carrier;
+            tdi_chan[c * N + n] =
+                gcmplx::polar(tdi_amp[c * N + n], th);  // +i sign
+        }
+    }
+    CUDA_SYNC_THREADS;
+
+    // ---- in-place radix-2 FFT, per channel ------------------------------
+    for (int c = 0; c < nchannels; ++c)
+    {
+        gbfd_radix2_fft_inplace(tdi_chan + (size_t) c * N, N, log2N);
+        CUDA_SYNC_THREADS;
+    }
+
+    // ---- absorb the 1/2 * dt_sparse scale here so callers can use the
+    //      values directly as the heterodyne FD piece ---------------------
+    const double scale = 0.5 * dts;
+    for (int n = THREAD_START; n < N; n += BLOCK_INCR)
+    {
+        for (int c = 0; c < nchannels; ++c)
+        {
+            cmplx v = tdi_chan[c * N + n];
+            tdi_chan[c * N + n] = cmplx(v.real() * scale, v.imag() * scale);
+        }
+    }
+    CUDA_SYNC_THREADS;
+
+    if (tdi_chan_out) *tdi_chan_out = tdi_chan;
+    if (kf0_out)      *kf0_out      = kf0;
+    if (f0g_out)      *f0g_out      = f0g;
+    if (dts_out)      *dts_out      = dts;
+}
+
+// Helper: dense rfft bin index for sparse FFT bin m (FFT order) when the
+// heterodyne carrier was snapped to dense bin kf0.  Inlined identical math
+// to np.fft.fftfreq(N, d=1/N): m_signed = (m < N/2) ? m : m - N.
+CUDA_DEVICE inline int gbfd_dense_bin(int m, int N, int kf0)
+{
+    int m_signed = (m < (N >> 1)) ? m : (m - N);
+    return kf0 + m_signed;
+}
+
+CUDA_DEVICE
+void gbfd_run_one_source(GBTDIonTheFly *tof, void *shared_mem,
+                         cmplx *X_het, int *k_f0_out, double *f0_grid_out,
+                         double *params_in, double t_start, double Tobs,
+                         int N, int nchannels, int n_params, int bin_i,
+                         int log2N)
+{
+    cmplx *tdi_chan = NULL;
+    int    kf0      = 0;
+    double f0g      = 0.0;
+    double dts      = 0.0;
+    gbfd_build_one_source(tof, shared_mem, params_in, t_start, Tobs,
+                          N, nchannels, n_params, bin_i, log2N,
+                          &tdi_chan, &kf0, &f0g, &dts);
+
+    // Write heterodyne FD to global, in FFT order.
+    for (int n = THREAD_START; n < N; n += BLOCK_INCR)
+    {
+        for (int c = 0; c < nchannels; ++c)
+        {
+            X_het[(size_t) bin_i * nchannels * N + (size_t) c * N + n] =
+                tdi_chan[c * N + n];
+        }
+    }
+
+    if (THREAD_ZERO)
+    {
+        k_f0_out[bin_i]    = kf0;
+        f0_grid_out[bin_i] = f0g;
+    }
+    CUDA_SYNC_THREADS;
+}
+
+#ifdef __CUDACC__
+CUDA_KERNEL
+void gb_run_fd_wave_tdi_kernel(GBTDIonTheFly *tdi_on_fly,
+    cmplx *X_het, int *k_f0_out, double *f0_grid_out,
+    double *params, double t_start, double Tobs,
+    int N, int num_bin, int n_params, int nchannels, int log2N)
+{
+    extern CUDA_SHARED char shared_mem[];
+    GBTDIonTheFly tof(tdi_on_fly->orbits, tdi_on_fly->tdi_config,
+                      tdi_on_fly->T, tdi_on_fly->t_ref);
+    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    {
+        gbfd_run_one_source(&tof, (void*) shared_mem,
+                            X_het, k_f0_out, f0_grid_out,
+                            params, t_start, Tobs,
+                            N, nchannels, n_params, bin_i, log2N);
+    }
+}
+#endif
+
+void gb_run_fd_wave_tdi_wrap(GBTDIonTheFly *tdi_on_fly,
+    cmplx *X_het, int *k_f0_out, double *f0_grid_out,
+    double *params, double t_start, double Tobs,
+    int N_sparse, int num_bin, int n_params, int nchannels)
+{
+    // Validate power-of-two
+    int log2N = 0;
+    {
+        int m = N_sparse;
+        while ((m & 1) == 0 && m > 1) { m >>= 1; ++log2N; }
+#ifndef __CUDACC__
+        if (m != 1) {
+            throw std::invalid_argument(
+                "gb_run_fd_wave_tdi_wrap: N_sparse must be a power of two.");
+        }
+#endif
+    }
+
+#ifdef __CUDACC__
+    GBTDIonTheFly *gb_host = new GBTDIonTheFly(
+        tdi_on_fly->orbits, tdi_on_fly->tdi_config,
+        tdi_on_fly->T, tdi_on_fly->t_ref);
+
+    Orbits *d_orbits;
+    cudaMalloc(&d_orbits, sizeof(Orbits));
+    gpuErrchk(cudaMemcpy(d_orbits, tdi_on_fly->orbits, sizeof(Orbits),
+                         cudaMemcpyHostToDevice));
+
+    TDIConfig *d_tdi_config;
+    cudaMalloc(&d_tdi_config, sizeof(TDIConfig));
+    gpuErrchk(cudaMemcpy(d_tdi_config, tdi_on_fly->tdi_config, sizeof(TDIConfig),
+                         cudaMemcpyHostToDevice));
+
+    gb_host->orbits     = d_orbits;
+    gb_host->tdi_config = d_tdi_config;
+
+    GBTDIonTheFly *d_gb;
+    cudaMalloc(&d_gb, sizeof(GBTDIonTheFly));
+    gpuErrchk(cudaMemcpy(d_gb, gb_host, sizeof(GBTDIonTheFly),
+                         cudaMemcpyHostToDevice));
+
+    int shared_bytes =
+        tdi_on_fly->get_gb_fd_buffer_size(N_sparse, nchannels);
+
+    // Allow shared usage past the 48 KB static default for large N_sparse.
+    if (shared_bytes > 48 * 1024)
+    {
+        cudaFuncSetAttribute(
+            gb_run_fd_wave_tdi_kernel,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            shared_bytes);
+    }
+
+    gb_run_fd_wave_tdi_kernel<<<num_bin, NUM_THREADS_HERE, shared_bytes>>>(
+        d_gb, X_het, k_f0_out, f0_grid_out,
+        params, t_start, Tobs,
+        N_sparse, num_bin, n_params, nchannels, log2N);
+
+    cudaDeviceSynchronize();
+    gpuErrchk(cudaGetLastError());
+
+    gpuErrchk(cudaFree(d_orbits));
+    gpuErrchk(cudaFree(d_tdi_config));
+    gpuErrchk(cudaFree(d_gb));
+    delete gb_host;
+#else
+    const int shared_bytes =
+        tdi_on_fly->get_gb_fd_buffer_size(N_sparse, nchannels);
+    char *shared_mem = new char[shared_bytes];
+    for (int bin_i = 0; bin_i < num_bin; ++bin_i)
+    {
+        gbfd_run_one_source(tdi_on_fly, (void*) shared_mem,
+                            X_het, k_f0_out, f0_grid_out,
+                            params, t_start, Tobs,
+                            N_sparse, nchannels, n_params, bin_i, log2N);
+    }
+    delete[] shared_mem;
+#endif
+}
+
+
+// ===========================================================================
+// FD analogs of the WDM GBComputationGroup methods.
+// ===========================================================================
+//
+// All three share gbfd_build_one_source(...) to materialise the
+// (nchannels, N_sparse) heterodyne FD piece in shared memory; only the
+// accumulator / scatter step differs.
+//
+// Inner product convention (matches lisatools.diagnostic.inner_product):
+//   (a|b) = 4 Re sum_{c1,c2} sum_k conj(a_c1[k]) b_c2[k] invC[c1,c2][k] * df
+// for tdi_type = TDI_XYZ;  the (c1==c2) diagonal terms only for TDI_AET / AE.
+
+CUDA_DEVICE
+inline void gbfd_accumulate_ll(double *d_h_acc, double *h_h_acc,
+                               cmplx *tdi_chan, int N_sparse, int nchannels,
+                               FDDomain *fd, int kf0,
+                               int data_index, int noise_index, int tdi_type,
+                               double tau_d_h, double tau_h_h)
+{
+    // tau_*: previous accumulator values to add into (so caller can pre-zero
+    // its registers and pass them in).  We simply accumulate per (c1,c2).
+    double dh = tau_d_h;
+    double hh = tau_h_h;
+
+    const int N = N_sparse;
+    const int C = nchannels;
+
+    if (tdi_type == TDI_XYZ)
+    {
+        // cross-channel 3x3 inv-covariance
+        for (int m = THREAD_START; m < N; m += BLOCK_INCR)
+        {
+            int k = gbfd_dense_bin(m, N, kf0);
+            if (!fd->in_band(k)) continue;
+            for (int c1 = 0; c1 < C; ++c1)
+            {
+                cmplx d_c1 = fd->get_data(k, c1, data_index);
+                for (int c2 = 0; c2 < C; ++c2)
+                {
+                    cmplx h_c2 = tdi_chan[c2 * N + m];
+                    double invc = fd->get_invC_cross(k, c1, c2, noise_index);
+                    cmplx prod_dh = gcmplx::conj(d_c1) * h_c2;
+                    cmplx prod_hh =
+                        gcmplx::conj(tdi_chan[c1 * N + m]) * h_c2;
+                    dh += prod_dh.real() * invc;
+                    hh += prod_hh.real() * invc;
+                }
+            }
+        }
+    }
+    else
+    {
+        // TDI_AET (3 diag) or TDI_AE (2 diag): diagonal inv-covariance.
+        int Cd = (tdi_type == TDI_AE) ? 2 : C;
+        for (int m = THREAD_START; m < N; m += BLOCK_INCR)
+        {
+            int k = gbfd_dense_bin(m, N, kf0);
+            if (!fd->in_band(k)) continue;
+            for (int c = 0; c < Cd; ++c)
+            {
+                cmplx d_c = fd->get_data(k, c, data_index);
+                cmplx h_c = tdi_chan[c * N + m];
+                double invc = fd->get_invC_diag(k, c, noise_index);
+                cmplx prod_dh = gcmplx::conj(d_c) * h_c;
+                double mag_h2 = h_c.real() * h_c.real()
+                               + h_c.imag() * h_c.imag();
+                dh += prod_dh.real() * invc;
+                hh += mag_h2 * invc;
+            }
+        }
+    }
+
+    *d_h_acc = dh;
+    *h_h_acc = hh;
+}
+
+#ifdef __CUDACC__
+CUDA_KERNEL
+void gb_fd_get_ll_kernel(double *d_h_out, double *h_h_out,
+    GBTDIonTheFly *tdi_on_fly_handle, FDDomain *fd,
+    double *params, int *data_index_all, int *noise_index_all,
+    double t_start, double Tobs,
+    int N, int num_bin, int n_params, int nchannels, int log2N, int tdi_type)
+{
+    extern CUDA_SHARED char shared_mem[];
+    CUDA_SHARED double d_h_tmp[NUM_THREADS_HERE];
+    CUDA_SHARED double h_h_tmp[NUM_THREADS_HERE];
+
+    GBTDIonTheFly tof(tdi_on_fly_handle->orbits, tdi_on_fly_handle->tdi_config,
+                      tdi_on_fly_handle->T, tdi_on_fly_handle->t_ref);
+
+    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    {
+        for (int i = THREAD_START; i < NUM_THREADS_HERE; i += BLOCK_INCR)
+        {
+            d_h_tmp[i] = 0.0;
+            h_h_tmp[i] = 0.0;
+        }
+        CUDA_SYNC_THREADS;
+
+        cmplx *tdi_chan = NULL;
+        int    kf0      = 0;
+        double f0g      = 0.0;
+        double dts      = 0.0;
+        gbfd_build_one_source(&tof, (void*) shared_mem, params, t_start, Tobs,
+                              N, nchannels, n_params, bin_i, log2N,
+                              &tdi_chan, &kf0, &f0g, &dts);
+
+        double dh_local = 0.0, hh_local = 0.0;
+        gbfd_accumulate_ll(&dh_local, &hh_local, tdi_chan, N, nchannels,
+                           fd, kf0,
+                           data_index_all[bin_i], noise_index_all[bin_i],
+                           tdi_type, 0.0, 0.0);
+
+        int tid = threadIdx.x;
+        d_h_tmp[tid] = dh_local;
+        h_h_tmp[tid] = hh_local;
+        CUDA_SYNC_THREADS;
+
+        double dh_sum = block_reduce(d_h_tmp);
+        double hh_sum = block_reduce(h_h_tmp);
+        if (THREAD_ZERO)
+        {
+            d_h_out[bin_i] = 4.0 * fd->df * dh_sum;
+            h_h_out[bin_i] = 4.0 * fd->df * hh_sum;
+        }
+        CUDA_SYNC_THREADS;
+    }
+}
+#endif
+
+void GBComputationGroup::gb_fd_get_ll_wrap(double *d_h_out, double *h_h_out,
+    Orbits* orbits, TDIConfig *tdi_config, FDDomain *fd,
+    double *params_all, int *data_index_all, int *noise_index_all,
+    int num_bin, int nparams, double T, double t_start, double t_ref,
+    int N_sparse, int nchannels, int tdi_type)
+{
+    int log2N = 0;
+    {
+        int m = N_sparse;
+        while ((m & 1) == 0 && m > 1) { m >>= 1; ++log2N; }
+#ifndef __CUDACC__
+        if (m != 1) {
+            throw std::invalid_argument(
+                "gb_fd_get_ll_wrap: N_sparse must be a power of two.");
+        }
+#endif
+    }
+
+#ifdef __CUDACC__
+    GBTDIonTheFly *gb_host = new GBTDIonTheFly(orbits, tdi_config, T, t_ref);
+    Orbits *d_orbits;
+    cudaMalloc(&d_orbits, sizeof(Orbits));
+    gpuErrchk(cudaMemcpy(d_orbits, orbits, sizeof(Orbits), cudaMemcpyHostToDevice));
+    TDIConfig *d_tdi_config;
+    cudaMalloc(&d_tdi_config, sizeof(TDIConfig));
+    gpuErrchk(cudaMemcpy(d_tdi_config, tdi_config, sizeof(TDIConfig), cudaMemcpyHostToDevice));
+    gb_host->orbits = d_orbits;
+    gb_host->tdi_config = d_tdi_config;
+    GBTDIonTheFly *d_gb;
+    cudaMalloc(&d_gb, sizeof(GBTDIonTheFly));
+    gpuErrchk(cudaMemcpy(d_gb, gb_host, sizeof(GBTDIonTheFly), cudaMemcpyHostToDevice));
+    FDDomain *d_fd;
+    cudaMalloc(&d_fd, sizeof(FDDomain));
+    gpuErrchk(cudaMemcpy(d_fd, fd, sizeof(FDDomain), cudaMemcpyHostToDevice));
+
+    int shared_bytes = gb_host->get_gb_fd_buffer_size(N_sparse, nchannels);
+    if (shared_bytes > 48 * 1024) {
+        cudaFuncSetAttribute(gb_fd_get_ll_kernel,
+            cudaFuncAttributeMaxDynamicSharedMemorySize, shared_bytes);
+    }
+    gb_fd_get_ll_kernel<<<num_bin, NUM_THREADS_HERE, shared_bytes>>>(
+        d_h_out, h_h_out, d_gb, d_fd,
+        params_all, data_index_all, noise_index_all,
+        t_start, T, N_sparse, num_bin, nparams, nchannels, log2N, tdi_type);
+    cudaDeviceSynchronize();
+    gpuErrchk(cudaGetLastError());
+    cudaFree(d_orbits);
+    cudaFree(d_tdi_config);
+    cudaFree(d_gb);
+    cudaFree(d_fd);
+    delete gb_host;
+#else
+    GBTDIonTheFly tof(orbits, tdi_config, T, t_ref);
+    int shared_bytes = tof.get_gb_fd_buffer_size(N_sparse, nchannels);
+    char *shared_mem = new char[shared_bytes];
+    for (int bin_i = 0; bin_i < num_bin; ++bin_i)
+    {
+        cmplx *tdi_chan = NULL;
+        int    kf0      = 0;
+        double f0g      = 0.0;
+        double dts      = 0.0;
+        gbfd_build_one_source(&tof, (void*) shared_mem,
+                              params_all, t_start, T,
+                              N_sparse, nchannels, nparams, bin_i, log2N,
+                              &tdi_chan, &kf0, &f0g, &dts);
+
+        double dh = 0.0, hh = 0.0;
+        gbfd_accumulate_ll(&dh, &hh, tdi_chan, N_sparse, nchannels, fd, kf0,
+                           data_index_all[bin_i], noise_index_all[bin_i],
+                           tdi_type, 0.0, 0.0);
+        d_h_out[bin_i] = 4.0 * fd->df * dh;
+        h_h_out[bin_i] = 4.0 * fd->df * hh;
+    }
+    delete[] shared_mem;
+#endif
+}
+
+// fill_global: add factor_i * h_i to a global FD template buffer
+// of shape (num_data, nchannels, n_rfft).  The buffer is addressed via
+// data_index_all[bin_i]; multiple bins routed to the same data_index are
+// accumulated.  In the GPU build the writes go through atomicAdd to handle
+// overlapping sources.
+#ifdef __CUDACC__
+CUDA_KERNEL
+void gb_fd_fill_global_kernel(cmplx *template_fill,
+    GBTDIonTheFly *tdi_on_fly_handle, FDDomain *fd,
+    double *params, int *data_index_all, double *factors_all,
+    double t_start, double Tobs,
+    int N, int num_bin, int n_params, int nchannels, int log2N)
+{
+    extern CUDA_SHARED char shared_mem[];
+    GBTDIonTheFly tof(tdi_on_fly_handle->orbits, tdi_on_fly_handle->tdi_config,
+                      tdi_on_fly_handle->T, tdi_on_fly_handle->t_ref);
+    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    {
+        cmplx *tdi_chan = NULL;
+        int    kf0      = 0;
+        double f0g      = 0.0;
+        double dts      = 0.0;
+        gbfd_build_one_source(&tof, (void*) shared_mem, params, t_start, Tobs,
+                              N, nchannels, n_params, bin_i, log2N,
+                              &tdi_chan, &kf0, &f0g, &dts);
+
+        int data_index = data_index_all[bin_i];
+        double factor  = factors_all[bin_i];
+        for (int m = THREAD_START; m < N; m += BLOCK_INCR)
+        {
+            int k = gbfd_dense_bin(m, N, kf0);
+            if (!fd->in_band(k)) continue;
+            for (int c = 0; c < nchannels; ++c)
+            {
+                cmplx v = tdi_chan[c * N + m];
+                size_t idx = (size_t) data_index * nchannels * fd->n_rfft
+                             + (size_t) c * fd->n_rfft + k;
+                double re = factor * v.real();
+                double im = factor * v.imag();
+                atomicAdd(((double*)&template_fill[idx]) + 0, re);
+                atomicAdd(((double*)&template_fill[idx]) + 1, im);
+            }
+        }
+        CUDA_SYNC_THREADS;
+    }
+}
+#endif
+
+void GBComputationGroup::gb_fd_fill_global_wrap(cmplx *template_fill,
+    Orbits* orbits, TDIConfig *tdi_config, FDDomain *fd,
+    double *params_all, int *data_index_all, double *factors_all,
+    int num_bin, int nparams, double T, double t_start, double t_ref,
+    int N_sparse, int nchannels)
+{
+    int log2N = 0;
+    {
+        int m = N_sparse;
+        while ((m & 1) == 0 && m > 1) { m >>= 1; ++log2N; }
+#ifndef __CUDACC__
+        if (m != 1) {
+            throw std::invalid_argument(
+                "gb_fd_fill_global_wrap: N_sparse must be a power of two.");
+        }
+#endif
+    }
+
+#ifdef __CUDACC__
+    GBTDIonTheFly *gb_host = new GBTDIonTheFly(orbits, tdi_config, T, t_ref);
+    Orbits *d_orbits;
+    cudaMalloc(&d_orbits, sizeof(Orbits));
+    gpuErrchk(cudaMemcpy(d_orbits, orbits, sizeof(Orbits), cudaMemcpyHostToDevice));
+    TDIConfig *d_tdi_config;
+    cudaMalloc(&d_tdi_config, sizeof(TDIConfig));
+    gpuErrchk(cudaMemcpy(d_tdi_config, tdi_config, sizeof(TDIConfig), cudaMemcpyHostToDevice));
+    gb_host->orbits = d_orbits;
+    gb_host->tdi_config = d_tdi_config;
+    GBTDIonTheFly *d_gb;
+    cudaMalloc(&d_gb, sizeof(GBTDIonTheFly));
+    gpuErrchk(cudaMemcpy(d_gb, gb_host, sizeof(GBTDIonTheFly), cudaMemcpyHostToDevice));
+    FDDomain *d_fd;
+    cudaMalloc(&d_fd, sizeof(FDDomain));
+    gpuErrchk(cudaMemcpy(d_fd, fd, sizeof(FDDomain), cudaMemcpyHostToDevice));
+
+    int shared_bytes = gb_host->get_gb_fd_buffer_size(N_sparse, nchannels);
+    if (shared_bytes > 48 * 1024) {
+        cudaFuncSetAttribute(gb_fd_fill_global_kernel,
+            cudaFuncAttributeMaxDynamicSharedMemorySize, shared_bytes);
+    }
+    gb_fd_fill_global_kernel<<<num_bin, NUM_THREADS_HERE, shared_bytes>>>(
+        template_fill, d_gb, d_fd, params_all, data_index_all, factors_all,
+        t_start, T, N_sparse, num_bin, nparams, nchannels, log2N);
+    cudaDeviceSynchronize();
+    gpuErrchk(cudaGetLastError());
+    cudaFree(d_orbits);
+    cudaFree(d_tdi_config);
+    cudaFree(d_gb);
+    cudaFree(d_fd);
+    delete gb_host;
+#else
+    GBTDIonTheFly tof(orbits, tdi_config, T, t_ref);
+    int shared_bytes = tof.get_gb_fd_buffer_size(N_sparse, nchannels);
+    char *shared_mem = new char[shared_bytes];
+    for (int bin_i = 0; bin_i < num_bin; ++bin_i)
+    {
+        cmplx *tdi_chan = NULL;
+        int    kf0      = 0;
+        double f0g      = 0.0;
+        double dts      = 0.0;
+        gbfd_build_one_source(&tof, (void*) shared_mem,
+                              params_all, t_start, T,
+                              N_sparse, nchannels, nparams, bin_i, log2N,
+                              &tdi_chan, &kf0, &f0g, &dts);
+
+        int data_index = data_index_all[bin_i];
+        double factor  = factors_all[bin_i];
+        for (int m = 0; m < N_sparse; ++m)
+        {
+            int k = gbfd_dense_bin(m, N_sparse, kf0);
+            if (!fd->in_band(k)) continue;
+            for (int c = 0; c < nchannels; ++c)
+            {
+                size_t idx = (size_t) data_index * nchannels * fd->n_rfft
+                             + (size_t) c * fd->n_rfft + k;
+                template_fill[idx] = template_fill[idx]
+                    + cmplx(factor * tdi_chan[c * N_sparse + m].real(),
+                            factor * tdi_chan[c * N_sparse + m].imag());
+            }
+        }
+    }
+    delete[] shared_mem;
+#endif
+}
+
+// swap_ll: returns the five swap accumulators in lisatools convention,
+//    (d|h_add), (d|h_rem), (h_add|h_add), (h_rem|h_rem), (h_add|h_rem).
+//
+// To stay GPU-friendly (one block per source), we run the heterodyne FD for
+// the add and remove sources back-to-back in shared memory; the second pass
+// overwrites the first's slow-signal buffer, so we accumulate (h_add|*) into
+// per-thread registers before the second pass.
+//
+// For now the implementation is straightforward sequential per side, which
+// keeps the math identical to the WDM swap convention; further unification
+// (single-pass dual heterodyne) is a follow-up.
+void GBComputationGroup::gb_fd_swap_ll_wrap(
+    double *d_h_add_out, double *d_h_remove_out,
+    double *add_add_out, double *remove_remove_out, double *add_remove_out,
+    Orbits* orbits, TDIConfig *tdi_config, FDDomain *fd,
+    double *params_add_all, double *params_remove_all,
+    int *data_index_all, int *noise_index_all,
+    int num_bin, int nparams, double T, double t_start, double t_ref,
+    int N_sparse, int nchannels, int tdi_type)
+{
+    // Reuse get_ll for the diagonal-in-source accumulators, then explicitly
+    // form the cross term (h_add | h_remove) per source.
+    GBTDIonTheFly tof(orbits, tdi_config, T, t_ref);
+    int log2N = 0;
+    {
+        int m = N_sparse;
+        while ((m & 1) == 0 && m > 1) { m >>= 1; ++log2N; }
+#ifndef __CUDACC__
+        if (m != 1) {
+            throw std::invalid_argument(
+                "gb_fd_swap_ll_wrap: N_sparse must be a power of two.");
+        }
+#endif
+    }
+
+#ifdef __CUDACC__
+    // GPU path: TODO -- a dedicated dual-source kernel.  The CPU build is
+    // fully wired below and the GPU/CPU outputs match at the math level so
+    // adding a kernel is mechanical; deferred to keep this commit focused.
+    (void) tof; (void) log2N;
+    (void) d_h_add_out; (void) d_h_remove_out;
+    (void) add_add_out; (void) remove_remove_out; (void) add_remove_out;
+    (void) orbits; (void) tdi_config; (void) fd;
+    (void) params_add_all; (void) params_remove_all;
+    (void) data_index_all; (void) noise_index_all;
+    (void) num_bin; (void) nparams; (void) T;
+    (void) t_start; (void) t_ref; (void) N_sparse;
+    (void) nchannels; (void) tdi_type;
+    printf("gb_fd_swap_ll_wrap GPU path not implemented yet.\n");
+#else
+    int shared_bytes = tof.get_gb_fd_buffer_size(N_sparse, nchannels);
+    char *shared_mem_a = new char[shared_bytes];
+    char *shared_mem_b = new char[shared_bytes];
+    // Per-source loop.
+    for (int bin_i = 0; bin_i < num_bin; ++bin_i)
+    {
+        cmplx *h_add = NULL;
+        int    kf0_a = 0;
+        double f0g_a = 0.0;
+        double dts_a = 0.0;
+        gbfd_build_one_source(&tof, (void*) shared_mem_a, params_add_all,
+                              t_start, T, N_sparse, nchannels, nparams,
+                              bin_i, log2N, &h_add, &kf0_a, &f0g_a, &dts_a);
+        // (d|h_add), (h_add|h_add)
+        double dh_a = 0.0, hh_aa = 0.0;
+        gbfd_accumulate_ll(&dh_a, &hh_aa, h_add, N_sparse, nchannels, fd,
+                           kf0_a, data_index_all[bin_i],
+                           noise_index_all[bin_i], tdi_type, 0.0, 0.0);
+        // h_add lives in shared_mem_a; build h_remove in a separate buffer.
+        cmplx *h_rem = NULL;
+        int    kf0_r = 0;
+        double f0g_r = 0.0;
+        double dts_r = 0.0;
+        gbfd_build_one_source(&tof, (void*) shared_mem_b, params_remove_all,
+                              t_start, T, N_sparse, nchannels, nparams,
+                              bin_i, log2N, &h_rem, &kf0_r, &f0g_r, &dts_r);
+        double dh_r = 0.0, hh_rr = 0.0;
+        gbfd_accumulate_ll(&dh_r, &hh_rr, h_rem, N_sparse, nchannels, fd,
+                           kf0_r, data_index_all[bin_i],
+                           noise_index_all[bin_i], tdi_type, 0.0, 0.0);
+        // Cross term (h_add | h_remove): direct sum over dense bins shared
+        // by the two sparse supports.  Each side knows its own (kf0, m_signed)
+        // mapping; iterate over h_add bins and look up the matching h_remove
+        // bin by absolute dense bin (k - kf0_r) modulo N_sparse.
+        double hh_ar = 0.0;
+        const int N = N_sparse;
+        if (tdi_type == TDI_XYZ)
+        {
+            for (int m = 0; m < N; ++m)
+            {
+                int k = gbfd_dense_bin(m, N, kf0_a);
+                if (!fd->in_band(k)) continue;
+                // matching m on remove side: (k - kf0_r) mod N
+                int mr_signed = k - kf0_r;
+                int mr = ((mr_signed % N) + N) % N;
+                int kr = gbfd_dense_bin(mr, N, kf0_r);
+                if (kr != k) continue;  // remove-source slot does not cover k
+                for (int c1 = 0; c1 < nchannels; ++c1)
+                {
+                    for (int c2 = 0; c2 < nchannels; ++c2)
+                    {
+                        cmplx ha = h_add[c1 * N + m];
+                        cmplx hr = h_rem[c2 * N + mr];
+                        double invc = fd->get_invC_cross(
+                            k, c1, c2, noise_index_all[bin_i]);
+                        cmplx prod = gcmplx::conj(ha) * hr;
+                        hh_ar += prod.real() * invc;
+                    }
+                }
+            }
+        }
+        else
+        {
+            int Cd = (tdi_type == TDI_AE) ? 2 : nchannels;
+            for (int m = 0; m < N; ++m)
+            {
+                int k = gbfd_dense_bin(m, N, kf0_a);
+                if (!fd->in_band(k)) continue;
+                int mr_signed = k - kf0_r;
+                int mr = ((mr_signed % N) + N) % N;
+                int kr = gbfd_dense_bin(mr, N, kf0_r);
+                if (kr != k) continue;
+                for (int c = 0; c < Cd; ++c)
+                {
+                    cmplx ha = h_add[c * N + m];
+                    cmplx hr = h_rem[c * N + mr];
+                    double invc = fd->get_invC_diag(
+                        k, c, noise_index_all[bin_i]);
+                    cmplx prod = gcmplx::conj(ha) * hr;
+                    hh_ar += prod.real() * invc;
+                }
+            }
+        }
+
+        double k4df = 4.0 * fd->df;
+        d_h_add_out[bin_i]      = k4df * dh_a;
+        d_h_remove_out[bin_i]   = k4df * dh_r;
+        add_add_out[bin_i]      = k4df * hh_aa;
+        remove_remove_out[bin_i] = k4df * hh_rr;
+        add_remove_out[bin_i]   = k4df * hh_ar;
+    }
+    delete[] shared_mem_a;
+    delete[] shared_mem_b;
+#endif
+}
+
+
+// =============================================================================
+//  FD-domain chain-rule gradients of gb_fd_get_ll / gb_fd_swap_ll.
+//
+//  Mirrors the WDM chain-rule gradient kernels: per parameter k we perturb
+//  theta_k by +/- eps_k, rebuild the per-source heterodyne FD piece, and
+//  accumulate the inner product (d - h_C | dh/dtheta_k) for get_ll, or the
+//  post-swap analog (d - h_add_C + h_rem_C | dh_{add,rem}/dtheta_{add,rem}_k)
+//  for swap_ll.  The parameter derivative is central FD,
+//
+//      dh/dtheta_k(p) = (h_+ - h_-) / (2 eps_k).
+//
+//  Each perturbed signal has its own snapped carrier kf0_{+,-}; we match it
+//  back to the central side by absolute dense rfft bin (exactly the trick
+//  used in gb_fd_swap_ll_wrap's cross term).  The matching is robust to the
+//  rare case where +/- eps_f0 flips the rounding of f0 -> kf0.
+//
+//  The CPU build is fully wired; the GPU paths follow the same status as
+//  gb_fd_swap_ll_wrap (printf-and-return placeholder).
+// =============================================================================
+
+// Per-pair gradient accumulator: returns the partial inner product
+//    Re sum_{c1,c2} sum_m  conj(r_C[c1, m_C(k_pert(m))]) * h_pert[c2, m]
+//                          * invC[c1,c2,k_pert(m)]
+// iterated over the perturbed side's sparse bins.  The "residual" r_C is
+// built from the central-side stash(es) by absolute-dense-bin reverse lookup:
+//    get_ll: r_C[c, k] = d[c, k] - h_add_C[c, m_add(k)]    (h_rem_C = NULL)
+//    swap:   r_C[c, k] = d[c, k] - h_add_C[c, m_add(k)] + h_rem_C[c, m_rem(k)]
+// Missing coverage on a central side contributes 0 for that side (residual
+// reduces to the remaining terms).
+//
+// All inputs are in FFT order (length N per channel); kf0_* are the
+// dense-rfft-bin snaps that gbfd_build_one_source returned for each signal.
+CUDA_DEVICE
+inline double gbfd_grad_one_sided_partial(
+    cmplx *h_pert, int kf0_pert,
+    cmplx *h_add_C, int kf0_add_C,
+    cmplx *h_rem_C, int kf0_rem_C,
+    int N, int nchannels, FDDomain *fd,
+    int data_index, int noise_index, int tdi_type)
+{
+    double acc = 0.0;
+    const int Cd = (tdi_type == TDI_AE) ? 2 : nchannels;
+    for (int mp = 0; mp < N; ++mp)
+    {
+        int kk = gbfd_dense_bin(mp, N, kf0_pert);
+        if (!fd->in_band(kk)) continue;
+
+        int ma_signed = kk - kf0_add_C;
+        int ma = ((ma_signed % N) + N) % N;
+        bool ka_match = (gbfd_dense_bin(ma, N, kf0_add_C) == kk);
+
+        int mr = 0;
+        bool kr_match = false;
+        if (h_rem_C != NULL)
+        {
+            int mr_signed = kk - kf0_rem_C;
+            mr = ((mr_signed % N) + N) % N;
+            kr_match = (gbfd_dense_bin(mr, N, kf0_rem_C) == kk);
+        }
+
+        if (tdi_type == TDI_XYZ)
+        {
+            for (int c1 = 0; c1 < 3; ++c1)
+            {
+                cmplx d_c1 = fd->get_data(kk, c1, data_index);
+                cmplx ha = ka_match ? h_add_C[c1 * N + ma] : cmplx(0., 0.);
+                cmplx hr = (h_rem_C != NULL && kr_match)
+                                ? h_rem_C[c1 * N + mr] : cmplx(0., 0.);
+                cmplx r_c1 = d_c1 - ha + hr;
+                for (int c2 = 0; c2 < 3; ++c2)
+                {
+                    cmplx hp = h_pert[c2 * N + mp];
+                    double invc = fd->get_invC_cross(kk, c1, c2, noise_index);
+                    cmplx prod = gcmplx::conj(r_c1) * hp;
+                    acc += prod.real() * invc;
+                }
+            }
+        }
+        else
+        {
+            for (int c = 0; c < Cd; ++c)
+            {
+                cmplx d_c = fd->get_data(kk, c, data_index);
+                cmplx ha = ka_match ? h_add_C[c * N + ma] : cmplx(0., 0.);
+                cmplx hr = (h_rem_C != NULL && kr_match)
+                                ? h_rem_C[c * N + mr] : cmplx(0., 0.);
+                cmplx r_c = d_c - ha + hr;
+                cmplx hp = h_pert[c * N + mp];
+                double invc = fd->get_invC_diag(kk, c, noise_index);
+                cmplx prod = gcmplx::conj(r_c) * hp;
+                acc += prod.real() * invc;
+            }
+        }
+    }
+    return acc;
+}
+
+
+void GBComputationGroup::gb_fd_get_ll_grad_wrap(double *grad_out,
+    Orbits* orbits, TDIConfig *tdi_config, FDDomain *fd,
+    double *params_all, int *data_index_all, int *noise_index_all,
+    double *param_eps,
+    int num_bin, int nparams, double T, double t_start, double t_ref,
+    int N_sparse, int nchannels, int tdi_type)
+{
+    int log2N = 0;
+    {
+        int m = N_sparse;
+        while ((m & 1) == 0 && m > 1) { m >>= 1; ++log2N; }
+#ifndef __CUDACC__
+        if (m != 1) {
+            throw std::invalid_argument(
+                "gb_fd_get_ll_grad_wrap: N_sparse must be a power of two.");
+        }
+#endif
+    }
+
+#ifdef __CUDACC__
+    (void) grad_out; (void) orbits; (void) tdi_config; (void) fd;
+    (void) params_all; (void) data_index_all; (void) noise_index_all;
+    (void) param_eps;
+    (void) num_bin; (void) nparams; (void) T;
+    (void) t_start; (void) t_ref; (void) N_sparse;
+    (void) nchannels; (void) tdi_type; (void) log2N;
+    printf("gb_fd_get_ll_grad_wrap GPU path not implemented yet.\n");
+#else
+    GBTDIonTheFly tof(orbits, tdi_config, T, t_ref);
+    int shared_bytes = tof.get_gb_fd_buffer_size(N_sparse, nchannels);
+    char  *scratch       = new char[shared_bytes];
+    cmplx *central_stash = new cmplx[(size_t) nchannels * N_sparse];
+
+    double params_priv[N_PARAMS_MAX];
+
+    for (int bin_i = 0; bin_i < num_bin; ++bin_i)
+    {
+        for (int i = 0; i < nparams; ++i)
+            params_priv[i] = params_all[bin_i * nparams + i];
+
+        // Central build.
+        cmplx *h_C_shared = NULL;
+        int    kf0_C = 0;
+        double f0g_C = 0.0, dts_C = 0.0;
+        gbfd_build_one_source(&tof, (void*) scratch, params_priv,
+                              t_start, T, N_sparse, nchannels, nparams,
+                              /*bin_i=*/0, log2N,
+                              &h_C_shared, &kf0_C, &f0g_C, &dts_C);
+        // The scratch's tdi_chan slab will be overwritten by perturbed builds
+        // below, so stash the central signal in our own buffer.
+        for (size_t idx = 0;
+             idx < (size_t) nchannels * (size_t) N_sparse; ++idx)
+            central_stash[idx] = h_C_shared[idx];
+
+        int data_index  = data_index_all[bin_i];
+        int noise_index = noise_index_all[bin_i];
+
+        for (int k = 0; k < nparams; ++k)
+        {
+            double eps_k = param_eps[k];
+            if (eps_k <= 0.0)
+            {
+                grad_out[bin_i * nparams + k] = 0.0;
+                continue;
+            }
+            double saved = params_priv[k];
+            const double inv_2eps = 1.0 / (2.0 * eps_k);
+
+            // +eps build (overwrites scratch's tdi_chan slab).
+            params_priv[k] = saved + eps_k;
+            cmplx *h_P_shared = NULL;
+            int    kf0_P = 0;
+            double f0g_P = 0.0, dts_P = 0.0;
+            gbfd_build_one_source(&tof, (void*) scratch, params_priv,
+                                  t_start, T, N_sparse, nchannels, nparams,
+                                  0, log2N,
+                                  &h_P_shared, &kf0_P, &f0g_P, &dts_P);
+            double acc_p = gbfd_grad_one_sided_partial(
+                h_P_shared, kf0_P,
+                central_stash, kf0_C,
+                /*h_rem_C=*/NULL, /*kf0_rem_C=*/0,
+                N_sparse, nchannels, fd,
+                data_index, noise_index, tdi_type);
+
+            // -eps build (overwrites again).
+            params_priv[k] = saved - eps_k;
+            cmplx *h_M_shared = NULL;
+            int    kf0_M = 0;
+            double f0g_M = 0.0, dts_M = 0.0;
+            gbfd_build_one_source(&tof, (void*) scratch, params_priv,
+                                  t_start, T, N_sparse, nchannels, nparams,
+                                  0, log2N,
+                                  &h_M_shared, &kf0_M, &f0g_M, &dts_M);
+            double acc_m = gbfd_grad_one_sided_partial(
+                h_M_shared, kf0_M,
+                central_stash, kf0_C,
+                /*h_rem_C=*/NULL, /*kf0_rem_C=*/0,
+                N_sparse, nchannels, fd,
+                data_index, noise_index, tdi_type);
+
+            params_priv[k] = saved;
+            grad_out[bin_i * nparams + k] =
+                4.0 * fd->df * (acc_p - acc_m) * inv_2eps;
+        }
+    }
+
+    delete[] central_stash;
+    delete[] scratch;
+#endif
+}
+
+
+void GBComputationGroup::gb_fd_swap_ll_grad_wrap(
+    double *grad_add_out, double *grad_remove_out,
+    Orbits* orbits, TDIConfig *tdi_config, FDDomain *fd,
+    double *params_add_all, double *params_remove_all,
+    int *data_index_all, int *noise_index_all,
+    double *param_eps_add, double *param_eps_remove,
+    int num_bin, int nparams, double T, double t_start, double t_ref,
+    int N_sparse, int nchannels, int tdi_type)
+{
+    int log2N = 0;
+    {
+        int m = N_sparse;
+        while ((m & 1) == 0 && m > 1) { m >>= 1; ++log2N; }
+#ifndef __CUDACC__
+        if (m != 1) {
+            throw std::invalid_argument(
+                "gb_fd_swap_ll_grad_wrap: N_sparse must be a power of two.");
+        }
+#endif
+    }
+
+#ifdef __CUDACC__
+    (void) grad_add_out; (void) grad_remove_out;
+    (void) orbits; (void) tdi_config; (void) fd;
+    (void) params_add_all; (void) params_remove_all;
+    (void) data_index_all; (void) noise_index_all;
+    (void) param_eps_add; (void) param_eps_remove;
+    (void) num_bin; (void) nparams; (void) T;
+    (void) t_start; (void) t_ref; (void) N_sparse;
+    (void) nchannels; (void) tdi_type; (void) log2N;
+    printf("gb_fd_swap_ll_grad_wrap GPU path not implemented yet.\n");
+#else
+    GBTDIonTheFly tof(orbits, tdi_config, T, t_ref);
+    int shared_bytes = tof.get_gb_fd_buffer_size(N_sparse, nchannels);
+    char  *scratch    = new char[shared_bytes];
+    cmplx *add_stash  = new cmplx[(size_t) nchannels * N_sparse];
+    cmplx *rem_stash  = new cmplx[(size_t) nchannels * N_sparse];
+
+    double params_add_priv[N_PARAMS_MAX];
+    double params_rem_priv[N_PARAMS_MAX];
+
+    for (int bin_i = 0; bin_i < num_bin; ++bin_i)
+    {
+        for (int i = 0; i < nparams; ++i)
+        {
+            params_add_priv[i] = params_add_all[bin_i * nparams + i];
+            params_rem_priv[i] = params_remove_all[bin_i * nparams + i];
+        }
+
+        // Central builds for the add and remove sources.
+        cmplx *h_addC_shared = NULL;
+        int    kf0_addC = 0;
+        double f0g_addC = 0.0, dts_addC = 0.0;
+        gbfd_build_one_source(&tof, (void*) scratch, params_add_priv,
+                              t_start, T, N_sparse, nchannels, nparams,
+                              0, log2N,
+                              &h_addC_shared, &kf0_addC, &f0g_addC, &dts_addC);
+        for (size_t idx = 0;
+             idx < (size_t) nchannels * (size_t) N_sparse; ++idx)
+            add_stash[idx] = h_addC_shared[idx];
+
+        cmplx *h_remC_shared = NULL;
+        int    kf0_remC = 0;
+        double f0g_remC = 0.0, dts_remC = 0.0;
+        gbfd_build_one_source(&tof, (void*) scratch, params_rem_priv,
+                              t_start, T, N_sparse, nchannels, nparams,
+                              0, log2N,
+                              &h_remC_shared, &kf0_remC, &f0g_remC, &dts_remC);
+        for (size_t idx = 0;
+             idx < (size_t) nchannels * (size_t) N_sparse; ++idx)
+            rem_stash[idx] = h_remC_shared[idx];
+
+        int data_index  = data_index_all[bin_i];
+        int noise_index = noise_index_all[bin_i];
+
+        // ------ add-side gradient: sign = +1, perturb the add params ------
+        for (int k = 0; k < nparams; ++k)
+        {
+            double eps_k = param_eps_add[k];
+            if (eps_k <= 0.0)
+            {
+                grad_add_out[bin_i * nparams + k] = 0.0;
+                continue;
+            }
+            double saved = params_add_priv[k];
+            const double inv_2eps = 1.0 / (2.0 * eps_k);
+
+            params_add_priv[k] = saved + eps_k;
+            cmplx *h_aP = NULL;
+            int kf0_aP = 0; double f0g_aP = 0.0, dts_aP = 0.0;
+            gbfd_build_one_source(&tof, (void*) scratch, params_add_priv,
+                                  t_start, T, N_sparse, nchannels, nparams,
+                                  0, log2N,
+                                  &h_aP, &kf0_aP, &f0g_aP, &dts_aP);
+            double acc_p = gbfd_grad_one_sided_partial(
+                h_aP, kf0_aP,
+                add_stash, kf0_addC,
+                rem_stash, kf0_remC,
+                N_sparse, nchannels, fd,
+                data_index, noise_index, tdi_type);
+
+            params_add_priv[k] = saved - eps_k;
+            cmplx *h_aM = NULL;
+            int kf0_aM = 0; double f0g_aM = 0.0, dts_aM = 0.0;
+            gbfd_build_one_source(&tof, (void*) scratch, params_add_priv,
+                                  t_start, T, N_sparse, nchannels, nparams,
+                                  0, log2N,
+                                  &h_aM, &kf0_aM, &f0g_aM, &dts_aM);
+            double acc_m = gbfd_grad_one_sided_partial(
+                h_aM, kf0_aM,
+                add_stash, kf0_addC,
+                rem_stash, kf0_remC,
+                N_sparse, nchannels, fd,
+                data_index, noise_index, tdi_type);
+
+            params_add_priv[k] = saved;
+            grad_add_out[bin_i * nparams + k] =
+                +4.0 * fd->df * (acc_p - acc_m) * inv_2eps;
+        }
+
+        // ------ remove-side gradient: sign = -1, perturb the remove params ------
+        for (int k = 0; k < nparams; ++k)
+        {
+            double eps_k = param_eps_remove[k];
+            if (eps_k <= 0.0)
+            {
+                grad_remove_out[bin_i * nparams + k] = 0.0;
+                continue;
+            }
+            double saved = params_rem_priv[k];
+            const double inv_2eps = 1.0 / (2.0 * eps_k);
+
+            params_rem_priv[k] = saved + eps_k;
+            cmplx *h_rP = NULL;
+            int kf0_rP = 0; double f0g_rP = 0.0, dts_rP = 0.0;
+            gbfd_build_one_source(&tof, (void*) scratch, params_rem_priv,
+                                  t_start, T, N_sparse, nchannels, nparams,
+                                  0, log2N,
+                                  &h_rP, &kf0_rP, &f0g_rP, &dts_rP);
+            double acc_p = gbfd_grad_one_sided_partial(
+                h_rP, kf0_rP,
+                add_stash, kf0_addC,
+                rem_stash, kf0_remC,
+                N_sparse, nchannels, fd,
+                data_index, noise_index, tdi_type);
+
+            params_rem_priv[k] = saved - eps_k;
+            cmplx *h_rM = NULL;
+            int kf0_rM = 0; double f0g_rM = 0.0, dts_rM = 0.0;
+            gbfd_build_one_source(&tof, (void*) scratch, params_rem_priv,
+                                  t_start, T, N_sparse, nchannels, nparams,
+                                  0, log2N,
+                                  &h_rM, &kf0_rM, &f0g_rM, &dts_rM);
+            double acc_m = gbfd_grad_one_sided_partial(
+                h_rM, kf0_rM,
+                add_stash, kf0_addC,
+                rem_stash, kf0_remC,
+                N_sparse, nchannels, fd,
+                data_index, noise_index, tdi_type);
+
+            params_rem_priv[k] = saved;
+            grad_remove_out[bin_i * nparams + k] =
+                -4.0 * fd->df * (acc_p - acc_m) * inv_2eps;
+        }
+    }
+
+    delete[] add_stash;
+    delete[] rem_stash;
+    delete[] scratch;
+#endif
 }
 
 

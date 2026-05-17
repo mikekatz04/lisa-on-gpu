@@ -344,10 +344,10 @@ class TDIOutput(FastLISAResponseParallelModule):
         return self.Xamp * self.xp.exp(-1j * (self.Xphase + self.phase_ref))
     @property
     def Y(self) -> np.ndarray:
-        return self.Yamp * self.xp.exp(-1j * (self.Xphase + self.phase_ref))
+        return self.Yamp * self.xp.exp(-1j * (self.Yphase + self.phase_ref))
     @property
     def Z(self) -> np.ndarray:
-        return self.Zamp * self.xp.exp(-1j * (self.Xphase + self.phase_ref))
+        return self.Zamp * self.xp.exp(-1j * (self.Zphase + self.phase_ref))
     @property
     def Xamp(self) -> np.ndarray:
         return self.tdi_amp[:, 0]
@@ -582,14 +582,140 @@ class FDTDIonTheFly(TDIonTheFly):
         )
     
 
+class GBFDTDIonTheFly(FastLISAResponseParallelModule):
+    """Heterodyned frequency-domain GB TDI on the fly.
+
+    Generates the heterodyne-shifted GB TDI directly in the frequency domain
+    using a power-of-two sparse time grid. The kernel keeps all (nchannels)
+    channels of the slow positive-frequency complex signal in shared memory
+    at the same time, FFTs them in place, and returns
+    ``X_het[bin, channel, m]`` together with ``k_f0[bin]`` and
+    ``f0_grid[bin]`` mapping each FFT bin back to the dense rfft grid:
+    bin ``m`` (FFT order) lands on dense rfft bin ``k_f0 + m``.
+
+    Args:
+        T (float): Observation duration in seconds. The dense rfft grid is
+            implicitly ``df = 1/T``.
+        t_ref (float): GB phase reference time. Must equal ``t_start``
+            (asserted in __call__) so the heterodyne phase factor at the
+            time origin is unity.
+        N_sparse (int): Length of the sparse time grid. Must be a power of
+            two. The sparse Nyquist is ``N_sparse / (2 * T)``.
+        nchannels (int): 1, 2 or 3 -- usually 3 for XYZ.
+        tdi_config, orbits, tdi_chan, force_backend: as in
+            :class:`GBTDIonTheFly`.
+    """
+
+    def __init__(
+        self,
+        T: float,
+        t_ref: float,
+        N_sparse: int,
+        num_sub: int,
+        nchannels: int = 3,
+        tdi_config: Optional[TDIConfig] = None,
+        orbits: Optional[Orbits] = EqualArmlengthOrbits,
+        tdi_chan: str = "XYZ",
+        force_backend: Optional[str] = None,
+    ):
+        if N_sparse < 1 or (N_sparse & (N_sparse - 1)) != 0:
+            raise ValueError("N_sparse must be a power of two.")
+        self.T = float(T)
+        self.t_ref = float(t_ref)
+        self.N_sparse = int(N_sparse)
+        self.num_sub = int(num_sub)
+        self.nchannels = int(nchannels)
+        self.n_params = 9  # amp, f0, fdot, fddot, phi0, inc, psi, lam, beta
+
+        self.tdi_chan = tdi_chan
+        super().__init__(force_backend=force_backend)
+
+        # Reuse TDIonTheFly's orbits / tdi_config setters via a private helper:
+        # build a sibling GBTDIonTheFly and steal its cpp handles.
+        self._td = GBTDIonTheFly(
+            self.xp.linspace(t_ref, t_ref + T, 2),  # dummy 2 points
+            T, t_ref, 1.0, num_sub,
+            tdi_config=tdi_config, orbits=orbits,
+            tdi_chan=tdi_chan, force_backend=force_backend,
+        )
+        # gb_wrap exposes run_fd_wave_tdi_wrap
+        self.gb_wrap = self.backend.GBTDIonTheFlyWrap(
+            self._td.cpp_orbits, self._td.cpp_tdi_config, self.T, self.t_ref
+        )
+
+    @property
+    def xp(self):
+        return self.backend.xp
+
+    @classmethod
+    def supported_backends(cls):
+        return ["fastlisaresponse_" + _tmp for _tmp in cls.GPU_RECOMMENDED()]
+
+    def __call__(
+        self,
+        amp, f0, fdot0, fddot0, phi0, inc, psi, lam, beta,
+        t_start: float,
+        convert_to_ra_dec: bool = True,
+    ):
+        """Generate the heterodyne FD GB TDI for ``num_sub`` sources.
+
+        Args:
+            amp, f0, fdot0, fddot0, phi0, inc, psi, lam, beta: arrays of
+                length ``num_sub``.
+            t_start (float): Start of the sparse observation window in
+                seconds. Must equal ``t_ref`` -- the prototype assumes a
+                local time origin at the first sparse sample.
+            convert_to_ra_dec (bool): If True, convert (lam, beta) from
+                ecliptic to ICRS before passing to the kernel.
+
+        Returns:
+            X_het (xp.ndarray): complex shape ``(num_sub, nchannels, N_sparse)``,
+                values are ``0.5 * dt_sparse * FFT[s_c]`` in FFT order.
+            k_f0  (xp.ndarray): int  shape ``(num_sub,)``, dense rfft bin.
+            f0_grid (xp.ndarray): double shape ``(num_sub,)``, snapped
+                carrier ``k_f0 * df`` in Hz.
+        """
+        if abs(float(t_start) - self.t_ref) > 1e-9:
+            raise ValueError(
+                "GBFDTDIonTheFly assumes t_start == t_ref so the heterodyne "
+                "phase factor at the time origin is unity. "
+                f"Got t_start={t_start}, t_ref={self.t_ref}."
+            )
+        if convert_to_ra_dec:
+            lam, beta = ecliptic_to_icrs(lam, beta)
+
+        params = self.xp.asarray(
+            [amp, f0, fdot0, fddot0, phi0, inc, psi, lam, beta]
+        ).T.flatten().copy()
+        if len(params) != self.n_params * self.num_sub:
+            raise ValueError("params length does not match num_sub * n_params.")
+
+        X_het = self.xp.zeros(
+            self.num_sub * self.nchannels * self.N_sparse, dtype=complex
+        )
+        k_f0_out    = self.xp.zeros(self.num_sub, dtype=self.xp.int32)
+        f0_grid_out = self.xp.zeros(self.num_sub, dtype=float)
+
+        self.gb_wrap.run_fd_wave_tdi_wrap(
+            X_het, k_f0_out, f0_grid_out, params,
+            float(t_start), self.T,
+            self.N_sparse, self.num_sub, self.n_params, self.nchannels,
+        )
+
+        return (
+            X_het.reshape(self.num_sub, self.nchannels, self.N_sparse),
+            k_f0_out, f0_grid_out,
+        )
+
+
 class GBTDIonTheFly(TDIonTheFly):
-    def __init__(self, 
+    def __init__(self,
         t: np.ndarray,
         T: float,
         t_ref: float,
-        *args, 
+        *args,
         **kwargs
-    ): 
+    ):
         super().__init__(*args, n_params=9, **kwargs)
 
         self.t_arr = self.xp.atleast_2d(self.xp.asarray(t))

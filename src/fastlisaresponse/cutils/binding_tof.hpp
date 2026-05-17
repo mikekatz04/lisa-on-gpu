@@ -121,6 +121,22 @@ class GBTDIonTheFlyWrap : public LISATDIonTheFlyWrap {
 
     int get_buffer_size(int N){return waveform->get_gb_buffer_size(N);};
 
+    // Heterodyne FD GB on a sparse time grid.  Builds the slow positive-freq
+    // signal in shared memory, FFTs it, and returns (num_bin, nchannels,
+    // N_sparse) complex doubles plus the per-source dense-bin index k_f0 and
+    // snapped carrier frequency f0_grid.
+    void run_fd_wave_tdi_wrap(
+        array_type<std::complex<double>> X_het,
+        array_type<int>    k_f0_out,
+        array_type<double> f0_grid_out,
+        array_type<double> params,
+        double t_start, double Tobs,
+        int N_sparse, int num_bin, int n_params, int nchannels);
+
+    int get_fd_buffer_size(int N_sparse, int nchannels){
+        return waveform->get_gb_fd_buffer_size(N_sparse, nchannels);
+    }
+
 };
 
 
@@ -193,10 +209,42 @@ class WDMDomainWrap : public ReturnPointerBase {
 
 };
 
+
+// FDDomainWrap: thin pybind11 holder for FDDomain, mirroring WDMDomainWrap.
+// invC array layout depends on tdi_type:
+//   tdi_type == TDI_XYZ   : (num_noise, num_channel, num_channel, n_rfft)
+//   tdi_type == TDI_AET/AE: (num_noise, num_channel, n_rfft)
+class FDDomainWrap : public ReturnPointerBase {
+  public:
+    FDDomain *fd;
+    FDDomainWrap(
+        array_type<std::complex<double>> fd_data_,
+        array_type<double>               fd_invC_,
+        int n_rfft_, int num_channel_, int num_data_, int num_noise_,
+        int ind_min_, int ind_max_, double df_)
+    {
+        fd = new FDDomain(
+            (cmplx*) return_pointer_and_check_length(
+                fd_data_, "fd_data",
+                n_rfft_ * num_channel_ * num_data_, 1),
+            return_pointer(fd_invC_, "fd_invC"),
+            n_rfft_, num_channel_, num_data_, num_noise_,
+            ind_min_, ind_max_, df_);
+    };
+    ~FDDomainWrap(){ delete fd; };
+};
+
+
 class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBase {
   public:
-    void gb_wdm_fill_global(array_type<double>template_fill, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t);
+    void gb_wdm_fill_global(array_type<double>template_fill, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, array_type<double>factors_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t);
     void gb_wdm_get_ll(array_type<double>d_h_out, array_type<double>h_h_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, array_type<int>noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t);
+    void gb_wdm_swap_ll(array_type<double>d_h_add_out, array_type<double>d_h_remove_out, array_type<double>add_add_out, array_type<double>remove_remove_out, array_type<double>add_remove_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_add_all, array_type<double>params_remove_all, array_type<int>data_index_all, array_type<int>noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t);
+
+    // Chain-rule gradients of the two likelihood kernels. ``param_eps`` is the
+    // per-parameter central-difference step size (length nparams).
+    void gb_wdm_get_ll_grad(array_type<double>grad_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, array_type<int>noise_index_all, array_type<double>param_eps, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t);
+    void gb_wdm_swap_ll_grad(array_type<double>grad_add_out, array_type<double>grad_remove_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_add_all, array_type<double>params_remove_all, array_type<int>data_index_all, array_type<int>noise_index_all, array_type<double>param_eps_add, array_type<double>param_eps_remove, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t);
 
     // Diagnostic — see TDIonTheFly.hh for layout.
     void gb_wdm_eval_inputs(
@@ -207,6 +255,59 @@ class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBas
         array_type<double> amp_out, array_type<double> phi_out,
         array_type<double> f_out, array_type<double> fdot_out,
         array_type<double> phase_ref_out);
+
+    // ---- FD analogs ---------------------------------------------------
+    void gb_fd_fill_global(
+        array_type<std::complex<double>> template_fill,
+        OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+        FDDomainWrap *fd_wrap,
+        array_type<double> params_all, array_type<int> data_index_all,
+        array_type<double> factors_all,
+        int num_bin, int nparams, double T, double t_start, double t_ref,
+        int N_sparse, int nchannels);
+
+    void gb_fd_get_ll(
+        array_type<double> d_h_out, array_type<double> h_h_out,
+        OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+        FDDomainWrap *fd_wrap,
+        array_type<double> params_all,
+        array_type<int> data_index_all, array_type<int> noise_index_all,
+        int num_bin, int nparams, double T, double t_start, double t_ref,
+        int N_sparse, int nchannels, int tdi_type);
+
+    void gb_fd_swap_ll(
+        array_type<double> d_h_add_out, array_type<double> d_h_remove_out,
+        array_type<double> add_add_out, array_type<double> remove_remove_out,
+        array_type<double> add_remove_out,
+        OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+        FDDomainWrap *fd_wrap,
+        array_type<double> params_add_all, array_type<double> params_remove_all,
+        array_type<int> data_index_all, array_type<int> noise_index_all,
+        int num_bin, int nparams, double T, double t_start, double t_ref,
+        int N_sparse, int nchannels, int tdi_type);
+
+    // Chain-rule parameter gradients of gb_fd_get_ll / gb_fd_swap_ll.
+    // param_eps[k] is the per-parameter central-FD step (length nparams);
+    // pass eps_k <= 0 to freeze parameter k.
+    void gb_fd_get_ll_grad(
+        array_type<double> grad_out,
+        OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+        FDDomainWrap *fd_wrap,
+        array_type<double> params_all,
+        array_type<int> data_index_all, array_type<int> noise_index_all,
+        array_type<double> param_eps,
+        int num_bin, int nparams, double T, double t_start, double t_ref,
+        int N_sparse, int nchannels, int tdi_type);
+
+    void gb_fd_swap_ll_grad(
+        array_type<double> grad_add_out, array_type<double> grad_remove_out,
+        OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+        FDDomainWrap *fd_wrap,
+        array_type<double> params_add_all, array_type<double> params_remove_all,
+        array_type<int> data_index_all, array_type<int> noise_index_all,
+        array_type<double> param_eps_add, array_type<double> param_eps_remove,
+        int num_bin, int nparams, double T, double t_start, double t_ref,
+        int N_sparse, int nchannels, int tdi_type);
 };
 
 #endif // __BINDING_TOF_HPP__

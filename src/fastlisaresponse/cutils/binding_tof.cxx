@@ -18,8 +18,8 @@
 namespace py = pybind11;
 
 void GBTDIonTheFlyWrap::run_wave_tdi_wrap(
-    array_type<std::complex<double>>tdi_channels_arr, 
-    array_type<double>tdi_amp, array_type<double>tdi_phase, array_type<double>phi_ref, 
+    array_type<std::complex<double>>tdi_channels_arr,
+    array_type<double>tdi_amp, array_type<double>tdi_phase, array_type<double>phi_ref,
     array_type<double>params, array_type<double>t_arr, int N, int num_bin, int n_params, int nchannels
 )
 {
@@ -32,6 +32,29 @@ void GBTDIonTheFlyWrap::run_wave_tdi_wrap(
         return_pointer_and_check_length(params, "params", n_params, num_bin),
         return_pointer_and_check_length(t_arr, "t_arr", N, num_bin),
         N, num_bin, n_params, nchannels
+    );
+}
+
+void GBTDIonTheFlyWrap::run_fd_wave_tdi_wrap(
+    array_type<std::complex<double>> X_het,
+    array_type<int>    k_f0_out,
+    array_type<double> f0_grid_out,
+    array_type<double> params,
+    double t_start, double Tobs,
+    int N_sparse, int num_bin, int n_params, int nchannels
+)
+{
+    gb_run_fd_wave_tdi_wrap(
+        waveform,
+        (cmplx*) return_pointer_and_check_length(X_het, "X_het",
+                     N_sparse, num_bin * nchannels),
+        return_pointer_and_check_length(k_f0_out, "k_f0_out", num_bin, 1),
+        return_pointer_and_check_length(f0_grid_out, "f0_grid_out",
+                     num_bin, 1),
+        return_pointer_and_check_length(params, "params",
+                     n_params, num_bin),
+        t_start, Tobs,
+        N_sparse, num_bin, n_params, nchannels
     );
 }
 
@@ -103,18 +126,19 @@ void WaveletLookupTableWrap::get_w_mn_arr(
 }
 
 
-void GBComputationGroupWrap::gb_wdm_fill_global(array_type<double>template_fill, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
+void GBComputationGroupWrap::gb_wdm_fill_global(array_type<double>template_fill, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, array_type<double>factors_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
 {
     // from the parent class
-    
+
     gb_wdm_fill_global_wrap(
-        return_pointer_and_check_length(template_fill, "template_fill", wdm_wrap->wdm->Nf_active * wdm_wrap->wdm->Nt_active, 3), 
-        orbits_wrap->orbits, 
-        tdi_config_wrap->tdi_config, 
-        wdm_lookup_wrap->wdm_lookup, 
-        wdm_wrap->wdm, 
-        return_pointer_and_check_length(params_all, "params_all", nparams, num_bin), 
-        return_pointer_and_check_length(data_index_all, "data_index_all", num_bin, 1), 
+        return_pointer_and_check_length(template_fill, "template_fill", wdm_wrap->wdm->Nf_active * wdm_wrap->wdm->Nt_active, 3),
+        orbits_wrap->orbits,
+        tdi_config_wrap->tdi_config,
+        wdm_lookup_wrap->wdm_lookup,
+        wdm_wrap->wdm,
+        return_pointer_and_check_length(params_all, "params_all", nparams, num_bin),
+        return_pointer_and_check_length(data_index_all, "data_index_all", num_bin, 1),
+        return_pointer_and_check_length(factors_all, "factors_all", num_bin, 1),
         num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
 }
 
@@ -131,6 +155,60 @@ void GBComputationGroupWrap::gb_wdm_get_ll(array_type<double>d_h_out, array_type
         return_pointer_and_check_length(params_all, "params_all", nparams, num_bin),
         return_pointer_and_check_length(data_index_all, "data_index_all", num_bin, 1),
         return_pointer_and_check_length(noise_index_all, "noise_index_all", num_bin, 1),
+        num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
+}
+
+void GBComputationGroupWrap::gb_wdm_swap_ll(array_type<double>d_h_add_out, array_type<double>d_h_remove_out, array_type<double>add_add_out, array_type<double>remove_remove_out, array_type<double>add_remove_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_add_all, array_type<double>params_remove_all, array_type<int>data_index_all, array_type<int>noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
+{
+    // from the parent class
+    gb_wdm_swap_ll_wrap(
+        return_pointer_and_check_length(d_h_add_out,       "d_h_add_out",       num_bin, 1),
+        return_pointer_and_check_length(d_h_remove_out,    "d_h_remove_out",    num_bin, 1),
+        return_pointer_and_check_length(add_add_out,       "add_add_out",       num_bin, 1),
+        return_pointer_and_check_length(remove_remove_out, "remove_remove_out", num_bin, 1),
+        return_pointer_and_check_length(add_remove_out,    "add_remove_out",    num_bin, 1),
+        orbits_wrap->orbits,
+        tdi_config_wrap->tdi_config,
+        wdm_lookup_wrap->wdm_lookup,
+        wdm_wrap->wdm,
+        return_pointer_and_check_length(params_add_all,    "params_add_all",    nparams, num_bin),
+        return_pointer_and_check_length(params_remove_all, "params_remove_all", nparams, num_bin),
+        return_pointer_and_check_length(data_index_all,    "data_index_all",    num_bin, 1),
+        return_pointer_and_check_length(noise_index_all,   "noise_index_all",   num_bin, 1),
+        num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
+}
+
+
+void GBComputationGroupWrap::gb_wdm_get_ll_grad(array_type<double>grad_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, array_type<int>noise_index_all, array_type<double>param_eps, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
+{
+    gb_wdm_get_ll_grad_wrap(
+        return_pointer_and_check_length(grad_out,          "grad_out",          nparams,  num_bin),
+        orbits_wrap->orbits,
+        tdi_config_wrap->tdi_config,
+        wdm_lookup_wrap->wdm_lookup,
+        wdm_wrap->wdm,
+        return_pointer_and_check_length(params_all,        "params_all",        nparams,  num_bin),
+        return_pointer_and_check_length(data_index_all,    "data_index_all",    num_bin,  1),
+        return_pointer_and_check_length(noise_index_all,   "noise_index_all",   num_bin,  1),
+        return_pointer_and_check_length(param_eps,         "param_eps",         nparams,  1),
+        num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
+}
+
+void GBComputationGroupWrap::gb_wdm_swap_ll_grad(array_type<double>grad_add_out, array_type<double>grad_remove_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_add_all, array_type<double>params_remove_all, array_type<int>data_index_all, array_type<int>noise_index_all, array_type<double>param_eps_add, array_type<double>param_eps_remove, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
+{
+    gb_wdm_swap_ll_grad_wrap(
+        return_pointer_and_check_length(grad_add_out,      "grad_add_out",      nparams, num_bin),
+        return_pointer_and_check_length(grad_remove_out,   "grad_remove_out",   nparams, num_bin),
+        orbits_wrap->orbits,
+        tdi_config_wrap->tdi_config,
+        wdm_lookup_wrap->wdm_lookup,
+        wdm_wrap->wdm,
+        return_pointer_and_check_length(params_add_all,    "params_add_all",    nparams, num_bin),
+        return_pointer_and_check_length(params_remove_all, "params_remove_all", nparams, num_bin),
+        return_pointer_and_check_length(data_index_all,    "data_index_all",    num_bin, 1),
+        return_pointer_and_check_length(noise_index_all,   "noise_index_all",   num_bin, 1),
+        return_pointer_and_check_length(param_eps_add,     "param_eps_add",     nparams, 1),
+        return_pointer_and_check_length(param_eps_remove,  "param_eps_remove",  nparams, 1),
         num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
 }
 
@@ -156,6 +234,114 @@ void GBComputationGroupWrap::gb_wdm_eval_inputs(
         return_pointer_and_check_length(f_out,         "f_out",         num_bin * num_t * nchannels, 1),
         return_pointer_and_check_length(fdot_out,      "fdot_out",      num_bin * num_t * nchannels, 1),
         return_pointer_and_check_length(phase_ref_out, "phase_ref_out", num_bin * num_t, 1));
+}
+
+void GBComputationGroupWrap::gb_fd_fill_global(
+    array_type<std::complex<double>> template_fill,
+    OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+    FDDomainWrap *fd_wrap,
+    array_type<double> params_all, array_type<int> data_index_all,
+    array_type<double> factors_all,
+    int num_bin, int nparams, double T, double t_start, double t_ref,
+    int N_sparse, int nchannels)
+{
+    int n_rfft = fd_wrap->fd->n_rfft;
+    int num_data = fd_wrap->fd->num_data;
+    gb_fd_fill_global_wrap(
+        (cmplx*) return_pointer_and_check_length(template_fill,
+            "template_fill", n_rfft * nchannels * num_data, 1),
+        orbits_wrap->orbits, tdi_config_wrap->tdi_config, fd_wrap->fd,
+        return_pointer_and_check_length(params_all, "params_all", nparams, num_bin),
+        return_pointer_and_check_length(data_index_all, "data_index_all", num_bin, 1),
+        return_pointer_and_check_length(factors_all, "factors_all", num_bin, 1),
+        num_bin, nparams, T, t_start, t_ref, N_sparse, nchannels);
+}
+
+void GBComputationGroupWrap::gb_fd_get_ll(
+    array_type<double> d_h_out, array_type<double> h_h_out,
+    OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+    FDDomainWrap *fd_wrap,
+    array_type<double> params_all,
+    array_type<int> data_index_all, array_type<int> noise_index_all,
+    int num_bin, int nparams, double T, double t_start, double t_ref,
+    int N_sparse, int nchannels, int tdi_type)
+{
+    gb_fd_get_ll_wrap(
+        return_pointer_and_check_length(d_h_out, "d_h_out", num_bin, 1),
+        return_pointer_and_check_length(h_h_out, "h_h_out", num_bin, 1),
+        orbits_wrap->orbits, tdi_config_wrap->tdi_config, fd_wrap->fd,
+        return_pointer_and_check_length(params_all, "params_all", nparams, num_bin),
+        return_pointer_and_check_length(data_index_all, "data_index_all", num_bin, 1),
+        return_pointer_and_check_length(noise_index_all, "noise_index_all", num_bin, 1),
+        num_bin, nparams, T, t_start, t_ref, N_sparse, nchannels, tdi_type);
+}
+
+void GBComputationGroupWrap::gb_fd_swap_ll(
+    array_type<double> d_h_add_out, array_type<double> d_h_remove_out,
+    array_type<double> add_add_out, array_type<double> remove_remove_out,
+    array_type<double> add_remove_out,
+    OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+    FDDomainWrap *fd_wrap,
+    array_type<double> params_add_all, array_type<double> params_remove_all,
+    array_type<int> data_index_all, array_type<int> noise_index_all,
+    int num_bin, int nparams, double T, double t_start, double t_ref,
+    int N_sparse, int nchannels, int tdi_type)
+{
+    gb_fd_swap_ll_wrap(
+        return_pointer_and_check_length(d_h_add_out, "d_h_add_out", num_bin, 1),
+        return_pointer_and_check_length(d_h_remove_out, "d_h_remove_out", num_bin, 1),
+        return_pointer_and_check_length(add_add_out, "add_add_out", num_bin, 1),
+        return_pointer_and_check_length(remove_remove_out, "remove_remove_out", num_bin, 1),
+        return_pointer_and_check_length(add_remove_out, "add_remove_out", num_bin, 1),
+        orbits_wrap->orbits, tdi_config_wrap->tdi_config, fd_wrap->fd,
+        return_pointer_and_check_length(params_add_all, "params_add_all", nparams, num_bin),
+        return_pointer_and_check_length(params_remove_all, "params_remove_all", nparams, num_bin),
+        return_pointer_and_check_length(data_index_all, "data_index_all", num_bin, 1),
+        return_pointer_and_check_length(noise_index_all, "noise_index_all", num_bin, 1),
+        num_bin, nparams, T, t_start, t_ref, N_sparse, nchannels, tdi_type);
+}
+
+void GBComputationGroupWrap::gb_fd_get_ll_grad(
+    array_type<double> grad_out,
+    OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+    FDDomainWrap *fd_wrap,
+    array_type<double> params_all,
+    array_type<int> data_index_all, array_type<int> noise_index_all,
+    array_type<double> param_eps,
+    int num_bin, int nparams, double T, double t_start, double t_ref,
+    int N_sparse, int nchannels, int tdi_type)
+{
+    gb_fd_get_ll_grad_wrap(
+        return_pointer_and_check_length(grad_out,        "grad_out",        nparams, num_bin),
+        orbits_wrap->orbits, tdi_config_wrap->tdi_config, fd_wrap->fd,
+        return_pointer_and_check_length(params_all,      "params_all",      nparams, num_bin),
+        return_pointer_and_check_length(data_index_all,  "data_index_all",  num_bin, 1),
+        return_pointer_and_check_length(noise_index_all, "noise_index_all", num_bin, 1),
+        return_pointer_and_check_length(param_eps,       "param_eps",       nparams, 1),
+        num_bin, nparams, T, t_start, t_ref, N_sparse, nchannels, tdi_type);
+}
+
+void GBComputationGroupWrap::gb_fd_swap_ll_grad(
+    array_type<double> grad_add_out, array_type<double> grad_remove_out,
+    OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+    FDDomainWrap *fd_wrap,
+    array_type<double> params_add_all, array_type<double> params_remove_all,
+    array_type<int> data_index_all, array_type<int> noise_index_all,
+    array_type<double> param_eps_add, array_type<double> param_eps_remove,
+    int num_bin, int nparams, double T, double t_start, double t_ref,
+    int N_sparse, int nchannels, int tdi_type)
+{
+    gb_fd_swap_ll_grad_wrap(
+        return_pointer_and_check_length(grad_add_out,      "grad_add_out",      nparams, num_bin),
+        return_pointer_and_check_length(grad_remove_out,   "grad_remove_out",   nparams, num_bin),
+        orbits_wrap->orbits, tdi_config_wrap->tdi_config, fd_wrap->fd,
+        return_pointer_and_check_length(params_add_all,    "params_add_all",    nparams, num_bin),
+        return_pointer_and_check_length(params_remove_all, "params_remove_all", nparams, num_bin),
+        return_pointer_and_check_length(data_index_all,    "data_index_all",    num_bin, 1),
+        return_pointer_and_check_length(noise_index_all,   "noise_index_all",   num_bin, 1),
+        return_pointer_and_check_length(param_eps_add,     "param_eps_add",     nparams, 1),
+        return_pointer_and_check_length(param_eps_remove,  "param_eps_remove",  nparams, 1),
+        num_bin, nparams, T, t_start, t_ref, N_sparse, nchannels, tdi_type);
 }
 
 std::string get_module_path_tdionthefly() {
@@ -263,7 +449,11 @@ void tdionthefly_part(py::module &m) {
          py::arg("orbits"), py::arg("tdi_config"), py::arg("Tobs"), py::arg("t_ref"))
     // Bind member functions
     .def("run_wave_tdi_wrap", &GBTDIonTheFlyWrap::run_wave_tdi_wrap, "Preform TDI combinations.")
+    .def("run_fd_wave_tdi_wrap", &GBTDIonTheFlyWrap::run_fd_wave_tdi_wrap,
+         "Heterodyne FD GB TDI on a sparse time grid.")
     .def("get_buffer_size", &GBTDIonTheFlyWrap::get_buffer_size, "Get needed buffer size.")
+    .def("get_fd_buffer_size", &GBTDIonTheFlyWrap::get_fd_buffer_size,
+         "Get shared-memory size for the heterodyne FD kernel.")
     // You can also expose public data members directly using def_readwrite
     .def_readwrite("orbits", &GBTDIonTheFlyWrap::orbits)
     .def_readwrite("tdi_config", &GBTDIonTheFlyWrap::tdi_config)
@@ -340,6 +530,28 @@ void tdionthefly_part(py::module &m) {
          py::arg("wdm_data"), py::arg("wdm_noise"), py::arg("layer_df"), py::arg("layer_dt"), py::arg("Nf"), py::arg("Nt"), py::arg("num_channel"), py::arg("ind_min_t"), py::arg("ind_max_t"), py::arg("ind_min_f"), py::arg("ind_max_f"), py::arg("num_data"), py::arg("num_noise"))
     ;
 
+#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
+    py::class_<FDDomainWrap>(m, "FDDomainWrapGPU")
+#else
+    py::class_<FDDomainWrap>(m, "FDDomainWrapCPU")
+#endif
+    .def(py::init<array_type<std::complex<double>>, array_type<double>,
+                  int, int, int, int, int, int, double>(),
+         py::arg("fd_data"), py::arg("fd_invC"),
+         py::arg("n_rfft"), py::arg("num_channel"),
+         py::arg("num_data"), py::arg("num_noise"),
+         py::arg("ind_min"), py::arg("ind_max"), py::arg("df"))
+    .def_readwrite("fd", &FDDomainWrap::fd)
+    ;
+
+#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
+    py::class_<FDDomain>(m, "FDDomainGPU")
+#else
+    py::class_<FDDomain>(m, "FDDomainCPU")
+#endif
+    .def(py::init<cmplx*, double*, int, int, int, int, int, int, double>())
+    ;
+
     #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
     py::class_<GBComputationGroupWrap>(m, "GBComputationGroupWrapGPU")
 #else
@@ -347,6 +559,19 @@ void tdionthefly_part(py::module &m) {
 #endif
     .def(py::init<>())
     .def("gb_wdm_get_ll", &GBComputationGroupWrap::gb_wdm_get_ll, "Log-likelihood computation.")
+    .def("gb_wdm_swap_ll", &GBComputationGroupWrap::gb_wdm_swap_ll,
+         "Swap-likelihood computation. Returns the five inner products <d|h_add>, "
+         "<d|h_remove>, <h_add|h_add>, <h_remove|h_remove>, <h_add|h_remove> needed "
+         "for an RJMCMC swap proposal between an 'add' and a 'remove' template.")
+    .def("gb_wdm_get_ll_grad", &GBComputationGroupWrap::gb_wdm_get_ll_grad,
+         "Chain-rule parameter gradient of gb_wdm_get_ll. Per-binary central-difference "
+         "derivative of L = -1/2 <d-h|d-h> with respect to the 9 galactic-binary "
+         "parameters. param_eps[k] is the FD step for theta_k (pass <= 0 to freeze).")
+    .def("gb_wdm_swap_ll_grad", &GBComputationGroupWrap::gb_wdm_swap_ll_grad,
+         "Chain-rule parameter gradient of gb_wdm_swap_ll. Returns "
+         "(grad_add, grad_remove): per-binary central-difference derivatives of "
+         "the swap log-likelihood ratio ll_diff = L(after swap) - L(before swap) "
+         "with respect to theta_add and theta_remove respectively.")
     .def("gb_wdm_fill_global", &GBComputationGroupWrap::gb_wdm_fill_global, "Generate a global template.")
     .def("gb_wdm_eval_inputs", &GBComputationGroupWrap::gb_wdm_eval_inputs,
          py::arg("orbits"), py::arg("tdi_config"),
@@ -358,6 +583,27 @@ void tdionthefly_part(py::module &m) {
          py::arg("phase_ref_out"),
          "Diagnostic: evaluate the per-pixel inputs (|M|, arg(M_mod), f, fdot, phase_ref) "
          "that the kernels feed into the WDM lookup, without doing the lookup itself.")
+    .def("gb_fd_fill_global", &GBComputationGroupWrap::gb_fd_fill_global,
+         "FD analog of gb_wdm_fill_global: scatter per-source heterodyne FD onto a "
+         "global rfft-grid template (cmplx, shape (num_data, nchannels, n_rfft)).")
+    .def("gb_fd_get_ll", &GBComputationGroupWrap::gb_fd_get_ll,
+         "FD analog of gb_wdm_get_ll: (d|h) and (h|h) per binary using the "
+         "lisatools FD inner product (4 Re sum conj(d) h invC * df).  tdi_type "
+         "selects between TDI_XYZ (cross-channel 3x3 invC) and TDI_AET/TDI_AE "
+         "(diagonal invC).")
+    .def("gb_fd_swap_ll", &GBComputationGroupWrap::gb_fd_swap_ll,
+         "FD analog of gb_wdm_swap_ll: returns the five inner products "
+         "<d|h_add>, <d|h_remove>, <h_add|h_add>, <h_remove|h_remove>, "
+         "<h_add|h_remove> needed for an RJMCMC swap proposal.")
+    .def("gb_fd_get_ll_grad", &GBComputationGroupWrap::gb_fd_get_ll_grad,
+         "FD analog of gb_wdm_get_ll_grad: chain-rule parameter gradient of "
+         "L = -1/2 <d-h|d-h> evaluated in the sparse-FD heterodyne pipeline. "
+         "param_eps[k] is the central-FD step for theta_k (pass <= 0 to "
+         "freeze).")
+    .def("gb_fd_swap_ll_grad", &GBComputationGroupWrap::gb_fd_swap_ll_grad,
+         "FD analog of gb_wdm_swap_ll_grad: returns (grad_add, grad_remove), "
+         "the per-binary derivatives of ll_diff = L(after swap) - L(before "
+         "swap) with respect to theta_add and theta_remove respectively.")
     ;
 }
 
