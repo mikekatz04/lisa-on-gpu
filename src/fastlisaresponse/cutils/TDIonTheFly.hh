@@ -427,18 +427,23 @@ class WaveletLookupTable : public WDMSettings{
   public:
     double *c_nm_all;
     double *s_nm_all;
-    
+
     int num_f;
     int num_fdot;
     double df_interp;
     double dfdot_interp;
     double min_f_scaled;
     double min_fdot;
+    // Build-time reference frequency layer (the layer the lookup table was
+    // built at). At lookup time, sources whose central layer has the
+    // OPPOSITE parity from m_ref pick up an overall (-1) on the WDM
+    // coefficient — see the parity-correction comment in get_w_mn_lookup.
+    int m_ref;
 
     CUDA_CALLABLE_MEMBER
-    WaveletLookupTable(double *c_nm_all_, double *s_nm_all_, int num_f_, int num_fdot_, double df_interp_, double dfdot_interp_, double min_f_scaled_, double min_fdot_, 
-        double layer_df_, double layer_dt_, int Nf_, int Nt_, int num_channel_, int ind_min_t_, int ind_max_t_, int ind_min_f_, int ind_max_f_): WDMSettings(layer_df_, layer_dt_, Nf_, Nt_, num_channel_, ind_min_t_, ind_max_t_, ind_min_f_, ind_max_f_) {
-        // n * Nf + m 
+    WaveletLookupTable(double *c_nm_all_, double *s_nm_all_, int num_f_, int num_fdot_, double df_interp_, double dfdot_interp_, double min_f_scaled_, double min_fdot_,
+        double layer_df_, double layer_dt_, int Nf_, int Nt_, int num_channel_, int ind_min_t_, int ind_max_t_, int ind_min_f_, int ind_max_f_, int m_ref_): WDMSettings(layer_df_, layer_dt_, Nf_, Nt_, num_channel_, ind_min_t_, ind_max_t_, ind_min_f_, ind_max_f_) {
+        // n * Nf + m
         c_nm_all = c_nm_all_;
         s_nm_all = s_nm_all_;
         num_f = num_f_;
@@ -447,6 +452,7 @@ class WaveletLookupTable : public WDMSettings{
         dfdot_interp = dfdot_interp_;
         min_f_scaled = min_f_scaled_;
         min_fdot = min_fdot_;
+        m_ref = m_ref_;
     };
     CUDA_DEVICE
     double get_wdm_in_channel_over_layers(cmplx tdi_channel_val, double f, double fdot, int m, int n);
@@ -463,8 +469,22 @@ void fd_spline_run_wave_tdi_wrap(FDSplineTDIWaveform *tdi_on_fly, cmplx *tdi_cha
 class GBComputationGroup{
   public:
     void gb_wdm_fill_global_wrap(double *template_fill, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, double *factors_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t);
+
+    // Spline-path mirror of gb_wdm_fill_global_wrap. Replaces per-WDM-pixel
+    // fast_wdm_inner calls with cubic-spline interpolation of get_tdi outputs
+    // on a coarse uniform time grid of spacing `coarse_dt` (seconds). Output
+    // template_fill is bit-compatible with the direct path's output up to
+    // cubic-spline interpolation error.
+    void gb_wdm_spline_fill_global_wrap(double *template_fill, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, double *factors_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double coarse_dt);
     void gb_wdm_get_ll_wrap(double *d_h_out, double *h_h_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t);
     void gb_wdm_swap_ll_wrap(double *d_h_add_out, double *d_h_remove_out, double *add_add_out, double *remove_remove_out, double *add_remove_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_add_all, double *params_remove_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t);
+
+    // Spline-path mirrors. `coarse_dt` (seconds) sets the coarse-grid spacing
+    // for the cubic-spline window builder (smaller -> more accurate / more
+    // get_tdi work). Python computes coarse_dt from a user knob
+    // `coarse_pts_per_year` (typical 256).
+    void gb_wdm_spline_get_ll_wrap(double *d_h_out, double *h_h_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double coarse_dt);
+    void gb_wdm_spline_swap_ll_wrap(double *d_h_add_out, double *d_h_remove_out, double *add_add_out, double *remove_remove_out, double *add_remove_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_add_all, double *params_remove_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double coarse_dt);
 
     // Chain-rule parameter gradients of the two likelihood kernels.
     //
@@ -476,6 +496,13 @@ class GBComputationGroup{
     // parameter (gradient stays zero).
     void gb_wdm_get_ll_grad_wrap(double *grad_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, double *param_eps, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t);
     void gb_wdm_swap_ll_grad_wrap(double *grad_add_out, double *grad_remove_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_add_all, double *params_remove_all, int *data_index_all, int *noise_index_all, double *param_eps_add, double *param_eps_remove, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t);
+
+    // Spline-path mirror of gb_wdm_get_ll_grad_wrap. Three spline slots in
+    // shared memory (base, plus, minus); per-parameter inner loop rebuilds
+    // the plus/minus slots from `params + eps_k e_k` and `params - eps_k e_k`
+    // while the base slot is reused. `eps_k <= 0` freezes parameter k as
+    // with the direct path. Shared-memory footprint is constant in nparams.
+    void gb_wdm_spline_get_ll_grad_wrap(double *grad_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, double *param_eps, int num_bin, int nparams, double T, double t_ref, int tdi_type, double coarse_dt);
 
     // Diagnostic: evaluate the per-pixel inputs (|M|, arg(M_mod), f, fdot, phase_ref)
     // that the fill_global / get_ll kernels feed into the WDM lookup, without doing
@@ -490,6 +517,19 @@ class GBComputationGroup{
         double *params_all, double *tn_arr,
         int num_bin, int nparams, int num_t, int nchannels,
         double T, double t_ref, double deriv_delta_t,
+        double *amp_out, double *phi_out, double *f_out, double *fdot_out,
+        double *phase_ref_out);
+
+    // Spline analog of gb_wdm_eval_inputs_wrap. Builds ONE coarse-grid spline
+    // window of WDM_SPLINE_L points starting at t_window_start with spacing
+    // coarse_dt, then evaluates the splines at every tn in tn_arr. Outputs
+    // are in the same convention as gb_wdm_eval_inputs_wrap.
+    void gb_wdm_spline_eval_inputs_wrap(
+        Orbits *orbits, TDIConfig *tdi_config,
+        double *params_all, double *tn_arr,
+        int num_bin, int nparams, int num_t, int nchannels,
+        double T, double t_ref,
+        double t_window_start, double coarse_dt,
         double *amp_out, double *phi_out, double *f_out, double *fdot_out,
         double *phase_ref_out);
 

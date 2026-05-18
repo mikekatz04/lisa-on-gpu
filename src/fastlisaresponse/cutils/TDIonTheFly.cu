@@ -508,7 +508,6 @@ double WaveletLookupTable::linear_interp(double f_scaled, double fdot, double *z
         double z2 = z_slice[f_index + 1];
 
         double f_y = z1 + (f_scaled - x1) * (z2 - z1) / (x2 - x1);
-        // printf("%d %e %e %e %e %e %e %e\n", f_index, f_scaled, min_f_scaled, df_interp, x1, x2, z1, z2);
         return f_y;
     }
 }
@@ -517,38 +516,38 @@ CUDA_DEVICE
 double WaveletLookupTable::get_w_mn_lookup(cmplx tdi_channel_val, double f, double fdot, int layer_m, int layer_n)
 {
     double f_scaled = f - layer_m * layer_df;
-    // printf("CHECK10 %e %d %d %e\n", f_scaled, layer_m, int(f / df_interp), f);
     double _c_nm = linear_interp(f_scaled, fdot, c_nm_all, layer_n);
     double _s_nm = linear_interp(f_scaled, fdot, s_nm_all, layer_n);
     double c_nm, s_nm;
 
     bool is_m_plus_n_even = (layer_m + layer_n) % 2 == 0;
-    bool is_m_even = (layer_m) % 2 == 0;
 
-    // Build pre-applies an (m+n)-parity swap to the table. After lookup, the
-    // (m+n)-odd branches use the values as-is and the (m+n)-even branches swap
-    // sin/cos. The m-parity refinement should NOT add a sign flip — it did in
-    // the previous version, producing a sign flip on every n-odd pixel that
-    // showed up as the every-other-row mismatch vs the WDM-transformed
-    // injection. Drop the negations so all four branches produce the same form
-    // (amp * (cos_coeff*sin(phi) + sin_coeff*cos(phi))).
+    // Build pre-applies an (m+n)-parity sin/cos swap to the table.
+    // Lookup undoes it based on the LOOKUP pixel's (layer_m + layer_n) parity:
+    //   (m+n) odd  → no swap (table already has the swapped values).
+    //   (m+n) even → swap to undo the build swap.
     if (!is_m_plus_n_even)
     {
-        // (m+n) odd: table already stores swapped values; consume directly.
         s_nm = _s_nm;
         c_nm = _c_nm;
     }
     else
     {
-        // (m+n) even: undo the build-time swap.
         s_nm = _c_nm;
         c_nm = _s_nm;
     }
-    (void)is_m_even;  // retained for future use; the m-parity sign-flip was wrong.
 
-    double w_mn = c_nm * tdi_channel_val.real() + s_nm * tdi_channel_val.imag(); // I think with Aexp(-I Phi) it should be + s_nm
-    // printf("CHECK WMN: %e %d %e %e %e %e %e %e %e %e %e %e\n\n", f, layer_m, layer_df, c_nm, s_nm, _c_nm, _s_nm, f_scaled, fdot, tdi_channel_val.real(), tdi_channel_val.imag(), w_mn);
-    // printf("CHECK FREQ: %.12e %d %.12e %.12e %.12e\n\n", f, layer_m, layer_df, f_scaled, layer_m * layer_df);
+    double w_mn = c_nm * tdi_channel_val.real() + s_nm * tdi_channel_val.imag();
+
+    // m-parity correction: build reads wave_*_wdm[:, m_ref - m_diff, :]
+    // (note the minus sign), so the stored coefficients carry an implicit
+    // (-1)^(m_source - m_ref) factor.
+    int m_source = int(f / layer_df);
+    if (((m_source - m_ref) & 1) != 0)
+    {
+        w_mn = -w_mn;
+    }
+
     return w_mn;
 }
 
@@ -842,6 +841,444 @@ double block_reduce_scalar(double thread_data)
 }
 #endif
 
+// =============================================================================
+// Spline-based WDM kernels
+// -----------------------------------------------------------------------------
+//
+// The direct-path fast_wdm_inner (below) calls get_tdi_Xf_single + numerical
+// central differences three times per WDM time pixel. The spline path replaces
+// that with: (1) an evenly-spaced coarse grid (~256 pts/yr by default) on
+// which the existing LISATDIonTheFly::get_tdi already builds smooth
+// (tdi_amp, tdi_phase, phi_ref) via new_extract_amplitude_and_phase +
+// new_unwrap_phase; (2) cubic splines fit cooperatively in shared memory via
+// fit_cubic_spline_pcr; (3) evaluation of the splines at every WDM time pixel
+// to rebuild the same (tdi_channel_val, f, fdot=0) triple fast_wdm_inner
+// returns.
+//
+// To keep shared memory bounded, we slide a WDM_SPLINE_L-point window across
+// the source's WDM time range. Windows overlap by 1 in t (last point of window
+// k = first point of window k+1), so every WDM pixel is owned by exactly one
+// window. Within a window the spline is self-consistent for reconstructing the
+// raw M and its phase derivative; across windows we do not need to patch the
+// 2pi branch of tdi_phase because the lookup consumes
+//   M' = conj(M_raw * exp(-i pi/2)) = i * conj(M_raw),
+// which is invariant under Dphi -> Dphi + 2 pi, and the frequency is computed
+// from the within-window spline derivative.
+//
+// Convention (matches new_extract_amplitude_and_phase / fast_wdm_inner):
+//   M_raw            = amp * exp(-i (tdi_phase + phi_ref))         (amp signed)
+//   tdi_channel_val  = conj(M_raw exp(-i pi/2))
+//                    = (-amp sin(theta),  +amp cos(theta))
+//                       with theta = tdi_phase + phi_ref
+//   f                = -(1/2 pi) d/dt arg(M_raw)
+//                    =  (1/2 pi) (d tdi_phase / dt + d phi_ref / dt)
+//   fdot             = 0   (matches the direct path)
+// =============================================================================
+
+#define WDM_SPLINE_L 32
+
+// Pointers into shared memory carving out one spline slot: 3 amp splines
+// + 3 dphi splines + 1 phi_ref spline, all length WDM_SPLINE_L on the same
+// coarse t-grid. amp_y[c] / dphi_y[c] / phi_ref_y are the (signed amp /
+// tdi_phase / phi_ref) values get_tdi writes; c1/c2/c3 are filled by
+// fit_cubic_spline_pcr.
+struct WDMSplineSet
+{
+    double *t_grid;                                       // [L]
+    double *amp_y[3];                                     // [L] each
+    double *dphi_y[3];                                    // [L] each
+    double *phi_ref_y;                                    // [L]
+    double *amp_c1[3], *amp_c2[3], *amp_c3[3];            // [L] each
+    double *dphi_c1[3], *dphi_c2[3], *dphi_c3[3];         // [L] each
+    double *phi_ref_c1, *phi_ref_c2, *phi_ref_c3;         // [L] each
+};
+
+// Lay out a spline slot inside three contiguous shared buffers:
+//   amp_y_buf[3*L]  (channels 0/1/2 back-to-back -- get_tdi writes here)
+//   dphi_y_buf[3*L] (same)
+//   phi_ref_y_buf[L]
+//   coefs_buf[21*L] (7 splines x 3 coefs)
+//   t_grid_buf[L]   (shared coarse time grid)
+CUDA_DEVICE inline
+void wdm_spline_set_init(WDMSplineSet *S,
+                         double *t_grid_buf,
+                         double *amp_y_buf, double *dphi_y_buf, double *phi_ref_y_buf,
+                         double *coefs_buf)
+{
+    S->t_grid = t_grid_buf;
+    for (int c = 0; c < 3; ++c) S->amp_y[c]  = amp_y_buf  + c * WDM_SPLINE_L;
+    for (int c = 0; c < 3; ++c) S->dphi_y[c] = dphi_y_buf + c * WDM_SPLINE_L;
+    S->phi_ref_y = phi_ref_y_buf;
+    int off = 0;
+    for (int c = 0; c < 3; ++c) { S->amp_c1[c]  = coefs_buf + off; off += WDM_SPLINE_L; }
+    for (int c = 0; c < 3; ++c) { S->amp_c2[c]  = coefs_buf + off; off += WDM_SPLINE_L; }
+    for (int c = 0; c < 3; ++c) { S->amp_c3[c]  = coefs_buf + off; off += WDM_SPLINE_L; }
+    for (int c = 0; c < 3; ++c) { S->dphi_c1[c] = coefs_buf + off; off += WDM_SPLINE_L; }
+    for (int c = 0; c < 3; ++c) { S->dphi_c2[c] = coefs_buf + off; off += WDM_SPLINE_L; }
+    for (int c = 0; c < 3; ++c) { S->dphi_c3[c] = coefs_buf + off; off += WDM_SPLINE_L; }
+    S->phi_ref_c1 = coefs_buf + off; off += WDM_SPLINE_L;
+    S->phi_ref_c2 = coefs_buf + off; off += WDM_SPLINE_L;
+    S->phi_ref_c3 = coefs_buf + off; off += WDM_SPLINE_L;
+}
+
+// Fit one cubic spline of length L cooperatively. Wraps the GPU PCR variant
+// and the CPU Thomas variant so the same call site compiles under both
+// builds. pcr_scratch is unused on the CPU side.
+CUDA_DEVICE inline
+void fit_one_spline(double *x, double *y,
+                    double *c1, double *c2, double *c3,
+                    double *B, double *pcr_scratch, int L)
+{
+#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
+    fit_cubic_spline_pcr(x, y, c1, c2, c3, B, pcr_scratch, L,
+                         CUBIC_SPLINE_LINEAR_SPACING);
+#else
+    (void) pcr_scratch;
+    fit_cubic_spline_thomas(x, y, c1, c2, c3, B, L,
+                            CUBIC_SPLINE_LINEAR_SPACING);
+#endif
+}
+
+// Cooperatively populate S with splines for the WDM_SPLINE_L coarse points
+// starting at t_window_start with spacing coarse_dt. Returns true on success;
+// false if any coarse point falls outside orbits/light-travel-time support
+// (in that case S's coefficients are left in an indeterminate state and the
+// caller should skip the WDM pixels owned by this window).
+//
+// All scratch buffers are caller-allocated (typically in shared):
+//   tdi_chan_scratch [3*L]   cmplx (consumed by get_tdi as channels storage)
+//   pcr_scratch      [8*L]   double (GPU only; ignored on CPU)
+//   B_scratch        [L]     double
+//   get_tdi_scratch  [tof.get_tdi_buffer_size(L)] bytes (flip/pjump/count/fix_count)
+CUDA_DEVICE
+bool build_wdm_spline_window(
+    GBTDIonTheFly &tof, WDMSplineSet *S,
+    double *params, int bin_i,
+    double t_window_start, double coarse_dt,
+    cmplx *tdi_chan_scratch,
+    double *pcr_scratch, double *B_scratch,
+    void *get_tdi_scratch, int get_tdi_scratch_len)
+{
+    const int L = WDM_SPLINE_L;
+    const int nchannels = 3;
+
+    for (int i = THREAD_START; i < L; i += BLOCK_INCR)
+    {
+        S->t_grid[i] = t_window_start + (double) i * coarse_dt;
+    }
+    CUDA_SYNC_THREADS;
+
+    // get_tdi writes:
+    //   tdi_chan_scratch [3*L]      raw M values per channel (we discard)
+    //   S->amp_y[0..2]  ([3*L] contiguous) signed amp per channel
+    //   S->dphi_y[0..2] ([3*L] contiguous) tdi_phase per channel
+    //   S->phi_ref_y    ([L])               phi_ref
+    tof.get_tdi(get_tdi_scratch, get_tdi_scratch_len,
+                tdi_chan_scratch, S->amp_y[0], S->dphi_y[0], S->phi_ref_y,
+                params, S->t_grid, L, bin_i, nchannels);
+    CUDA_SYNC_THREADS;
+
+    // Out-of-orbit-bounds check: get_tdi_Xf_single leaves tdi_chan == 0 when
+    // an orbit/light-travel-time window check fails. Even one such point in
+    // the window means we cannot trust the fit -- skip it.
+    CUDA_SHARED bool any_bad;
+    if (THREAD_ZERO) any_bad = false;
+    CUDA_SYNC_THREADS;
+    for (int i = THREAD_START; i < L; i += BLOCK_INCR)
+    {
+        if ((tdi_chan_scratch[i].real() == 0.0) &&
+            (tdi_chan_scratch[i].imag() == 0.0))
+        {
+            any_bad = true;
+        }
+    }
+    CUDA_SYNC_THREADS;
+    if (any_bad) return false;
+
+    for (int c = 0; c < nchannels; ++c)
+    {
+        fit_one_spline(S->t_grid, S->amp_y[c],
+                       S->amp_c1[c], S->amp_c2[c], S->amp_c3[c],
+                       B_scratch, pcr_scratch, L);
+        CUDA_SYNC_THREADS;
+        fit_one_spline(S->t_grid, S->dphi_y[c],
+                       S->dphi_c1[c], S->dphi_c2[c], S->dphi_c3[c],
+                       B_scratch, pcr_scratch, L);
+        CUDA_SYNC_THREADS;
+    }
+    fit_one_spline(S->t_grid, S->phi_ref_y,
+                   S->phi_ref_c1, S->phi_ref_c2, S->phi_ref_c3,
+                   B_scratch, pcr_scratch, L);
+    CUDA_SYNC_THREADS;
+
+    return true;
+}
+
+// Evaluate the spline set at one WDM time pixel `tn`. Writes the three
+// channel values of tdi_channel_val (in the same conj/exp(-i pi/2) rotated
+// convention fast_wdm_inner produces) and the per-channel f / fdot=0.
+// Returns false if tn falls outside the window's coarse grid (caller should
+// not have asked for that pixel, but the guard prevents OOB segment access).
+CUDA_DEVICE inline
+bool eval_wdm_spline_pixel(const WDMSplineSet *S, double tn,
+                           cmplx *tdi_channel_val, double *f, double *fdot)
+{
+    const int L = WDM_SPLINE_L;
+    double t0_grid = S->t_grid[0];
+    double dx = S->t_grid[1] - t0_grid;
+    int idx = (int) floor((tn - t0_grid) / dx);
+    if (idx < 0) idx = 0;
+    if (idx > L - 2) idx = L - 2;
+    double t0 = S->t_grid[idx];
+
+    double y0   = S->phi_ref_y[idx];
+    double cc1  = S->phi_ref_c1[idx];
+    double cc2  = S->phi_ref_c2[idx];
+    double cc3  = S->phi_ref_c3[idx];
+    CubicSplineSegment seg_phiref(t0, y0, cc1, cc2, cc3, CUBIC_SPLINE_LINEAR_SPACING);
+    double phi_ref_val   = seg_phiref.eval(tn);
+    double dphi_ref_dt   = seg_phiref.eval_single_derivative(tn);
+
+    for (int c = 0; c < 3; ++c)
+    {
+        CubicSplineSegment seg_amp(t0,
+            S->amp_y[c][idx], S->amp_c1[c][idx], S->amp_c2[c][idx], S->amp_c3[c][idx],
+            CUBIC_SPLINE_LINEAR_SPACING);
+        CubicSplineSegment seg_dphi(t0,
+            S->dphi_y[c][idx], S->dphi_c1[c][idx], S->dphi_c2[c][idx], S->dphi_c3[c][idx],
+            CUBIC_SPLINE_LINEAR_SPACING);
+        double amp        = seg_amp.eval(tn);
+        double dphi_val   = seg_dphi.eval(tn);
+        double ddphi_dt   = seg_dphi.eval_single_derivative(tn);
+
+        double theta = dphi_val + phi_ref_val;
+        double s = sin(theta);
+        double cs = cos(theta);
+        tdi_channel_val[c] = cmplx(-amp * s, +amp * cs);
+        f[c]    = (ddphi_dt + dphi_ref_dt) / (2.0 * M_PI);
+        fdot[c] = 0.0;
+    }
+    return true;
+}
+
+// =============================================================================
+// Alternative window builder: spline `Re(M*exp(i*phi_ref))` and
+// `Im(M*exp(i*phi_ref))` per channel + phi_ref, instead of the get_tdi
+// (amp, tdi_phase) decomposition. Memory layout reuses WDMSplineSet exactly
+// (amp_y[c] holds Re(M_demod_c); dphi_y[c] holds Im(M_demod_c)) so the storage
+// is unchanged.
+//
+// Why this variant exists -- the get_tdi-based builder runs
+// new_extract_amplitude_and_phase, which makes a discrete local-min decision
+// (is_min = (As[i] < As[i-1]) && (As[i] < As[i+1])) and a count*pi cumsum
+// from it. A tiny parameter perturbation can flip an is_min test at one
+// coarse pt, shifting tdi_phase by pi from there onwards. The cubic spline
+// of tdi_phase then has a pi-jump that is THE WRONG SIGN for a smooth
+// function of (theta+eps) vs (theta-eps), and the chain-rule central FD
+// 1/(2 eps_k) amplifies this into a large gradient error.
+//
+// The demodulated form sidesteps this entirely: Re and Im of M_demod are
+// continuous functions of both t and theta (no discrete decisions). The
+// cubic spline of each remains smooth across windows and under theta
+// perturbations, so the FD-based gradient is well-conditioned.
+//
+// Per coarse pt the builder does:
+//     M_k     = get_tdi_Xf_single(t_k, params, k, u, v, ..., bin_i)
+//     phi_ref = get_phase_ref(t_k, params, bin_i)
+//     re[c]   = Re(M_k[c] * exp(i*phi_ref))
+//     im[c]   = Im(M_k[c] * exp(i*phi_ref))
+// then fits 7 splines (3 re + 3 im + phi_ref).
+//
+// At a WDM pixel tn the evaluator reconstructs:
+//     M_demod[c]    = re_eval[c] + i * im_eval[c]
+//     M_raw[c]      = M_demod[c] * exp(-i * phi_ref_eval)
+//     tdi_channel_val[c] = i * conj(M_raw[c])    (same convention)
+// and computes:
+//     f[c] = -(1/(2*pi)) * d arg(M_raw[c])/dt
+//          =  (1/(2*pi)) * [ dphi_ref/dt - (re*dim/dt - im*dre/dt)/(re^2+im^2) ]
+//     fdot[c] = 0
+// =============================================================================
+CUDA_DEVICE
+bool build_wdm_demod_spline_window(
+    GBTDIonTheFly &tof, WDMSplineSet *S,
+    double *params, int bin_i,
+    double t_window_start, double coarse_dt,
+    cmplx *tdi_chan_scratch,
+    double *pcr_scratch, double *B_scratch,
+    int *link_Space_craft_rec, int *link_Space_craft_em)
+{
+    const int L = WDM_SPLINE_L;
+    const int nchannels = 3;
+
+    for (int i = THREAD_START; i < L; i += BLOCK_INCR)
+        S->t_grid[i] = t_window_start + (double) i * coarse_dt;
+    CUDA_SYNC_THREADS;
+
+    Vec k_vec(0.0, 0.0, 0.0), u_vec(0.0, 0.0, 0.0), v_vec(0.0, 0.0, 0.0);
+    tof.get_sky_vectors(&k_vec, &u_vec, &v_vec, params);
+
+    // Per-coarse-pt raw M[3] + phi_ref evaluation, demodulated into
+    // (re, im) per channel. We share the work across threads with
+    // THREAD_START / BLOCK_INCR strides; each thread is responsible for
+    // a subset of the L points.
+    CUDA_SHARED bool any_bad;
+    if (THREAD_ZERO) any_bad = false;
+    CUDA_SYNC_THREADS;
+
+    for (int i = THREAD_START; i < L; i += BLOCK_INCR)
+    {
+        double t = S->t_grid[i];
+        cmplx M[3];
+        tof.get_tdi_Xf_single(M, t, params, k_vec, u_vec, v_vec,
+                              link_Space_craft_rec, link_Space_craft_em, bin_i);
+        // get_tdi_Xf_single leaves M == 0 when an orbit/LTT window fails;
+        // mark window as bad so the caller can skip.
+        if ((M[0].real() == 0.0) && (M[0].imag() == 0.0)) any_bad = true;
+
+        double phi_ref = tof.get_phase_ref(t, params, bin_i);
+        S->phi_ref_y[i] = phi_ref;
+
+        double c_phr = cos(phi_ref);
+        double s_phr = sin(phi_ref);
+        for (int c = 0; c < nchannels; ++c)
+        {
+            // M_demod = M * exp(i*phi_ref) = M * (c_phr + i*s_phr)
+            double Mr = M[c].real();
+            double Mi = M[c].imag();
+            S->amp_y[c][i]  = Mr * c_phr - Mi * s_phr;   // Re(M_demod_c)
+            S->dphi_y[c][i] = Mr * s_phr + Mi * c_phr;   // Im(M_demod_c)
+        }
+        (void) tdi_chan_scratch;  // not needed for this builder
+    }
+    CUDA_SYNC_THREADS;
+    if (any_bad) return false;
+
+    for (int c = 0; c < nchannels; ++c)
+    {
+        fit_one_spline(S->t_grid, S->amp_y[c],
+                       S->amp_c1[c], S->amp_c2[c], S->amp_c3[c],
+                       B_scratch, pcr_scratch, L);
+        CUDA_SYNC_THREADS;
+        fit_one_spline(S->t_grid, S->dphi_y[c],
+                       S->dphi_c1[c], S->dphi_c2[c], S->dphi_c3[c],
+                       B_scratch, pcr_scratch, L);
+        CUDA_SYNC_THREADS;
+    }
+    fit_one_spline(S->t_grid, S->phi_ref_y,
+                   S->phi_ref_c1, S->phi_ref_c2, S->phi_ref_c3,
+                   B_scratch, pcr_scratch, L);
+    CUDA_SYNC_THREADS;
+
+    return true;
+}
+
+// Evaluator paired with build_wdm_demod_spline_window. Reconstructs M_raw
+// from the spline-interpolated (Re_demod, Im_demod) and phi_ref, then
+// applies the same conj/i rotation fast_wdm_inner does, and computes f
+// from d arg(M_raw)/dt analytically (no central differences in time).
+CUDA_DEVICE inline
+bool eval_wdm_demod_spline_pixel(const WDMSplineSet *S, double tn,
+                                  cmplx *tdi_channel_val, double *f, double *fdot)
+{
+    const int L = WDM_SPLINE_L;
+    double t0_grid = S->t_grid[0];
+    double dx = S->t_grid[1] - t0_grid;
+    int idx = (int) floor((tn - t0_grid) / dx);
+    if (idx < 0) idx = 0;
+    if (idx > L - 2) idx = L - 2;
+    double t0 = S->t_grid[idx];
+
+    CubicSplineSegment seg_phiref(t0,
+        S->phi_ref_y[idx], S->phi_ref_c1[idx], S->phi_ref_c2[idx], S->phi_ref_c3[idx],
+        CUBIC_SPLINE_LINEAR_SPACING);
+    double phi_ref_val = seg_phiref.eval(tn);
+    double dphi_ref_dt = seg_phiref.eval_single_derivative(tn);
+
+    double c_phr = cos(phi_ref_val);
+    double s_phr = sin(phi_ref_val);
+
+    for (int c = 0; c < 3; ++c)
+    {
+        CubicSplineSegment seg_re(t0,
+            S->amp_y[c][idx], S->amp_c1[c][idx], S->amp_c2[c][idx], S->amp_c3[c][idx],
+            CUBIC_SPLINE_LINEAR_SPACING);
+        CubicSplineSegment seg_im(t0,
+            S->dphi_y[c][idx], S->dphi_c1[c][idx], S->dphi_c2[c][idx], S->dphi_c3[c][idx],
+            CUBIC_SPLINE_LINEAR_SPACING);
+        double re   = seg_re.eval(tn);
+        double im   = seg_im.eval(tn);
+        double dre  = seg_re.eval_single_derivative(tn);
+        double dim  = seg_im.eval_single_derivative(tn);
+
+        // M_raw = (re + i*im) * exp(-i*phi_ref)
+        //       = (re + i*im) * (c_phr - i*s_phr)
+        //       = (re*c_phr + im*s_phr) + i*(im*c_phr - re*s_phr)
+        double Mr_raw = re * c_phr + im * s_phr;
+        double Mi_raw = im * c_phr - re * s_phr;
+
+        // tdi_channel_val = i * conj(M_raw) = (Im(M_raw), Re(M_raw))
+        //                = (Mi_raw, Mr_raw)
+        tdi_channel_val[c] = cmplx(Mi_raw, Mr_raw);
+
+        // f = -(1/2pi) d arg(M_raw)/dt.
+        //   arg(M_raw) = arg(M_demod) - phi_ref  (mod 2pi)
+        //   d arg(M_demod)/dt = (re*dim - im*dre) / (re^2 + im^2)
+        double mag2 = re * re + im * im;
+        double darg_demod_dt = (mag2 > 0.0) ? ((re * dim - im * dre) / mag2) : 0.0;
+        double darg_raw_dt = darg_demod_dt - dphi_ref_dt;
+        f[c] = -darg_raw_dt / (2.0 * M_PI);
+        fdot[c] = 0.0;
+    }
+    return true;
+}
+
+// Number of windows needed to cover the WDM active time range and the chosen
+// coarse spacing. Windows are length WDM_SPLINE_L, overlap by 1, so each
+// "step" between windows is (WDM_SPLINE_L - 1) * coarse_dt.
+CUDA_DEVICE inline
+int wdm_spline_num_windows(int n_min, int n_max, double layer_dt, double coarse_dt)
+{
+    double t_span = (double)(n_max - n_min) * layer_dt;
+    double step = (double)(WDM_SPLINE_L - 1) * coarse_dt;
+    int K = (int) ceil(t_span / step);
+    if (K < 1) K = 1;
+    return K;
+}
+
+// First (inclusive) and last (inclusive) WDM pixel index that belongs to
+// window `k` for the run defined by (n_min, n_max, layer_dt, t_ref,
+// t_active_start = t_ref + n_min*layer_dt, coarse_dt, K).
+//
+// Each pixel is owned by exactly one window: window k owns pixels with
+//   tn in [t_window_start_k, t_window_start_{k+1})
+// except the last window which extends through n_max.
+CUDA_DEVICE inline
+void wdm_spline_window_pixel_range(int k, int K,
+                                   int n_min, int n_max,
+                                   double layer_dt, double t_ref,
+                                   double t_active_start, double coarse_dt,
+                                   int *n_lo, int *n_hi)
+{
+    double step = (double)(WDM_SPLINE_L - 1) * coarse_dt;
+    double t_window_start = t_active_start + (double) k * step;
+    double t_window_end   = (k == K - 1) ?
+        ((double) (n_max + 1) * layer_dt + t_ref) :
+        (t_active_start + (double)(k + 1) * step);
+
+    // Half-open assignment: window k owns pixels with
+    //   t_window_start_k <= n*layer_dt + t_ref < t_window_end_k.
+    // For non-integer alignment between coarse_dt and layer_dt, ceil-1
+    // (not floor) is the largest n satisfying the strict-less-than upper
+    // bound. The +1 offset on the last window's t_window_end ensures n_max
+    // gets included (n*layer_dt + t_ref < (n_max+1)*layer_dt + t_ref).
+    int lo = (int) ceil((t_window_start - t_ref) / layer_dt);
+    int hi = (int) ceil((t_window_end - t_ref) / layer_dt) - 1;
+    if (lo < n_min) lo = n_min;
+    if (hi > n_max) hi = n_max;
+    *n_lo = lo;
+    *n_hi = hi;
+}
+
 CUDA_DEVICE
 void fast_wdm_inner(GBTDIonTheFly tdi_on_fly_here, cmplx *tdi_channel_val, double *f, double *fdot, double tn, double *params, Vec k, Vec u, Vec v, int *link_Space_craft_rec, int *link_Space_craft_em, int bin_i, double deriv_delta_t)
 {
@@ -865,12 +1302,15 @@ void fast_wdm_inner(GBTDIonTheFly tdi_on_fly_here, cmplx *tdi_channel_val, doubl
                tdi_channel_val[0].real(), tdi_channel_val[0].imag());
     }
 #endif
-    for (int i = 0; i < 3; i += 1)
-    {
-        // to adjust to TDI on the fly conventions
-        // and take conj so real part is cos and imag is sin
-        tdi_channel_val[i] = gcmplx::conj((tdi_channel_val[i] * gcmplx::exp(-I * M_PI / 2.)));
-    }
+    // NOTE: the conj/-pi/2 rotation that puts tdi_channel_val into the
+    // convention get_w_mn_lookup expects (real=Im(M_raw), imag=Re(M_raw))
+    // is deferred to the bottom of this function. If we did it here it
+    // would pollute the convention of tdi_channel_val[i] used by
+    // tdi_phase_mid below — tdi_phase_{up,down} are taken from RAW
+    // get_tdi_Xf_single output, so tdi_phase_mid must use the raw value
+    // too or the per-anchor ±π unwrap of (tdi_phase_{up,down} -
+    // tdi_phase_mid) fires asymmetrically and shifts tdi_frequency by
+    // ±1/(2 Δt) ≈ ±1 mHz (≈ 30 layers of misrouting).
     phase_ref = tdi_on_fly_here.get_phase_ref(tn, params, bin_i);
 #ifndef __CUDACC__
     if (((tn > 8176119.0) && (tn < 8176121.0))) {
@@ -940,11 +1380,24 @@ void fast_wdm_inner(GBTDIonTheFly tdi_on_fly_here, cmplx *tdi_channel_val, doubl
         fdot[i] = 0.0;  //tdi_on_fly_here.get_fdot(tn, params, bin_i);
     }
 
+    // Now that the central-difference frequency has been built from RAW M
+    // values (consistent convention across mid/up/down), rotate
+    // tdi_channel_val into the convention get_w_mn_lookup expects:
+    //   M' = conj(M * exp(-i π/2)) = i * conj(M)
+    //   ⇒ M'.real = Im(M),  M'.imag = Re(M)
+    // get_w_mn_lookup then evaluates
+    //   w_mn = c_nm * M'.real + s_nm * M'.imag
+    //        = c_nm * Im(M)  + s_nm * Re(M).
+    for (int i = 0; i < 3; i += 1)
+    {
+        tdi_channel_val[i] = gcmplx::conj((tdi_channel_val[i] * gcmplx::exp(-I * M_PI / 2.)));
+    }
+
     // all threads have to be able to make it to CUDA_SYNC_THREADS;
     // TODO: more/less layers?
     // printf("CHECK6 %d %d %e %e\n", n, layer_m_here, f, wdm->layer_df);
-    
-CUDA_SYNC_THREADS;   
+
+CUDA_SYNC_THREADS;
 }
 
 template<int num_diff, int total_diff>
@@ -1047,12 +1500,6 @@ void gb_wdm_fill_global_kernel(double *template_fill, Orbits* orbits, TDIConfig 
 #ifdef __CUDACC__
                         atomicAdd(&template_fill[(i * total_points) + ((layer_m_here - m_min) * Nt_active + (n - n_min))], w_mn);
 #else
-                        // DEBUG: chan 0, n=28, m=61 (the loudest python pixel)
-                        if ((i == 0) && (n == 28) && (layer_m_here == 61)) {
-                            printf("[C-DEBUG] chan=0 n=28 m=61 diff=%d  f=%.12e fdot=%.12e |M|=%.12e arg(M)=%.12e w_mn=%.6e layer_m_base=%d factor=%.3e\n",
-                                   diff, f[i], fdot[i], gcmplx::abs(tdi_channel_val[i]), gcmplx::arg(tdi_channel_val[i]), w_mn, layer_m, factor);
-                        }
-
                         template_fill[(i * total_points) + ((layer_m_here - m_min) * Nt_active + (n - n_min))] += w_mn;
 #endif
                     }
@@ -1123,6 +1570,113 @@ void GBComputationGroup::gb_wdm_eval_inputs_wrap(
 }
 
 
+// Spline analog of gb_wdm_eval_inputs_wrap. For each source, builds ONE
+// WDM_SPLINE_L-point spline window starting at t_window_start with spacing
+// coarse_dt, then evaluates the splines at every tn in tn_arr. Outputs are in
+// the SAME convention as gb_wdm_eval_inputs_wrap (|M_mod|, arg(M_mod), f,
+// fdot=0, phi_ref), so callers can do a direct subtract against the direct
+// path to validate.
+//
+// Caller must ensure every tn in tn_arr satisfies
+//   t_window_start <= tn <= t_window_start + (WDM_SPLINE_L - 1) * coarse_dt
+// otherwise eval_wdm_spline_pixel clamps to the nearest segment.
+//
+// Layouts identical to gb_wdm_eval_inputs_wrap:
+//   amp_out, phi_out, f_out, fdot_out: (num_bin, num_t, nchannels)
+//   phase_ref_out:                     (num_bin, num_t)
+void GBComputationGroup::gb_wdm_spline_eval_inputs_wrap(
+    Orbits *orbits, TDIConfig *tdi_config,
+    double *params_all, double *tn_arr,
+    int num_bin, int nparams, int num_t, int nchannels,
+    double T, double t_ref,
+    double t_window_start, double coarse_dt,
+    double *amp_out, double *phi_out, double *f_out, double *fdot_out,
+    double *phase_ref_out)
+{
+#ifdef __CUDACC__
+    // CPU-only diagnostic.
+    return;
+#else
+    GBTDIonTheFly tdi_on_fly_here(orbits, tdi_config, T, t_ref);
+
+    // CPU-side scratch (the GPU kernels will pull these out of shared mem).
+    double t_grid_buf[WDM_SPLINE_L];
+    double amp_y_buf[3 * WDM_SPLINE_L];
+    double dphi_y_buf[3 * WDM_SPLINE_L];
+    double phi_ref_y_buf[WDM_SPLINE_L];
+    double coefs_buf[21 * WDM_SPLINE_L];
+    cmplx  tdi_chan_buf[3 * WDM_SPLINE_L];
+    double B_buf[WDM_SPLINE_L];
+    const int get_tdi_scratch_len = tdi_on_fly_here.get_tdi_buffer_size(WDM_SPLINE_L);
+    char *get_tdi_scratch = new char[get_tdi_scratch_len];
+
+    WDMSplineSet S;
+    wdm_spline_set_init(&S, t_grid_buf, amp_y_buf, dphi_y_buf, phi_ref_y_buf, coefs_buf);
+
+    for (int bin_i = 0; bin_i < num_bin; ++bin_i)
+    {
+        double *params = &params_all[bin_i * nparams];
+
+        bool ok = build_wdm_spline_window(
+            tdi_on_fly_here, &S, params, bin_i,
+            t_window_start, coarse_dt,
+            tdi_chan_buf,
+            /*pcr_scratch=*/(double*)nullptr, B_buf,
+            (void*)get_tdi_scratch, get_tdi_scratch_len);
+
+        if (!ok)
+        {
+            for (int t_i = 0; t_i < num_t; ++t_i)
+            {
+                phase_ref_out[bin_i * num_t + t_i] = 0.0;
+                for (int chan = 0; chan < nchannels; ++chan)
+                {
+                    int idx = (bin_i * num_t + t_i) * nchannels + chan;
+                    amp_out[idx]  = 0.0;
+                    phi_out[idx]  = 0.0;
+                    f_out[idx]    = 0.0;
+                    fdot_out[idx] = 0.0;
+                }
+            }
+            continue;
+        }
+
+        cmplx  tdi_channel_val[3];
+        double f[3], fdot[3];
+        for (int t_i = 0; t_i < num_t; ++t_i)
+        {
+            double tn = tn_arr[t_i];
+            eval_wdm_spline_pixel(&S, tn, tdi_channel_val, f, fdot);
+
+            // phi_ref reported from the spline -- diverges from the analytic
+            // get_phase_ref only by the cubic interpolation error.
+            const int L = WDM_SPLINE_L;
+            double dx = S.t_grid[1] - S.t_grid[0];
+            int idx = (int) floor((tn - S.t_grid[0]) / dx);
+            if (idx < 0) idx = 0;
+            if (idx > L - 2) idx = L - 2;
+            double t0 = S.t_grid[idx];
+            CubicSplineSegment seg_phiref(t0,
+                S.phi_ref_y[idx], S.phi_ref_c1[idx], S.phi_ref_c2[idx], S.phi_ref_c3[idx],
+                CUBIC_SPLINE_LINEAR_SPACING);
+            phase_ref_out[bin_i * num_t + t_i] = seg_phiref.eval(tn);
+
+            for (int chan = 0; chan < nchannels; ++chan)
+            {
+                int idx_out = (bin_i * num_t + t_i) * nchannels + chan;
+                amp_out[idx_out]  = gcmplx::abs(tdi_channel_val[chan]);
+                phi_out[idx_out]  = gcmplx::arg(tdi_channel_val[chan]);
+                f_out[idx_out]    = f[chan];
+                fdot_out[idx_out] = fdot[chan];
+            }
+        }
+    }
+
+    delete[] get_tdi_scratch;
+#endif
+}
+
+
 void GBComputationGroup::gb_wdm_fill_global_wrap(double *template_fill, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, double *factors_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
 {
     // printf("CHECKCHECK12\n");
@@ -1161,6 +1715,181 @@ void GBComputationGroup::gb_wdm_fill_global_wrap(double *template_fill, Orbits* 
     // printf("CHECKCHECK12\n");
     gb_wdm_fill_global_kernel<2, 5>(template_fill, orbits, tdi_config, wdm_lookup, wdm, params_all, data_index_all, factors_all, num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
 
+#endif
+}
+
+// =============================================================================
+// Spline-path mirror of gb_wdm_fill_global_kernel. Replaces per-WDM-pixel
+// fast_wdm_inner calls with an outer window loop that fits cubic splines to
+// the smooth (tdi_amp, tdi_phase, phi_ref) trio produced by
+// LISATDIonTheFly::get_tdi on a coarse uniform time grid, and evaluates the
+// splines at every WDM pixel inside the window.
+//
+// Per-source compute scales as O(K * L) get_tdi_Xf_single calls (K windows
+// of L coarse points each) versus O(N_pixels * 3) for the direct path. For
+// typical T=4yr, L=32, coarse density 256 pts/yr, this is ~30x fewer TDI
+// evaluations.
+//
+// `coarse_dt` is the spacing of the coarse grid in seconds (Python computes
+// it from the user-supplied coarse_pts_per_year and pushes it through).
+// =============================================================================
+template<int num_diff, int total_diff>
+CUDA_KERNEL
+void gb_wdm_spline_fill_global_kernel(
+    double *template_fill, Orbits* orbits, TDIConfig *tdi_config,
+    WaveletLookupTable* wdm_lookup, WDMDomain* wdm,
+    double *params_all, int *data_index_all, double *factors_all,
+    int num_bin, int nparams, double T, double t_ref, int tdi_type,
+    double coarse_dt)
+{
+    (void) total_diff;
+    (void) tdi_type;
+
+    CUDA_SHARED double params[N_PARAMS_MAX];
+    GBTDIonTheFly tdi_on_fly_here(orbits, tdi_config, T, t_ref);
+
+    int m_min = wdm->ind_min_f;
+    int m_max = wdm->ind_max_f;
+    int n_min = wdm->ind_min_t;
+    int n_max = wdm->ind_max_t;
+    int Nt_active = wdm->Nt_active;
+    int Nf_active = wdm->Nf_active;
+    double layer_dt = wdm->layer_dt;
+    double layer_df = wdm->layer_df;
+    int total_points = Nf_active * Nt_active;
+
+    CUDA_SHARED int link_Space_craft_rec[NLINKS];
+    CUDA_SHARED int link_Space_craft_em[NLINKS];
+    tdi_on_fly_here.fill_link_arrays(link_Space_craft_rec, link_Space_craft_em);
+    CUDA_SYNC_THREADS;
+
+    // Shared scratch for one spline slot (see WDMSplineSet layout).
+    CUDA_SHARED double t_grid_shared      [WDM_SPLINE_L];
+    CUDA_SHARED double amp_y_shared       [3 * WDM_SPLINE_L];
+    CUDA_SHARED double dphi_y_shared      [3 * WDM_SPLINE_L];
+    CUDA_SHARED double phi_ref_y_shared   [WDM_SPLINE_L];
+    CUDA_SHARED double coefs_shared       [21 * WDM_SPLINE_L];
+    CUDA_SHARED cmplx  tdi_chan_shared    [3 * WDM_SPLINE_L];
+    CUDA_SHARED double pcr_scratch        [8 * WDM_SPLINE_L];
+    CUDA_SHARED double B_scratch          [WDM_SPLINE_L];
+    // get_tdi_buffer_size(L) = 2*L*8 + L*4 + L*1 = 21*L bytes.
+    CUDA_SHARED char   get_tdi_scratch    [21 * WDM_SPLINE_L + 16];
+    const int get_tdi_scratch_len = (int) sizeof(get_tdi_scratch);
+
+    WDMSplineSet S;
+    wdm_spline_set_init(&S, t_grid_shared,
+                         amp_y_shared, dphi_y_shared, phi_ref_y_shared,
+                         coefs_shared);
+    CUDA_SYNC_THREADS;
+
+    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    {
+        int data_index = data_index_all[bin_i];
+        double factor = factors_all[bin_i];
+
+        for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+            params[i] = params_all[bin_i * nparams + i];
+        CUDA_SYNC_THREADS;
+
+        double t_active_start = t_ref + (double) n_min * layer_dt;
+        int K = wdm_spline_num_windows(n_min, n_max, layer_dt, coarse_dt);
+
+        for (int k = 0; k < K; ++k)
+        {
+            double t_window_start = t_active_start
+                                  + (double) k * (WDM_SPLINE_L - 1) * coarse_dt;
+
+            bool ok = build_wdm_spline_window(
+                tdi_on_fly_here, &S, params, bin_i,
+                t_window_start, coarse_dt,
+                tdi_chan_shared, pcr_scratch, B_scratch,
+                (void*) get_tdi_scratch, get_tdi_scratch_len);
+            CUDA_SYNC_THREADS;
+            if (!ok) continue;
+
+            int n_lo, n_hi;
+            wdm_spline_window_pixel_range(k, K, n_min, n_max,
+                                          layer_dt, t_ref, t_active_start,
+                                          coarse_dt, &n_lo, &n_hi);
+
+            cmplx tdi_channel_val[3];
+            double f[3], fdot[3];
+            for (int n = THREAD_START + n_lo; n <= n_hi; n += BLOCK_INCR)
+            {
+                double tn = (double) n * layer_dt + t_ref;
+                eval_wdm_spline_pixel(&S, tn, tdi_channel_val, f, fdot);
+
+                for (int diff = -num_diff; diff <= +num_diff; diff += 1)
+                {
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        int layer_m = (int)(f[i] / layer_df);
+                        int layer_m_here = layer_m + diff;
+                        if ((layer_m_here >= m_min) && (layer_m_here <= m_max))
+                        {
+                            double w_mn = factor *
+                                wdm_lookup->get_wdm_in_channel_over_layers(
+                                    tdi_channel_val[i], f[i], fdot[i],
+                                    layer_m_here, n);
+#ifdef __CUDACC__
+                            atomicAdd(&template_fill[(i * total_points) +
+                                ((layer_m_here - m_min) * Nt_active +
+                                 (n - n_min))], w_mn);
+#else
+                            template_fill[(i * total_points) +
+                                ((layer_m_here - m_min) * Nt_active +
+                                 (n - n_min))] += w_mn;
+#endif
+                        }
+                    }
+                }
+            }
+            CUDA_SYNC_THREADS;
+        }
+    }
+}
+
+void GBComputationGroup::gb_wdm_spline_fill_global_wrap(
+    double *template_fill, Orbits* orbits, TDIConfig *tdi_config,
+    WaveletLookupTable* wdm_lookup, WDMDomain* wdm,
+    double *params_all, int *data_index_all, double *factors_all,
+    int num_bin, int nparams, double T, double t_ref, int tdi_type,
+    double coarse_dt)
+{
+#ifdef __CUDACC__
+    Orbits *d_orbits;
+    cudaMalloc(&d_orbits, sizeof(Orbits));
+    gpuErrchk(cudaMemcpy(d_orbits, orbits, sizeof(Orbits), cudaMemcpyHostToDevice));
+
+    TDIConfig *d_tdi_config;
+    cudaMalloc(&d_tdi_config, sizeof(TDIConfig));
+    gpuErrchk(cudaMemcpy(d_tdi_config, tdi_config, sizeof(TDIConfig), cudaMemcpyHostToDevice));
+
+    WaveletLookupTable *d_wdm_lookup;
+    cudaMalloc(&d_wdm_lookup, sizeof(WaveletLookupTable));
+    gpuErrchk(cudaMemcpy(d_wdm_lookup, wdm_lookup, sizeof(WaveletLookupTable), cudaMemcpyHostToDevice));
+
+    WDMDomain *d_wdm;
+    cudaMalloc(&d_wdm, sizeof(WDMDomain));
+    gpuErrchk(cudaMemcpy(d_wdm, wdm, sizeof(WDMDomain), cudaMemcpyHostToDevice));
+
+    gb_wdm_spline_fill_global_kernel<2, 5><<<num_bin, NUM_THREADS_HERE>>>(
+        template_fill, orbits, tdi_config, wdm_lookup, wdm,
+        params_all, data_index_all, factors_all,
+        num_bin, nparams, T, t_ref, tdi_type, coarse_dt);
+
+    cudaDeviceSynchronize();
+    gpuErrchk(cudaGetLastError());
+
+    gpuErrchk(cudaFree(d_orbits));
+    gpuErrchk(cudaFree(d_tdi_config));
+    gpuErrchk(cudaFree(d_wdm_lookup));
+    gpuErrchk(cudaFree(d_wdm));
+#else
+    gb_wdm_spline_fill_global_kernel<2, 5>(
+        template_fill, orbits, tdi_config, wdm_lookup, wdm,
+        params_all, data_index_all, factors_all,
+        num_bin, nparams, T, t_ref, tdi_type, coarse_dt);
 #endif
 }
 
@@ -1252,8 +1981,6 @@ void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIC
                 // if uniquely zero then it is out of orbit bounds
                 continue;
             }
-            int diff_iter = 0;
-
             // MUST BE OVER ALL CHANNELS BECAUSE PER CHANNEL COULD CHANGE PIXEL
             avg_f = ((f[0] + f[1] + f[2]) / 3.);
 
@@ -1270,13 +1997,11 @@ void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIC
                     }
                     wdm->add_ip_contrib(&d_h_tmp[0], &h_h_tmp[0], &wmn_channel[0], layer_m_here, n, data_index, noise_index, tdi_type);
                 }
-                diff_iter += 1;
             }
-            // if (n % 250 == 0) printf("CHECK24 %d, %.12e %.12e\n", n, d_h_tmp[tid], h_h_tmp[tid]);
         }
         CUDA_SYNC_THREADS;
-        
-#ifdef __CUDACC__        
+
+#ifdef __CUDACC__
         d_h_out[bin_i] = 4.0 * block_reduce(d_h_tmp);
         h_h_out[bin_i] = 4.0 * block_reduce(h_h_tmp);
         CUDA_SYNC_THREADS;
@@ -1321,10 +2046,191 @@ void GBComputationGroup::gb_wdm_get_ll_wrap(double *d_h_out, double *h_h_out, Or
 
 #else
 
-    // make buffer 
-    gb_wdm_get_ll_kernel<2, 5>(d_h_out, h_h_out, orbits, tdi_config, wdm_lookup, wdm, params_all, data_index_all, 
+    // make buffer
+    gb_wdm_get_ll_kernel<2, 5>(d_h_out, h_h_out, orbits, tdi_config, wdm_lookup, wdm, params_all, data_index_all,
         noise_index_all, num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
 
+#endif
+}
+
+// =============================================================================
+// Spline-path mirror of gb_wdm_get_ll_kernel. Outer window loop + spline
+// evaluation per WDM pixel. Per-thread d_h / h_h shared accumulators and
+// 4 * block_reduce(...) match the direct path so callers get bit-compatible
+// outputs up to interpolation error.
+// =============================================================================
+template<int num_diff, int total_diff>
+CUDA_KERNEL
+void gb_wdm_spline_get_ll_kernel(
+    double *d_h_out, double *h_h_out,
+    Orbits* orbits, TDIConfig *tdi_config,
+    WaveletLookupTable* wdm_lookup, WDMDomain* wdm,
+    double *params_all, int *data_index_all, int *noise_index_all,
+    int num_bin, int nparams, double T, double t_ref, int tdi_type,
+    double coarse_dt)
+{
+    (void) total_diff;
+
+    CUDA_SHARED double d_h_tmp[NUM_THREADS_HERE];
+    CUDA_SHARED double h_h_tmp[NUM_THREADS_HERE];
+
+    CUDA_SHARED double params[N_PARAMS_MAX];
+    GBTDIonTheFly tdi_on_fly_here(orbits, tdi_config, T, t_ref);
+
+    int m_min = wdm->ind_min_f;
+    int m_max = wdm->ind_max_f;
+    int n_min = wdm->ind_min_t;
+    int n_max = wdm->ind_max_t;
+    double layer_dt = wdm->layer_dt;
+    double layer_df = wdm->layer_df;
+
+    CUDA_SHARED int link_Space_craft_rec[NLINKS];
+    CUDA_SHARED int link_Space_craft_em[NLINKS];
+    tdi_on_fly_here.fill_link_arrays(link_Space_craft_rec, link_Space_craft_em);
+    CUDA_SYNC_THREADS;
+
+    // One spline slot (same shared layout as gb_wdm_spline_fill_global_kernel).
+    CUDA_SHARED double t_grid_shared      [WDM_SPLINE_L];
+    CUDA_SHARED double amp_y_shared       [3 * WDM_SPLINE_L];
+    CUDA_SHARED double dphi_y_shared      [3 * WDM_SPLINE_L];
+    CUDA_SHARED double phi_ref_y_shared   [WDM_SPLINE_L];
+    CUDA_SHARED double coefs_shared       [21 * WDM_SPLINE_L];
+    CUDA_SHARED cmplx  tdi_chan_shared    [3 * WDM_SPLINE_L];
+    CUDA_SHARED double pcr_scratch        [8 * WDM_SPLINE_L];
+    CUDA_SHARED double B_scratch          [WDM_SPLINE_L];
+    CUDA_SHARED char   get_tdi_scratch    [21 * WDM_SPLINE_L + 16];
+    const int get_tdi_scratch_len = (int) sizeof(get_tdi_scratch);
+
+    WDMSplineSet S;
+    wdm_spline_set_init(&S, t_grid_shared,
+                         amp_y_shared, dphi_y_shared, phi_ref_y_shared,
+                         coefs_shared);
+    CUDA_SYNC_THREADS;
+
+    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    {
+        for (int i = THREAD_START; i < NUM_THREADS_HERE; i += BLOCK_INCR)
+        {
+            d_h_tmp[i] = 0.0;
+            h_h_tmp[i] = 0.0;
+        }
+
+        int data_index = data_index_all[bin_i];
+        int noise_index = noise_index_all[bin_i];
+        for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+            params[i] = params_all[bin_i * nparams + i];
+        CUDA_SYNC_THREADS;
+
+        double t_active_start = t_ref + (double) n_min * layer_dt;
+        int K = wdm_spline_num_windows(n_min, n_max, layer_dt, coarse_dt);
+
+        for (int k = 0; k < K; ++k)
+        {
+            double t_window_start = t_active_start
+                                  + (double) k * (WDM_SPLINE_L - 1) * coarse_dt;
+
+            bool ok = build_wdm_spline_window(
+                tdi_on_fly_here, &S, params, bin_i,
+                t_window_start, coarse_dt,
+                tdi_chan_shared, pcr_scratch, B_scratch,
+                (void*) get_tdi_scratch, get_tdi_scratch_len);
+            CUDA_SYNC_THREADS;
+            if (!ok) continue;
+
+            int n_lo, n_hi;
+            wdm_spline_window_pixel_range(k, K, n_min, n_max,
+                                          layer_dt, t_ref, t_active_start,
+                                          coarse_dt, &n_lo, &n_hi);
+
+            cmplx tdi_channel_val[3];
+            double f[3], fdot[3];
+            double wmn_channel[3];
+            for (int n = THREAD_START + n_lo; n <= n_hi; n += BLOCK_INCR)
+            {
+                double tn = (double) n * layer_dt + t_ref;
+                eval_wdm_spline_pixel(&S, tn, tdi_channel_val, f, fdot);
+
+                // Match gb_wdm_get_ll_kernel: layer_m is chosen from the
+                // 3-channel avg frequency (so all channels share a layer
+                // index per (m, n) pixel).
+                double avg_f = (f[0] + f[1] + f[2]) / 3.0;
+                int layer_m = (int)(avg_f / layer_df);
+                for (int diff = -num_diff; diff <= +num_diff; diff += 1)
+                {
+                    int layer_m_here = layer_m + diff;
+                    if ((layer_m_here >= m_min) && (layer_m_here <= m_max))
+                    {
+                        for (int i = 0; i < 3; ++i)
+                        {
+                            wmn_channel[i] = wdm_lookup->
+                                get_wdm_in_channel_over_layers(
+                                    tdi_channel_val[i], f[i], fdot[i],
+                                    layer_m_here, n);
+                        }
+                        wdm->add_ip_contrib(&d_h_tmp[0], &h_h_tmp[0],
+                                            &wmn_channel[0],
+                                            layer_m_here, n,
+                                            data_index, noise_index, tdi_type);
+                    }
+                }
+            }
+            CUDA_SYNC_THREADS;
+        }
+        CUDA_SYNC_THREADS;
+
+#ifdef __CUDACC__
+        d_h_out[bin_i] = 4.0 * block_reduce(d_h_tmp);
+        h_h_out[bin_i] = 4.0 * block_reduce(h_h_tmp);
+        CUDA_SYNC_THREADS;
+#else
+        d_h_out[bin_i] = 4.0 * d_h_tmp[0];
+        h_h_out[bin_i] = 4.0 * h_h_tmp[0];
+#endif
+    }
+}
+
+void GBComputationGroup::gb_wdm_spline_get_ll_wrap(
+    double *d_h_out, double *h_h_out,
+    Orbits* orbits, TDIConfig *tdi_config,
+    WaveletLookupTable* wdm_lookup, WDMDomain* wdm,
+    double *params_all, int *data_index_all, int *noise_index_all,
+    int num_bin, int nparams, double T, double t_ref, int tdi_type,
+    double coarse_dt)
+{
+#ifdef __CUDACC__
+    Orbits *d_orbits;
+    cudaMalloc(&d_orbits, sizeof(Orbits));
+    gpuErrchk(cudaMemcpy(d_orbits, orbits, sizeof(Orbits), cudaMemcpyHostToDevice));
+
+    TDIConfig *d_tdi_config;
+    cudaMalloc(&d_tdi_config, sizeof(TDIConfig));
+    gpuErrchk(cudaMemcpy(d_tdi_config, tdi_config, sizeof(TDIConfig), cudaMemcpyHostToDevice));
+
+    WaveletLookupTable *d_wdm_lookup;
+    cudaMalloc(&d_wdm_lookup, sizeof(WaveletLookupTable));
+    gpuErrchk(cudaMemcpy(d_wdm_lookup, wdm_lookup, sizeof(WaveletLookupTable), cudaMemcpyHostToDevice));
+
+    WDMDomain *d_wdm;
+    cudaMalloc(&d_wdm, sizeof(WDMDomain));
+    gpuErrchk(cudaMemcpy(d_wdm, wdm, sizeof(WDMDomain), cudaMemcpyHostToDevice));
+
+    gb_wdm_spline_get_ll_kernel<2, 5><<<num_bin, NUM_THREADS_HERE>>>(
+        d_h_out, h_h_out, d_orbits, d_tdi_config, d_wdm_lookup, d_wdm,
+        params_all, data_index_all, noise_index_all,
+        num_bin, nparams, T, t_ref, tdi_type, coarse_dt);
+
+    cudaDeviceSynchronize();
+    gpuErrchk(cudaGetLastError());
+
+    gpuErrchk(cudaFree(d_orbits));
+    gpuErrchk(cudaFree(d_tdi_config));
+    gpuErrchk(cudaFree(d_wdm_lookup));
+    gpuErrchk(cudaFree(d_wdm));
+#else
+    gb_wdm_spline_get_ll_kernel<2, 5>(
+        d_h_out, h_h_out, orbits, tdi_config, wdm_lookup, wdm,
+        params_all, data_index_all, noise_index_all,
+        num_bin, nparams, T, t_ref, tdi_type, coarse_dt);
 #endif
 }
 
@@ -1389,7 +2295,6 @@ void gb_wdm_swap_ll_kernel(double *d_h_add_out, double *d_h_remove_out, double *
 
     double tn;
     double avg_f_add, avg_f_remove;
-    int layer_m_add, layer_m_remove, layer_m_lo, layer_m_hi;
     int data_index, noise_index;
 
     for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
@@ -1435,13 +2340,10 @@ void gb_wdm_swap_ll_kernel(double *d_h_add_out, double *d_h_remove_out, double *
             avg_f_add = (f_add[0] + f_add[1] + f_add[2]) / 3.0;
             avg_f_remove = (f_remove[0] + f_remove[1] + f_remove[2]) / 3.0;
 
-            layer_m_add = int(avg_f_add / layer_df);
-            layer_m_remove = int(avg_f_remove / layer_df);
+            int layer_m_add = int(avg_f_add / layer_df);
+            int layer_m_remove = int(avg_f_remove / layer_df);
 
-            // Iterate over the union of the two templates' nearby layers
-            // (±num_diff around each). When one template is out of bounds we
-            // collapse the range to just the in-bounds template so we don't
-            // pay for empty pixels far from its layer.
+            int layer_m_lo, layer_m_hi;
             if (add_in_bounds && remove_in_bounds)
             {
                 layer_m_lo = (layer_m_add < layer_m_remove) ? layer_m_add : layer_m_remove;
@@ -1462,13 +2364,6 @@ void gb_wdm_swap_ll_kernel(double *d_h_add_out, double *d_h_remove_out, double *
             {
                 if ((layer_m < m_min) || (layer_m > m_max)) continue;
 
-                // Per-template window: each side only contributes at layers
-                // within its own ±num_diff neighbourhood, matching get_ll's
-                // approximation. Without this, when add/remove are at
-                // different layers the wider iteration range picks up extra
-                // layers for the add side (beyond ±num_diff of layer_m_add)
-                // that get_ll would have clamped out -- so add_add and
-                // d_h_add would disagree with get_ll on the same source.
                 bool add_layer_active = add_in_bounds &&
                     (layer_m >= layer_m_add - num_diff) &&
                     (layer_m <= layer_m_add + num_diff);
@@ -1558,6 +2453,266 @@ void GBComputationGroup::gb_wdm_swap_ll_wrap(double *d_h_add_out, double *d_h_re
         orbits, tdi_config, wdm_lookup, wdm,
         params_add_all, params_remove_all, data_index_all, noise_index_all,
         num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
+#endif
+}
+
+// =============================================================================
+// Spline-path mirror of gb_wdm_swap_ll_kernel. Two spline slots in shared
+// memory (add + remove); the layer-union iteration follows the direct path
+// verbatim so add_ip_swap_contrib gets identical inputs up to interpolation
+// error.
+//
+// Out-of-bounds check is "any coarse point of this window has the underlying
+// raw M == 0", same as the direct path's per-pixel zero check (we just lift
+// it to window granularity). When ONE side's window is bad we still build
+// the other side and accumulate single-sided contributions for the pixels
+// in that window.
+// =============================================================================
+template<int num_diff, int total_diff>
+CUDA_KERNEL
+void gb_wdm_spline_swap_ll_kernel(
+    double *d_h_add_out, double *d_h_remove_out,
+    double *add_add_out, double *remove_remove_out, double *add_remove_out,
+    Orbits* orbits, TDIConfig *tdi_config,
+    WaveletLookupTable* wdm_lookup, WDMDomain* wdm,
+    double *params_add_all, double *params_remove_all,
+    int *data_index_all, int *noise_index_all,
+    int num_bin, int nparams, double T, double t_ref, int tdi_type,
+    double coarse_dt)
+{
+    (void) total_diff;
+
+    CUDA_SHARED double params_add[N_PARAMS_MAX];
+    CUDA_SHARED double params_remove[N_PARAMS_MAX];
+
+    CUDA_SHARED int link_Space_craft_rec[NLINKS];
+    CUDA_SHARED int link_Space_craft_em[NLINKS];
+
+    GBTDIonTheFly tdi_on_fly_here(orbits, tdi_config, T, t_ref);
+
+    int m_min = wdm->ind_min_f;
+    int m_max = wdm->ind_max_f;
+    int n_min = wdm->ind_min_t;
+    int n_max = wdm->ind_max_t;
+    double layer_dt = wdm->layer_dt;
+    double layer_df = wdm->layer_df;
+
+    tdi_on_fly_here.fill_link_arrays(link_Space_craft_rec, link_Space_craft_em);
+    CUDA_SYNC_THREADS;
+
+    // Two spline slots (separate y / coefs). x grid + scratch shared.
+    CUDA_SHARED double t_grid_shared      [WDM_SPLINE_L];
+    CUDA_SHARED double amp_y_add          [3 * WDM_SPLINE_L];
+    CUDA_SHARED double dphi_y_add         [3 * WDM_SPLINE_L];
+    CUDA_SHARED double phi_ref_y_add      [WDM_SPLINE_L];
+    CUDA_SHARED double coefs_add          [21 * WDM_SPLINE_L];
+    CUDA_SHARED double amp_y_rem          [3 * WDM_SPLINE_L];
+    CUDA_SHARED double dphi_y_rem         [3 * WDM_SPLINE_L];
+    CUDA_SHARED double phi_ref_y_rem      [WDM_SPLINE_L];
+    CUDA_SHARED double coefs_rem          [21 * WDM_SPLINE_L];
+    CUDA_SHARED cmplx  tdi_chan_shared    [3 * WDM_SPLINE_L];
+    CUDA_SHARED double pcr_scratch        [8 * WDM_SPLINE_L];
+    CUDA_SHARED double B_scratch          [WDM_SPLINE_L];
+    CUDA_SHARED char   get_tdi_scratch    [21 * WDM_SPLINE_L + 16];
+    const int get_tdi_scratch_len = (int) sizeof(get_tdi_scratch);
+
+    WDMSplineSet S_add, S_rem;
+    wdm_spline_set_init(&S_add, t_grid_shared,
+                         amp_y_add, dphi_y_add, phi_ref_y_add, coefs_add);
+    wdm_spline_set_init(&S_rem, t_grid_shared,
+                         amp_y_rem, dphi_y_rem, phi_ref_y_rem, coefs_rem);
+    CUDA_SYNC_THREADS;
+
+    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    {
+        double d_h_add_acc = 0.0;
+        double d_h_remove_acc = 0.0;
+        double add_add_acc = 0.0;
+        double remove_remove_acc = 0.0;
+        double add_remove_acc = 0.0;
+
+        int data_index = data_index_all[bin_i];
+        int noise_index = noise_index_all[bin_i];
+
+        for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+        {
+            params_add[i]    = params_add_all   [bin_i * nparams + i];
+            params_remove[i] = params_remove_all[bin_i * nparams + i];
+        }
+        CUDA_SYNC_THREADS;
+
+        double t_active_start = t_ref + (double) n_min * layer_dt;
+        int K = wdm_spline_num_windows(n_min, n_max, layer_dt, coarse_dt);
+
+        for (int k = 0; k < K; ++k)
+        {
+            double t_window_start = t_active_start
+                                  + (double) k * (WDM_SPLINE_L - 1) * coarse_dt;
+
+            bool add_ok = build_wdm_spline_window(
+                tdi_on_fly_here, &S_add, params_add, bin_i,
+                t_window_start, coarse_dt,
+                tdi_chan_shared, pcr_scratch, B_scratch,
+                (void*) get_tdi_scratch, get_tdi_scratch_len);
+            CUDA_SYNC_THREADS;
+            bool rem_ok = build_wdm_spline_window(
+                tdi_on_fly_here, &S_rem, params_remove, bin_i,
+                t_window_start, coarse_dt,
+                tdi_chan_shared, pcr_scratch, B_scratch,
+                (void*) get_tdi_scratch, get_tdi_scratch_len);
+            CUDA_SYNC_THREADS;
+            if (!add_ok && !rem_ok) continue;
+
+            int n_lo, n_hi;
+            wdm_spline_window_pixel_range(k, K, n_min, n_max,
+                                          layer_dt, t_ref, t_active_start,
+                                          coarse_dt, &n_lo, &n_hi);
+
+            cmplx tdi_channel_val_add[3];
+            cmplx tdi_channel_val_remove[3];
+            double f_add[3], fdot_add[3];
+            double f_remove[3], fdot_remove[3];
+            double wmn_add[3], wmn_remove[3];
+
+            for (int n = THREAD_START + n_lo; n <= n_hi; n += BLOCK_INCR)
+            {
+                double tn = (double) n * layer_dt + t_ref;
+                if (add_ok)
+                    eval_wdm_spline_pixel(&S_add, tn,
+                                          tdi_channel_val_add, f_add, fdot_add);
+                if (rem_ok)
+                    eval_wdm_spline_pixel(&S_rem, tn,
+                                          tdi_channel_val_remove, f_remove, fdot_remove);
+
+                int layer_m_add = 0, layer_m_remove = 0;
+                if (add_ok)
+                    layer_m_add = (int)((f_add[0] + f_add[1] + f_add[2]) / 3.0 / layer_df);
+                if (rem_ok)
+                    layer_m_remove = (int)((f_remove[0] + f_remove[1] + f_remove[2]) / 3.0 / layer_df);
+
+                int layer_m_lo, layer_m_hi;
+                if (add_ok && rem_ok)
+                {
+                    layer_m_lo = (layer_m_add < layer_m_remove) ? layer_m_add : layer_m_remove;
+                    layer_m_hi = (layer_m_add > layer_m_remove) ? layer_m_add : layer_m_remove;
+                }
+                else if (add_ok)
+                {
+                    layer_m_lo = layer_m_add;
+                    layer_m_hi = layer_m_add;
+                }
+                else
+                {
+                    layer_m_lo = layer_m_remove;
+                    layer_m_hi = layer_m_remove;
+                }
+
+                for (int layer_m = layer_m_lo - num_diff;
+                     layer_m <= layer_m_hi + num_diff; layer_m += 1)
+                {
+                    if ((layer_m < m_min) || (layer_m > m_max)) continue;
+                    bool add_layer_active = add_ok &&
+                        (layer_m >= layer_m_add - num_diff) &&
+                        (layer_m <= layer_m_add + num_diff);
+                    bool remove_layer_active = rem_ok &&
+                        (layer_m >= layer_m_remove - num_diff) &&
+                        (layer_m <= layer_m_remove + num_diff);
+                    if (!add_layer_active && !remove_layer_active) continue;
+
+                    for (int j = 0; j < 3; ++j)
+                    {
+                        wmn_add[j] = add_layer_active ?
+                            wdm_lookup->get_wdm_in_channel_over_layers(
+                                tdi_channel_val_add[j], f_add[j], fdot_add[j],
+                                layer_m, n) : 0.0;
+                        wmn_remove[j] = remove_layer_active ?
+                            wdm_lookup->get_wdm_in_channel_over_layers(
+                                tdi_channel_val_remove[j], f_remove[j], fdot_remove[j],
+                                layer_m, n) : 0.0;
+                    }
+
+                    wdm->add_ip_swap_contrib(
+                        &d_h_add_acc, &d_h_remove_acc,
+                        &add_add_acc, &remove_remove_acc, &add_remove_acc,
+                        &wmn_add[0], &wmn_remove[0], layer_m, n,
+                        data_index, noise_index, tdi_type);
+                }
+            }
+            CUDA_SYNC_THREADS;
+        }
+        CUDA_SYNC_THREADS;
+
+#ifdef __CUDACC__
+        double d_h_add_red       = 4.0 * block_reduce_scalar(d_h_add_acc);
+        double d_h_remove_red    = 4.0 * block_reduce_scalar(d_h_remove_acc);
+        double add_add_red       = 4.0 * block_reduce_scalar(add_add_acc);
+        double remove_remove_red = 4.0 * block_reduce_scalar(remove_remove_acc);
+        double add_remove_red    = 4.0 * block_reduce_scalar(add_remove_acc);
+        if (threadIdx.x == 0)
+        {
+            d_h_add_out[bin_i]       = d_h_add_red;
+            d_h_remove_out[bin_i]    = d_h_remove_red;
+            add_add_out[bin_i]       = add_add_red;
+            remove_remove_out[bin_i] = remove_remove_red;
+            add_remove_out[bin_i]    = add_remove_red;
+        }
+        CUDA_SYNC_THREADS;
+#else
+        d_h_add_out[bin_i]       = 4.0 * d_h_add_acc;
+        d_h_remove_out[bin_i]    = 4.0 * d_h_remove_acc;
+        add_add_out[bin_i]       = 4.0 * add_add_acc;
+        remove_remove_out[bin_i] = 4.0 * remove_remove_acc;
+        add_remove_out[bin_i]    = 4.0 * add_remove_acc;
+#endif
+    }
+}
+
+void GBComputationGroup::gb_wdm_spline_swap_ll_wrap(
+    double *d_h_add_out, double *d_h_remove_out,
+    double *add_add_out, double *remove_remove_out, double *add_remove_out,
+    Orbits* orbits, TDIConfig *tdi_config,
+    WaveletLookupTable* wdm_lookup, WDMDomain* wdm,
+    double *params_add_all, double *params_remove_all,
+    int *data_index_all, int *noise_index_all,
+    int num_bin, int nparams, double T, double t_ref, int tdi_type,
+    double coarse_dt)
+{
+#ifdef __CUDACC__
+    Orbits *d_orbits;
+    cudaMalloc(&d_orbits, sizeof(Orbits));
+    gpuErrchk(cudaMemcpy(d_orbits, orbits, sizeof(Orbits), cudaMemcpyHostToDevice));
+
+    TDIConfig *d_tdi_config;
+    cudaMalloc(&d_tdi_config, sizeof(TDIConfig));
+    gpuErrchk(cudaMemcpy(d_tdi_config, tdi_config, sizeof(TDIConfig), cudaMemcpyHostToDevice));
+
+    WaveletLookupTable *d_wdm_lookup;
+    cudaMalloc(&d_wdm_lookup, sizeof(WaveletLookupTable));
+    gpuErrchk(cudaMemcpy(d_wdm_lookup, wdm_lookup, sizeof(WaveletLookupTable), cudaMemcpyHostToDevice));
+
+    WDMDomain *d_wdm;
+    cudaMalloc(&d_wdm, sizeof(WDMDomain));
+    gpuErrchk(cudaMemcpy(d_wdm, wdm, sizeof(WDMDomain), cudaMemcpyHostToDevice));
+
+    gb_wdm_spline_swap_ll_kernel<2, 5><<<num_bin, NUM_THREADS_HERE>>>(
+        d_h_add_out, d_h_remove_out, add_add_out, remove_remove_out, add_remove_out,
+        d_orbits, d_tdi_config, d_wdm_lookup, d_wdm,
+        params_add_all, params_remove_all, data_index_all, noise_index_all,
+        num_bin, nparams, T, t_ref, tdi_type, coarse_dt);
+
+    cudaDeviceSynchronize();
+    gpuErrchk(cudaGetLastError());
+
+    gpuErrchk(cudaFree(d_orbits));
+    gpuErrchk(cudaFree(d_tdi_config));
+    gpuErrchk(cudaFree(d_wdm_lookup));
+    gpuErrchk(cudaFree(d_wdm));
+#else
+    gb_wdm_spline_swap_ll_kernel<2, 5>(
+        d_h_add_out, d_h_remove_out, add_add_out, remove_remove_out, add_remove_out,
+        orbits, tdi_config, wdm_lookup, wdm,
+        params_add_all, params_remove_all, data_index_all, noise_index_all,
+        num_bin, nparams, T, t_ref, tdi_type, coarse_dt);
 #endif
 }
 
@@ -1791,6 +2946,267 @@ void GBComputationGroup::gb_wdm_get_ll_grad_wrap(double *grad_out, Orbits* orbit
     gb_wdm_get_ll_grad_kernel<2, 5>(grad_out, orbits, tdi_config, wdm_lookup, wdm,
         params_all, data_index_all, noise_index_all, param_eps,
         num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
+#endif
+}
+
+
+// =============================================================================
+// Spline-path gradient kernel: same chain-rule formula and frozen layer_m_c
+// convention as gb_wdm_get_ll_grad_kernel. Memory footprint is independent of
+// nparams: three spline slots in shared memory (base, plus, minus) get
+// rebuilt per (window, param). Per source the build count is
+//   1 base + 2*nparams_active perturbed   builds per window,
+// vs the direct kernel's
+//   (1 + 2*nparams_active) * num_wdm_pixels fast_wdm_inner calls.
+//
+// Precision note: the chain-rule central FD divides by (2*eps_k). Cubic
+// spline interpolation introduces a per-(theta+eps) error that does NOT
+// correlate across theta+eps / theta-eps (each rebuild fits a fresh spline
+// with different y-values). The diff therefore does not cancel spline
+// interpolation noise, and the relative error in dh/dtheta_k scales as
+// ~ spline_err / eps_k. For tight eps (e.g. default param_eps[f0]=2e-14)
+// this can dominate and the spline gradient may not match the direct
+// gradient to better than O(1) on the noisiest components. Recommend
+// using the direct gb_wdm_get_ll_grad_wrap when bit-level chain-rule
+// matching is required.
+// =============================================================================
+template<int num_diff, int total_diff>
+CUDA_KERNEL
+void gb_wdm_spline_get_ll_grad_kernel(
+    double *grad_out, Orbits* orbits, TDIConfig *tdi_config,
+    WaveletLookupTable* wdm_lookup, WDMDomain* wdm,
+    double *params_all, int *data_index_all, int *noise_index_all,
+    double *param_eps,
+    int num_bin, int nparams, double T, double t_ref, int tdi_type,
+    double coarse_dt)
+{
+    (void) total_diff;
+
+    CUDA_SHARED int link_Space_craft_rec[NLINKS];
+    CUDA_SHARED int link_Space_craft_em[NLINKS];
+    CUDA_SHARED double param_eps_shared[N_PARAMS_MAX];
+
+    GBTDIonTheFly tdi_on_fly_here(orbits, tdi_config, T, t_ref);
+
+    int m_min = wdm->ind_min_f;
+    int m_max = wdm->ind_max_f;
+    int n_min = wdm->ind_min_t;
+    int n_max = wdm->ind_max_t;
+    double layer_dt = wdm->layer_dt;
+    double layer_df = wdm->layer_df;
+    int nchannels = (tdi_type == TDI_AE) ? 2 : 3;
+
+    tdi_on_fly_here.fill_link_arrays(link_Space_craft_rec, link_Space_craft_em);
+
+    for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+        param_eps_shared[i] = param_eps[i];
+    CUDA_SYNC_THREADS;
+
+    // Three spline slots: base (A), plus (B), minus (C). The y arrays and
+    // coefs are slot-private; t_grid + scratch are shared.
+    CUDA_SHARED double t_grid_shared      [WDM_SPLINE_L];
+    CUDA_SHARED double amp_y_A            [3 * WDM_SPLINE_L];
+    CUDA_SHARED double dphi_y_A           [3 * WDM_SPLINE_L];
+    CUDA_SHARED double phi_ref_y_A        [WDM_SPLINE_L];
+    CUDA_SHARED double coefs_A            [21 * WDM_SPLINE_L];
+    CUDA_SHARED double amp_y_B            [3 * WDM_SPLINE_L];
+    CUDA_SHARED double dphi_y_B           [3 * WDM_SPLINE_L];
+    CUDA_SHARED double phi_ref_y_B        [WDM_SPLINE_L];
+    CUDA_SHARED double coefs_B            [21 * WDM_SPLINE_L];
+    CUDA_SHARED double amp_y_C            [3 * WDM_SPLINE_L];
+    CUDA_SHARED double dphi_y_C           [3 * WDM_SPLINE_L];
+    CUDA_SHARED double phi_ref_y_C        [WDM_SPLINE_L];
+    CUDA_SHARED double coefs_C            [21 * WDM_SPLINE_L];
+    CUDA_SHARED cmplx  tdi_chan_shared    [3 * WDM_SPLINE_L];
+    CUDA_SHARED double pcr_scratch        [8 * WDM_SPLINE_L];
+    CUDA_SHARED double B_scratch          [WDM_SPLINE_L];
+    CUDA_SHARED char   get_tdi_scratch    [21 * WDM_SPLINE_L + 16];
+    const int get_tdi_scratch_len = (int) sizeof(get_tdi_scratch);
+
+    WDMSplineSet S_A, S_B, S_C;
+    wdm_spline_set_init(&S_A, t_grid_shared, amp_y_A, dphi_y_A, phi_ref_y_A, coefs_A);
+    wdm_spline_set_init(&S_B, t_grid_shared, amp_y_B, dphi_y_B, phi_ref_y_B, coefs_B);
+    wdm_spline_set_init(&S_C, t_grid_shared, amp_y_C, dphi_y_C, phi_ref_y_C, coefs_C);
+    CUDA_SYNC_THREADS;
+
+    // Per-source param buffers (shared so all threads in the block see the
+    // same perturbed values when building plus/minus splines).
+    CUDA_SHARED double params_base[N_PARAMS_MAX];
+    CUDA_SHARED double params_pert[N_PARAMS_MAX];
+
+    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    {
+        int data_index = data_index_all[bin_i];
+        int noise_index = noise_index_all[bin_i];
+
+        for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+            params_base[i] = params_all[bin_i * nparams + i];
+        CUDA_SYNC_THREADS;
+
+        // Per-thread gradient accumulators (one per parameter slot).
+        double grad_acc[N_PARAMS_MAX];
+        for (int i = 0; i < N_PARAMS_MAX; ++i) grad_acc[i] = 0.0;
+
+        double t_active_start = t_ref + (double) n_min * layer_dt;
+        int K = wdm_spline_num_windows(n_min, n_max, layer_dt, coarse_dt);
+
+        for (int k = 0; k < K; ++k)
+        {
+            double t_window_start = t_active_start
+                                  + (double) k * (WDM_SPLINE_L - 1) * coarse_dt;
+
+            bool base_ok = build_wdm_spline_window(
+                tdi_on_fly_here, &S_A, params_base, bin_i,
+                t_window_start, coarse_dt,
+                tdi_chan_shared, pcr_scratch, B_scratch,
+                (void*) get_tdi_scratch, get_tdi_scratch_len);
+            CUDA_SYNC_THREADS;
+            if (!base_ok) continue;
+
+            int n_lo, n_hi;
+            wdm_spline_window_pixel_range(k, K, n_min, n_max,
+                                          layer_dt, t_ref, t_active_start,
+                                          coarse_dt, &n_lo, &n_hi);
+
+            for (int kk = 0; kk < nparams; ++kk)
+            {
+                double eps_k = param_eps_shared[kk];
+                if (eps_k <= 0.0) continue;
+
+                // Build plus splines.
+                for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+                    params_pert[i] = params_base[i];
+                CUDA_SYNC_THREADS;
+                if (THREAD_ZERO) params_pert[kk] = params_base[kk] + eps_k;
+                CUDA_SYNC_THREADS;
+                bool plus_ok = build_wdm_spline_window(
+                    tdi_on_fly_here, &S_B, params_pert, bin_i,
+                    t_window_start, coarse_dt,
+                    tdi_chan_shared, pcr_scratch, B_scratch,
+                    (void*) get_tdi_scratch, get_tdi_scratch_len);
+                CUDA_SYNC_THREADS;
+
+                // Build minus splines.
+                for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+                    params_pert[i] = params_base[i];
+                CUDA_SYNC_THREADS;
+                if (THREAD_ZERO) params_pert[kk] = params_base[kk] - eps_k;
+                CUDA_SYNC_THREADS;
+                bool minus_ok = build_wdm_spline_window(
+                    tdi_on_fly_here, &S_C, params_pert, bin_i,
+                    t_window_start, coarse_dt,
+                    tdi_chan_shared, pcr_scratch, B_scratch,
+                    (void*) get_tdi_scratch, get_tdi_scratch_len);
+                CUDA_SYNC_THREADS;
+                if (!plus_ok && !minus_ok) continue;
+
+                double inv_2eps = 1.0 / (2.0 * eps_k);
+
+                cmplx tdi_chan_c[3], tdi_chan_p[3], tdi_chan_m[3];
+                double f_c[3], fdot_c[3], f_p[3], fdot_p[3], f_m[3], fdot_m[3];
+
+                for (int n = THREAD_START + n_lo; n <= n_hi; n += BLOCK_INCR)
+                {
+                    double tn = (double) n * layer_dt + t_ref;
+
+                    eval_wdm_spline_pixel(&S_A, tn, tdi_chan_c, f_c, fdot_c);
+                    if (plus_ok)
+                        eval_wdm_spline_pixel(&S_B, tn, tdi_chan_p, f_p, fdot_p);
+                    if (minus_ok)
+                        eval_wdm_spline_pixel(&S_C, tn, tdi_chan_m, f_m, fdot_m);
+
+                    // Frozen central layer_m, matching gb_wdm_get_ll_grad_kernel.
+                    double avg_f_c = (f_c[0] + f_c[1] + f_c[2]) / 3.0;
+                    int layer_m_c = (int)(avg_f_c / layer_df);
+
+                    for (int diff = -num_diff; diff <= num_diff; diff += 1)
+                    {
+                        int layer_m_here = layer_m_c + diff;
+                        if ((layer_m_here < m_min) || (layer_m_here > m_max)) continue;
+
+                        double w_mn_c[3]  = {0., 0., 0.};
+                        double dw[3]      = {0., 0., 0.};
+                        for (int c = 0; c < nchannels; ++c)
+                        {
+                            w_mn_c[c] = wdm_lookup->get_wdm_in_channel_over_layers(
+                                tdi_chan_c[c], f_c[c], fdot_c[c], layer_m_here, n);
+                            double wp = plus_ok ?
+                                wdm_lookup->get_wdm_in_channel_over_layers(
+                                    tdi_chan_p[c], f_p[c], fdot_p[c], layer_m_here, n) : 0.0;
+                            double wm = minus_ok ?
+                                wdm_lookup->get_wdm_in_channel_over_layers(
+                                    tdi_chan_m[c], f_m[c], fdot_m[c], layer_m_here, n) : 0.0;
+                            dw[c] = (wp - wm) * inv_2eps;
+                        }
+
+                        wdm->add_grad_contrib(&grad_acc[kk],
+                                              &w_mn_c[0], &dw[0],
+                                              layer_m_here, n,
+                                              data_index, noise_index, tdi_type);
+                    }
+                }
+                CUDA_SYNC_THREADS;
+            }
+        }
+        CUDA_SYNC_THREADS;
+
+        // Block-reduce each gradient accumulator and write out.
+        for (int kk = 0; kk < nparams; ++kk)
+        {
+#ifdef __CUDACC__
+            double red = block_reduce_scalar(grad_acc[kk]);
+            if (threadIdx.x == 0)
+                grad_out[bin_i * nparams + kk] = 4.0 * red;
+            CUDA_SYNC_THREADS;
+#else
+            grad_out[bin_i * nparams + kk] = 4.0 * grad_acc[kk];
+#endif
+        }
+    }
+}
+
+void GBComputationGroup::gb_wdm_spline_get_ll_grad_wrap(
+    double *grad_out, Orbits* orbits, TDIConfig *tdi_config,
+    WaveletLookupTable* wdm_lookup, WDMDomain* wdm,
+    double *params_all, int *data_index_all, int *noise_index_all,
+    double *param_eps,
+    int num_bin, int nparams, double T, double t_ref, int tdi_type,
+    double coarse_dt)
+{
+#ifdef __CUDACC__
+    Orbits *d_orbits;
+    cudaMalloc(&d_orbits, sizeof(Orbits));
+    gpuErrchk(cudaMemcpy(d_orbits, orbits, sizeof(Orbits), cudaMemcpyHostToDevice));
+
+    TDIConfig *d_tdi_config;
+    cudaMalloc(&d_tdi_config, sizeof(TDIConfig));
+    gpuErrchk(cudaMemcpy(d_tdi_config, tdi_config, sizeof(TDIConfig), cudaMemcpyHostToDevice));
+
+    WaveletLookupTable *d_wdm_lookup;
+    cudaMalloc(&d_wdm_lookup, sizeof(WaveletLookupTable));
+    gpuErrchk(cudaMemcpy(d_wdm_lookup, wdm_lookup, sizeof(WaveletLookupTable), cudaMemcpyHostToDevice));
+
+    WDMDomain *d_wdm;
+    cudaMalloc(&d_wdm, sizeof(WDMDomain));
+    gpuErrchk(cudaMemcpy(d_wdm, wdm, sizeof(WDMDomain), cudaMemcpyHostToDevice));
+
+    gb_wdm_spline_get_ll_grad_kernel<2, 5><<<num_bin, NUM_THREADS_HERE>>>(
+        grad_out, d_orbits, d_tdi_config, d_wdm_lookup, d_wdm,
+        params_all, data_index_all, noise_index_all, param_eps,
+        num_bin, nparams, T, t_ref, tdi_type, coarse_dt);
+
+    cudaDeviceSynchronize();
+    gpuErrchk(cudaGetLastError());
+
+    gpuErrchk(cudaFree(d_orbits));
+    gpuErrchk(cudaFree(d_tdi_config));
+    gpuErrchk(cudaFree(d_wdm_lookup));
+    gpuErrchk(cudaFree(d_wdm));
+#else
+    gb_wdm_spline_get_ll_grad_kernel<2, 5>(
+        grad_out, orbits, tdi_config, wdm_lookup, wdm,
+        params_all, data_index_all, noise_index_all, param_eps,
+        num_bin, nparams, T, t_ref, tdi_type, coarse_dt);
 #endif
 }
 

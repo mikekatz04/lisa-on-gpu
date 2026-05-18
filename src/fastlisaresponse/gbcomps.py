@@ -5,6 +5,10 @@ from copy import deepcopy
 from lisatools.domains import WDMLookupTable
 from .response import ecliptic_to_icrs
 
+# Seconds per Julian year, used to convert `coarse_pts_per_year` into the
+# `coarse_dt` argument the spline-path C wraps consume.
+_SECONDS_PER_YEAR = 365.25 * 86400.0
+
 class GBWDMComputations(FastLISAResponseParallelModule):
     def __init__(self, wdm_lookup_table, T, t_ref, orbits=None, tdi_config=None, force_backend=None, d_d=0.0, tdi_type="XYZ"):
 
@@ -107,12 +111,12 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         is_m_ref_n_ref_even = False
 
         self.cpp_wdm_lookup_table = self.backend.WaveletLookupTableWrap(
-            self.c_nm_all, 
-            self.s_nm_all, 
-            wdm_lookup_table.f_steps, 
-            wdm_lookup_table.fdot_steps, 
-            delta_f,  # NOT .layer_df (that is the WDM basis info) 
-            delta_fdot, 
+            self.c_nm_all,
+            self.s_nm_all,
+            wdm_lookup_table.f_steps,
+            wdm_lookup_table.fdot_steps,
+            delta_f,  # NOT .layer_df (that is the WDM basis info)
+            delta_fdot,
             wdm_lookup_table.f_vals_norm.min().item(),
             wdm_lookup_table.fdot_vals.min().item(),
             wdm_lookup_table.settings.layer_df,
@@ -124,14 +128,23 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             wdm_lookup_table.settings.ind_max_t,
             wdm_lookup_table.settings.ind_min_f,
             wdm_lookup_table.settings.ind_max_f,
+            int(wdm_lookup_table.m_ref),
         )
 
     @classmethod
     def supported_backends(cls):
         return ["fastlisaresponse_" + _tmp for _tmp in cls.GPU_RECOMMENDED()]
 
-    def get_ll_wdm(self, params, wdm_holder, data_index=None, noise_index=None, convert_to_ra_dec: bool = True):
-        
+    def get_ll_wdm(self, params, wdm_holder, data_index=None, noise_index=None, convert_to_ra_dec: bool = True,
+                   use_spline: bool = False, coarse_pts_per_year: int = 256):
+        """Per-binary (d|h) and (h|h) accumulated as <h | h> := -2 (d|h) + (h|h) likelihood pieces.
+
+        Set ``use_spline=True`` to dispatch to ``gb_wdm_spline_get_ll`` which
+        replaces per-WDM-pixel fast_wdm_inner calls with cubic-spline
+        interpolation of get_tdi outputs on a coarse uniform time grid of
+        ``coarse_pts_per_year`` points per Julian year.
+        """
+
         params_tmp = self.xp.asarray(self.xp.atleast_2d(params)).copy()
         num_bin = params_tmp.shape[0]
         
@@ -187,36 +200,59 @@ class GBWDMComputations(FastLISAResponseParallelModule):
 
         params_in = params_tmp.flatten().copy()
 
-        deriv_delta_t = 500.0  # seconds
-        self.backend.GBComputationGroupWrap().gb_wdm_get_ll(
-            self.d_h_out, 
-            self.h_h_out, 
-            self.cpp_orbits,
-            self.cpp_tdi_config, 
-            self.cpp_wdm_lookup_table, 
-            self.cpp_wdm, 
-            params_in, 
-            data_index, 
-            noise_index, 
-            num_bin,
-            nparams, 
-            self.T,
-            self.t_ref,
-            self.backend.TDITypeDict[self.tdi_type],
-            deriv_delta_t
-        )
+        if use_spline:
+            coarse_dt = _SECONDS_PER_YEAR / float(coarse_pts_per_year)
+            self.backend.GBComputationGroupWrap().gb_wdm_spline_get_ll(
+                self.d_h_out,
+                self.h_h_out,
+                self.cpp_orbits,
+                self.cpp_tdi_config,
+                self.cpp_wdm_lookup_table,
+                self.cpp_wdm,
+                params_in,
+                data_index,
+                noise_index,
+                num_bin,
+                nparams,
+                self.T,
+                self.t_ref,
+                self.backend.TDITypeDict[self.tdi_type],
+                coarse_dt,
+            )
+        else:
+            deriv_delta_t = 500.0  # seconds
+            self.backend.GBComputationGroupWrap().gb_wdm_get_ll(
+                self.d_h_out,
+                self.h_h_out,
+                self.cpp_orbits,
+                self.cpp_tdi_config,
+                self.cpp_wdm_lookup_table,
+                self.cpp_wdm,
+                params_in,
+                data_index,
+                noise_index,
+                num_bin,
+                nparams,
+                self.T,
+                self.t_ref,
+                self.backend.TDITypeDict[self.tdi_type],
+                deriv_delta_t
+            )
 
         like_out = -1. / 2. * (self.d_d + self.h_h_out - 2 * self.d_h_out)
         # TODO: phase maximize
         return like_out
 
-    def get_swap_ll_wdm(self, params_add, params_remove, wdm_holder, data_index=None, noise_index=None, convert_to_ra_dec: bool = True):
+    def get_swap_ll_wdm(self, params_add, params_remove, wdm_holder, data_index=None, noise_index=None, convert_to_ra_dec: bool = True,
+                        use_spline: bool = False, coarse_pts_per_year: int = 256):
         """Swap-proposal likelihood pieces for an 'add' and a 'remove' template.
 
         Mirrors :meth:`get_ll_wdm` but evaluates the five inner products
         <d|h_add>, <d|h_remove>, <h_add|h_add>, <h_remove|h_remove>,
         <h_add|h_remove> for each binary in parallel. Used by RJMCMC swap moves
         where a single proposal replaces one source with another.
+
+        Set ``use_spline=True`` to dispatch to ``gb_wdm_spline_swap_ll``.
 
         Returns
         -------
@@ -293,28 +329,52 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         params_add_in = params_add_tmp.flatten().copy()
         params_remove_in = params_remove_tmp.flatten().copy()
 
-        deriv_delta_t = 500.0  # seconds
-        self.backend.GBComputationGroupWrap().gb_wdm_swap_ll(
-            self.d_h_add_out,
-            self.d_h_remove_out,
-            self.add_add_out,
-            self.remove_remove_out,
-            self.add_remove_out,
-            self.cpp_orbits,
-            self.cpp_tdi_config,
-            self.cpp_wdm_lookup_table,
-            self.cpp_wdm,
-            params_add_in,
-            params_remove_in,
-            data_index,
-            noise_index,
-            num_bin,
-            nparams,
-            self.T,
-            self.t_ref,
-            self.backend.TDITypeDict[self.tdi_type],
-            deriv_delta_t,
-        )
+        if use_spline:
+            coarse_dt = _SECONDS_PER_YEAR / float(coarse_pts_per_year)
+            self.backend.GBComputationGroupWrap().gb_wdm_spline_swap_ll(
+                self.d_h_add_out,
+                self.d_h_remove_out,
+                self.add_add_out,
+                self.remove_remove_out,
+                self.add_remove_out,
+                self.cpp_orbits,
+                self.cpp_tdi_config,
+                self.cpp_wdm_lookup_table,
+                self.cpp_wdm,
+                params_add_in,
+                params_remove_in,
+                data_index,
+                noise_index,
+                num_bin,
+                nparams,
+                self.T,
+                self.t_ref,
+                self.backend.TDITypeDict[self.tdi_type],
+                coarse_dt,
+            )
+        else:
+            deriv_delta_t = 500.0  # seconds
+            self.backend.GBComputationGroupWrap().gb_wdm_swap_ll(
+                self.d_h_add_out,
+                self.d_h_remove_out,
+                self.add_add_out,
+                self.remove_remove_out,
+                self.add_remove_out,
+                self.cpp_orbits,
+                self.cpp_tdi_config,
+                self.cpp_wdm_lookup_table,
+                self.cpp_wdm,
+                params_add_in,
+                params_remove_in,
+                data_index,
+                noise_index,
+                num_bin,
+                nparams,
+                self.T,
+                self.t_ref,
+                self.backend.TDITypeDict[self.tdi_type],
+                deriv_delta_t,
+            )
 
         like_add = -1. / 2. * (self.d_d + self.add_add_out - 2 * self.d_h_add_out)
         like_remove = -1. / 2. * (self.d_d + self.remove_remove_out - 2 * self.d_h_remove_out)
@@ -437,7 +497,8 @@ class GBWDMComputations(FastLISAResponseParallelModule):
                         param_scales=None,
                         param_eps_relative=1.0e-6,
                         data_index=None, noise_index=None,
-                        convert_to_ra_dec: bool = True):
+                        convert_to_ra_dec: bool = True,
+                        use_spline: bool = False, coarse_pts_per_year: int = 256):
         """Chain-rule gradient of :meth:`get_ll_wdm`.
 
         Parameters
@@ -526,24 +587,44 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         grad_out = self.xp.zeros(num_bin * nparams, dtype=self.xp.float64)
         params_in = params_tmp.flatten().copy()
 
-        deriv_delta_t = 500.0
-        self.backend.GBComputationGroupWrap().gb_wdm_get_ll_grad(
-            grad_out,
-            self.cpp_orbits,
-            self.cpp_tdi_config,
-            self.cpp_wdm_lookup_table,
-            self.cpp_wdm,
-            params_in,
-            data_index,
-            noise_index,
-            eps_theta,
-            num_bin,
-            nparams,
-            self.T,
-            self.t_ref,
-            self.backend.TDITypeDict[self.tdi_type],
-            deriv_delta_t,
-        )
+        if use_spline:
+            coarse_dt = _SECONDS_PER_YEAR / float(coarse_pts_per_year)
+            self.backend.GBComputationGroupWrap().gb_wdm_spline_get_ll_grad(
+                grad_out,
+                self.cpp_orbits,
+                self.cpp_tdi_config,
+                self.cpp_wdm_lookup_table,
+                self.cpp_wdm,
+                params_in,
+                data_index,
+                noise_index,
+                eps_theta,
+                num_bin,
+                nparams,
+                self.T,
+                self.t_ref,
+                self.backend.TDITypeDict[self.tdi_type],
+                coarse_dt,
+            )
+        else:
+            deriv_delta_t = 500.0
+            self.backend.GBComputationGroupWrap().gb_wdm_get_ll_grad(
+                grad_out,
+                self.cpp_orbits,
+                self.cpp_tdi_config,
+                self.cpp_wdm_lookup_table,
+                self.cpp_wdm,
+                params_in,
+                data_index,
+                noise_index,
+                eps_theta,
+                num_bin,
+                nparams,
+                self.T,
+                self.t_ref,
+                self.backend.TDITypeDict[self.tdi_type],
+                deriv_delta_t,
+            )
         grad = grad_out.reshape(num_bin, nparams)
         if scales is not None:
             # convert dL/dtheta -> dL/d(eta) = Delta_theta * dL/dtheta
@@ -660,7 +741,15 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             grad_remove = grad_remove * scales_remove[None, :]
         return grad_add, grad_remove
 
-    def fill_global_wdm(self, templates, params, wdm_holder, convert_to_ra_dec: bool = True, data_index=None, factors=None):
+    def fill_global_wdm(self, templates, params, wdm_holder, convert_to_ra_dec: bool = True, data_index=None, factors=None,
+                        use_spline: bool = False, coarse_pts_per_year: int = 256):
+        """Scatter per-source WDM contributions into a global template buffer.
+
+        Set ``use_spline=True`` to dispatch to ``gb_wdm_spline_fill_global``,
+        which replaces fast_wdm_inner with cubic-spline interpolation of the
+        get_tdi outputs on a coarse uniform time grid of
+        ``coarse_pts_per_year`` points per Julian year.
+        """
         assert isinstance(templates, self.xp.ndarray)
 
         if templates.ndim == 1:
@@ -737,24 +826,42 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         assert data_index.max() < num_templates
         nparams = 9
 
-        deriv_delta_t = 500.0  # seconds
-
-        self.backend.GBComputationGroupWrap().gb_wdm_fill_global(
-            templates,
-            self.cpp_orbits,
-            self.cpp_tdi_config,
-            self.cpp_wdm_lookup_table,
-            self.cpp_wdm,
-            params_in,
-            data_index,
-            factors,
-            num_bin,
-            nparams,
-            self.T,
-            self.t_ref,
-            self.backend.TDITypeDict[self.tdi_type],
-            deriv_delta_t
-        )
+        if use_spline:
+            coarse_dt = _SECONDS_PER_YEAR / float(coarse_pts_per_year)
+            self.backend.GBComputationGroupWrap().gb_wdm_spline_fill_global(
+                templates,
+                self.cpp_orbits,
+                self.cpp_tdi_config,
+                self.cpp_wdm_lookup_table,
+                self.cpp_wdm,
+                params_in,
+                data_index,
+                factors,
+                num_bin,
+                nparams,
+                self.T,
+                self.t_ref,
+                self.backend.TDITypeDict[self.tdi_type],
+                coarse_dt,
+            )
+        else:
+            deriv_delta_t = 500.0  # seconds
+            self.backend.GBComputationGroupWrap().gb_wdm_fill_global(
+                templates,
+                self.cpp_orbits,
+                self.cpp_tdi_config,
+                self.cpp_wdm_lookup_table,
+                self.cpp_wdm,
+                params_in,
+                data_index,
+                factors,
+                num_bin,
+                nparams,
+                self.T,
+                self.t_ref,
+                self.backend.TDITypeDict[self.tdi_type],
+                deriv_delta_t
+            )
 
 
 class GBFDComputations(FastLISAResponseParallelModule):

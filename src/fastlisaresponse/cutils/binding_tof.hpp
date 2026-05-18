@@ -152,13 +152,13 @@ class WaveletLookupTableWrap : public ReturnPointerBase {
     // double min_f;
     // double min_fdot;
 
-    WaveletLookupTableWrap(array_type<double>c_nm_all_, array_type<double>s_nm_all_, int num_f_, int num_fdot_, double df_interp_, double dfdot_interp_, double min_f_, double min_fdot_, double layer_df_, double layer_dt_, int Nf_, int Nt_, int num_channel_, int ind_min_t_, int ind_max_t_, int ind_min_f_, int ind_max_f_)
+    WaveletLookupTableWrap(array_type<double>c_nm_all_, array_type<double>s_nm_all_, int num_f_, int num_fdot_, double df_interp_, double dfdot_interp_, double min_f_, double min_fdot_, double layer_df_, double layer_dt_, int Nf_, int Nt_, int num_channel_, int ind_min_t_, int ind_max_t_, int ind_min_f_, int ind_max_f_, int m_ref_)
     {
 
         wdm_lookup = new WaveletLookupTable(
             return_pointer_and_check_length(c_nm_all_, "c_nm_all", Nt_ * num_fdot_ * num_f_, 1),
             return_pointer_and_check_length(s_nm_all_, "s_nm_all", Nt_ * num_fdot_ * num_f_, 1),
-            num_f_, num_fdot_, df_interp_, dfdot_interp_, min_f_, min_fdot_, layer_df_, layer_dt_, Nf_, Nt_, num_channel_, ind_min_t_, ind_max_t_, ind_min_f_, ind_max_f_
+            num_f_, num_fdot_, df_interp_, dfdot_interp_, min_f_, min_fdot_, layer_df_, layer_dt_, Nf_, Nt_, num_channel_, ind_min_t_, ind_max_t_, ind_min_f_, ind_max_f_, m_ref_
         );
     };
     ~WaveletLookupTableWrap(){
@@ -252,6 +252,30 @@ class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBas
         array_type<double> params_all, array_type<double> tn_arr,
         int num_bin, int nparams, int num_t, int nchannels,
         double T, double t_ref, double deriv_delta_t,
+        array_type<double> amp_out, array_type<double> phi_out,
+        array_type<double> f_out, array_type<double> fdot_out,
+        array_type<double> phase_ref_out);
+
+    // ---- Spline-path mirrors --------------------------------------------
+    // `coarse_dt` is the coarse-grid spacing (seconds) used to fit cubic
+    // splines to the smooth get_tdi outputs. Smaller -> more accurate at the
+    // cost of more get_tdi work. A typical Python-side choice is
+    //     coarse_dt = (1 year in seconds) / coarse_pts_per_year
+    // with `coarse_pts_per_year` defaulting to 256.
+    void gb_wdm_spline_fill_global(array_type<double>template_fill, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, array_type<double>factors_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double coarse_dt);
+    void gb_wdm_spline_get_ll(array_type<double>d_h_out, array_type<double>h_h_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, array_type<int>noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double coarse_dt);
+    void gb_wdm_spline_swap_ll(array_type<double>d_h_add_out, array_type<double>d_h_remove_out, array_type<double>add_add_out, array_type<double>remove_remove_out, array_type<double>add_remove_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_add_all, array_type<double>params_remove_all, array_type<int>data_index_all, array_type<int>noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double coarse_dt);
+    void gb_wdm_spline_get_ll_grad(array_type<double>grad_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, array_type<int>noise_index_all, array_type<double>param_eps, int num_bin, int nparams, double T, double t_ref, int tdi_type, double coarse_dt);
+
+    // Spline diagnostic — same output layout as gb_wdm_eval_inputs; builds a
+    // single WDM_SPLINE_L-point spline window starting at t_window_start with
+    // spacing coarse_dt and evaluates at every tn in tn_arr.
+    void gb_wdm_spline_eval_inputs(
+        OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+        array_type<double> params_all, array_type<double> tn_arr,
+        int num_bin, int nparams, int num_t, int nchannels,
+        double T, double t_ref,
+        double t_window_start, double coarse_dt,
         array_type<double> amp_out, array_type<double> phi_out,
         array_type<double> f_out, array_type<double> fdot_out,
         array_type<double> phase_ref_out);
