@@ -539,11 +539,15 @@ double WaveletLookupTable::get_w_mn_lookup(cmplx tdi_channel_val, double f, doub
 
     double w_mn = c_nm * tdi_channel_val.real() + s_nm * tdi_channel_val.imag();
 
-    // m-parity correction: build reads wave_*_wdm[:, m_ref - m_diff, :]
-    // (note the minus sign), so the stored coefficients carry an implicit
-    // (-1)^(m_source - m_ref) factor.
-    int m_source = int(f / layer_df);
-    if (((m_source - m_ref) & 1) != 0)
+    // m-parity correction. The Python build pre-multiplies each m_diff
+    // block by (-1)^(m_diff_build) so that linear_interp across f_norm
+    // block boundaries is smooth. The block reached at lookup is
+    // m_diff_build = -m_diff_eval = m_source - layer_m, so the build flip
+    // imprints (-1)^(m_source - layer_m) onto the looked-up value.
+    // Combined with the original FFT-mirror correction
+    // (-1)^(m_source - m_ref), the net eval sign is
+    // (-1)^((layer_m - m_ref) parity).
+    if (((layer_m - m_ref) & 1) != 0)
     {
         w_mn = -w_mn;
     }
@@ -555,8 +559,8 @@ CUDA_DEVICE
 double WaveletLookupTable::get_wdm_in_channel_over_layers(cmplx tdi_channel_val, double f, double fdot, int m, int n)
 {
     // printf("CHECK66 %d %e %e %e %e %e\n", n, f[0], f[1], f[2], avg_f, wdm->layer_df);
-  
-    if ((m >= 0) && (m < Nf))
+
+    if ((m >= ind_min_f) && (m < ind_max_f))
     {
         // for (int layer_m = layer_m_here; layer_m <= layer_m_here; layer_m += 1)
         return get_w_mn_lookup(tdi_channel_val, f, fdot, m, n);
@@ -1474,7 +1478,11 @@ void gb_wdm_fill_global_kernel(double *template_fill, Orbits* orbits, TDIConfig 
         // printf("CHECK3 %d\n", bin_i);
         tdi_on_fly_here.get_sky_vectors(&k, &u, &v, params);
         // printf("INSIDE3: %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e\n", params[tdi_on_fly_here.beta_index], params[tdi_on_fly_here.lam_index], k.x, k.y, k.z, u.x, u.y, u.z, v.x, v.y, v.z);
-    
+
+        // correction must NOT be the per-pixel int(f(t_n)/layer_df) (which
+        // jumps under LISA-Doppler crossings of layer boundaries). Use the
+        // source's carrier frequency f0 = params[1] once per binary.
+
         for (int n = THREAD_START + n_min; n <= n_max; n += BLOCK_INCR)
         {
             // Absolute time: WDM pixel n corresponds to t = n*layer_dt + t_ref so
@@ -1791,6 +1799,8 @@ void gb_wdm_spline_fill_global_kernel(
             params[i] = params_all[bin_i * nparams + i];
         CUDA_SYNC_THREADS;
 
+        // gb_wdm_fill_global_kernel).
+
         double t_active_start = t_ref + (double) n_min * layer_dt;
         int K = wdm_spline_num_windows(n_min, n_max, layer_dt, coarse_dt);
 
@@ -1968,7 +1978,9 @@ void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIC
         // printf("CHECK3 %d\n", bin_i);
         tdi_on_fly_here.get_sky_vectors(&k, &u, &v, params);
         // printf("INSIDE3: %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e\n", params[tdi_on_fly_here.beta_index], params[tdi_on_fly_here.lam_index], k.x, k.y, k.z, u.x, u.y, u.z, v.x, v.y, v.z);
-    
+
+        // gb_wdm_fill_global_kernel).
+
         for (int n = THREAD_START + n_min; n <= n_max; n += BLOCK_INCR)
         {
             // Absolute time: WDM pixel n corresponds to t = n*layer_dt + t_ref so
@@ -2120,6 +2132,8 @@ void gb_wdm_spline_get_ll_kernel(
         for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
             params[i] = params_all[bin_i * nparams + i];
         CUDA_SYNC_THREADS;
+
+        // gb_wdm_fill_global_kernel).
 
         double t_active_start = t_ref + (double) n_min * layer_dt;
         int K = wdm_spline_num_windows(n_min, n_max, layer_dt, coarse_dt);
@@ -2319,6 +2333,8 @@ void gb_wdm_swap_ll_kernel(double *d_h_add_out, double *d_h_remove_out, double *
 
         tdi_on_fly_here.get_sky_vectors(&k_add, &u_add, &v_add, params_add);
         tdi_on_fly_here.get_sky_vectors(&k_remove, &u_remove, &v_remove, params_remove);
+
+        // gb_wdm_fill_global_kernel).
 
         for (int n = THREAD_START + n_min; n <= n_max; n += BLOCK_INCR)
         {
@@ -2540,6 +2556,8 @@ void gb_wdm_spline_swap_ll_kernel(
             params_remove[i] = params_remove_all[bin_i * nparams + i];
         }
         CUDA_SYNC_THREADS;
+
+        // gb_wdm_fill_global_kernel).
 
         double t_active_start = t_ref + (double) n_min * layer_dt;
         int K = wdm_spline_num_windows(n_min, n_max, layer_dt, coarse_dt);
@@ -2818,6 +2836,8 @@ void gb_wdm_get_ll_grad_kernel(double *grad_out, Orbits* orbits, TDIConfig *tdi_
             double avg_f_c = (f_c[0] + f_c[1] + f_c[2]) / 3.0;
             int layer_m_c = (int)(avg_f_c / layer_df);
 
+            // gb_wdm_fill_global_kernel).
+
             // Cache central w_mn at each relevant layer (frozen layer index).
             double w_mn_c[2 * num_diff + 1][3];
             for (int diff = -num_diff; diff <= num_diff; diff += 1)
@@ -3042,6 +3062,7 @@ void gb_wdm_spline_get_ll_grad_kernel(
         for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
             params_base[i] = params_all[bin_i * nparams + i];
         CUDA_SYNC_THREADS;
+
 
         // Per-thread gradient accumulators (one per parameter slot).
         double grad_acc[N_PARAMS_MAX];
@@ -3288,6 +3309,8 @@ void gb_wdm_swap_ll_grad_kernel(double *grad_add_out, double *grad_remove_out, O
         Vec k_rem_c(0., 0., 0.), u_rem_c(0., 0., 0.), v_rem_c(0., 0., 0.);
         tdi_on_fly_here.get_sky_vectors(&k_add_c, &u_add_c, &v_add_c, params_add_priv);
         tdi_on_fly_here.get_sky_vectors(&k_rem_c, &u_rem_c, &v_rem_c, params_rem_priv);
+
+        // gb_wdm_fill_global_kernel).
 
         for (int n = THREAD_START + n_min; n <= n_max; n += BLOCK_INCR)
         {
