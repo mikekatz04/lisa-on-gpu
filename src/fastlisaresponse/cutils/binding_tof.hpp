@@ -152,13 +152,17 @@ class WaveletLookupTableWrap : public ReturnPointerBase {
     // double min_f;
     // double min_fdot;
 
-    WaveletLookupTableWrap(array_type<double>c_nm_all_, array_type<double>s_nm_all_, int num_f_, int num_fdot_, double df_interp_, double dfdot_interp_, double min_f_, double min_fdot_, double layer_df_, double layer_dt_, int Nf_, int Nt_, int num_channel_, int ind_min_t_, int ind_max_t_, int ind_min_f_, int ind_max_f_, int m_ref_)
+    WaveletLookupTableWrap(array_type<double>c_nm_all_, array_type<double>s_nm_all_, int num_f_, int num_fdot_, double df_interp_, double dfdot_interp_, double min_f_, double min_fdot_, double layer_df_, double layer_dt_, int Nf_, int Nt_, int num_channel_, int ind_min_t_, int ind_max_t_, int ind_min_f_, int ind_max_f_, int m_ref_, int n_ref_, int kind_)
     {
-
+        // PER_N tables are (Nt, num_fdot, num_f); N_REF_ONLY tables are
+        // (num_fdot, num_f). Size-check the input arrays accordingly.
+        size_t expected_len = (kind_ == LOOKUP_N_REF_ONLY)
+            ? (size_t)num_fdot_ * (size_t)num_f_
+            : (size_t)Nt_ * (size_t)num_fdot_ * (size_t)num_f_;
         wdm_lookup = new WaveletLookupTable(
-            return_pointer_and_check_length(c_nm_all_, "c_nm_all", Nt_ * num_fdot_ * num_f_, 1),
-            return_pointer_and_check_length(s_nm_all_, "s_nm_all", Nt_ * num_fdot_ * num_f_, 1),
-            num_f_, num_fdot_, df_interp_, dfdot_interp_, min_f_, min_fdot_, layer_df_, layer_dt_, Nf_, Nt_, num_channel_, ind_min_t_, ind_max_t_, ind_min_f_, ind_max_f_, m_ref_
+            return_pointer_and_check_length(c_nm_all_, "c_nm_all", expected_len, 1),
+            return_pointer_and_check_length(s_nm_all_, "s_nm_all", expected_len, 1),
+            num_f_, num_fdot_, df_interp_, dfdot_interp_, min_f_, min_fdot_, layer_df_, layer_dt_, Nf_, Nt_, num_channel_, ind_min_t_, ind_max_t_, ind_min_f_, ind_max_f_, m_ref_, n_ref_, kind_
         );
     };
     ~WaveletLookupTableWrap(){

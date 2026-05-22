@@ -169,7 +169,12 @@ class pyResponseTDI(FastLISAResponseParallelModule):
         self.buffer_integer = self.order * 2 + 1
         self.half_order = int((order + 1) / 2)
 
-        # setup TDI information
+        # setup TDI information. ``_init_TDI_delays`` (and the C++ binding
+        # below) expects ``self.tdi`` to be a :class:`TDIConfig` instance,
+        # so promote string / list inputs here for backwards compatibility
+        # with callers that still pass ``tdi="1st generation"``.
+        if not isinstance(tdi, TDIConfig):
+            tdi = TDIConfig(tdi, force_backend=force_backend)
         self.tdi = tdi
         self.tdi_chan = tdi_chan
 
@@ -194,7 +199,7 @@ class pyResponseTDI(FastLISAResponseParallelModule):
 
         # setup spacecraft links indexes
 
-        self.tdi_config = tdi
+        self.tdi_config = self.tdi
         
         # setup TDI info
         self._init_TDI_delays()

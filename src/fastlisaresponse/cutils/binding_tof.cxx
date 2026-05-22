@@ -569,9 +569,9 @@ void tdionthefly_part(py::module &m) {
     py::class_<WaveletLookupTableWrap>(m, "WaveletLookupTableWrapCPU")
 #endif
 
-    // Bind the constructor
-    .def(py::init<array_type<double>,array_type<double>,int,int,double,double,double,double, double, double, int, int, int, int, int, int, int, int>(),
-         py::arg("c_nm_all"), py::arg("s_nm_all"), py::arg("num_f"), py::arg("num_fdot"), py::arg("df_interp"), py::arg("dfdot_interp"), py::arg("min_f"), py::arg("min_fdot"), py::arg("layer_df"), py::arg("layer_dt"), py::arg("Nf"), py::arg("Nt"), py::arg("num_channel"), py::arg("ind_min_t"), py::arg("ind_max_t"), py::arg("ind_min_f"), py::arg("ind_max_f"), py::arg("m_ref"))
+    // Bind the constructor — kind selects the LookupKind (0=PER_N, 1=N_REF_ONLY).
+    .def(py::init<array_type<double>,array_type<double>,int,int,double,double,double,double, double, double, int, int, int, int, int, int, int, int, int, int>(),
+         py::arg("c_nm_all"), py::arg("s_nm_all"), py::arg("num_f"), py::arg("num_fdot"), py::arg("df_interp"), py::arg("dfdot_interp"), py::arg("min_f"), py::arg("min_fdot"), py::arg("layer_df"), py::arg("layer_dt"), py::arg("Nf"), py::arg("Nt"), py::arg("num_channel"), py::arg("ind_min_t"), py::arg("ind_max_t"), py::arg("ind_min_f"), py::arg("ind_max_f"), py::arg("m_ref"), py::arg("n_ref"), py::arg("kind"))
     // Bind member functions
     .def("get_w_mn_arr", &WaveletLookupTableWrap::get_w_mn_arr,
          py::arg("out"), py::arg("amp"), py::arg("phi"), py::arg("f"), py::arg("fdot"),
@@ -589,9 +589,9 @@ void tdionthefly_part(py::module &m) {
 #else
     py::class_<WaveletLookupTable>(m, "WaveletLookupTableCPU")
 #endif
-    // Bind the constructor
-    .def(py::init<double*,double*,int,int,double,double,double,double, double, double, int, int, int, int, int, int, int, int>(),
-         py::arg("c_nm_all"), py::arg("s_nm_all"), py::arg("num_f"), py::arg("num_fdot"), py::arg("df_interp"), py::arg("dfdot_interp"), py::arg("min_f"), py::arg("min_fdot"), py::arg("layer_df"), py::arg("layer_dt"), py::arg("Nf"), py::arg("Nt"), py::arg("num_channel"), py::arg("ind_min_t"), py::arg("ind_max_t"), py::arg("ind_min_f"), py::arg("ind_max_f"), py::arg("m_ref"))
+    // Bind the constructor — see LookupKind in TDIonTheFly.hh for kind values.
+    .def(py::init<double*,double*,int,int,double,double,double,double, double, double, int, int, int, int, int, int, int, int, int, int>(),
+         py::arg("c_nm_all"), py::arg("s_nm_all"), py::arg("num_f"), py::arg("num_fdot"), py::arg("df_interp"), py::arg("dfdot_interp"), py::arg("min_f"), py::arg("min_fdot"), py::arg("layer_df"), py::arg("layer_dt"), py::arg("Nf"), py::arg("Nt"), py::arg("num_channel"), py::arg("ind_min_t"), py::arg("ind_max_t"), py::arg("ind_min_f"), py::arg("ind_max_f"), py::arg("m_ref"), py::arg("n_ref"), py::arg("kind"))
     ;
 
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)

@@ -83,32 +83,53 @@ class GBWDMComputations(FastLISAResponseParallelModule):
 
     @wdm_lookup_table.setter
     def wdm_lookup_table(self, wdm_lookup_table: WDMLookupTable) -> None:
-        """Set wdm lookup table."""
+        """Set wdm lookup table.
+
+        Two table layouts are supported, picked by
+        ``wdm_lookup_table.build_kind``:
+
+          * ``'per_n'``      → shape ``(Nt, num_fdot, num_f)`` (legacy)
+          * ``'n_ref_only'`` → shape ``(num_fdot, num_f)`` (Plan A)
+
+        The kind is forwarded to the C++ ``WaveletLookupTable`` as the
+        ``kind`` int (matches the ``LookupKind`` enum in
+        ``TDIonTheFly.hh`` — 0 = PER_N, 1 = N_REF_ONLY).
+        """
 
         self._wdm_lookup_table = wdm_lookup_table
-        # Tables are (Nt, num_fdot, num_f); the C lookup indexes by layer_n,
-        # so the underlying buffer must be contiguous in this layout.
+
         Nt = wdm_lookup_table.settings.Nt
         num_fdot = wdm_lookup_table.fdot_steps
         num_f = wdm_lookup_table.f_steps
-        expected_shape = (Nt, num_fdot, num_f)
+        build_kind = getattr(wdm_lookup_table, "build_kind", "per_n")
+        if build_kind == "n_ref_only":
+            expected_shape = (num_fdot, num_f)
+            kind_int = 1
+        elif build_kind == "per_n":
+            expected_shape = (Nt, num_fdot, num_f)
+            kind_int = 0
+        else:
+            raise ValueError(
+                f"Unknown WDMLookupTable.build_kind={build_kind!r}; "
+                "expected 'per_n' or 'n_ref_only'."
+            )
         assert wdm_lookup_table.table_cos.shape == expected_shape, (
-            f"table_cos shape {wdm_lookup_table.table_cos.shape} != {expected_shape}"
+            f"table_cos shape {wdm_lookup_table.table_cos.shape} != "
+            f"{expected_shape} for build_kind={build_kind!r}"
         )
         assert wdm_lookup_table.table_sin.shape == expected_shape, (
-            f"table_sin shape {wdm_lookup_table.table_sin.shape} != {expected_shape}"
+            f"table_sin shape {wdm_lookup_table.table_sin.shape} != "
+            f"{expected_shape} for build_kind={build_kind!r}"
         )
         self.c_nm_all = self.xp.ascontiguousarray(self.xp.asarray(wdm_lookup_table.table_cos))
         self.s_nm_all = self.xp.ascontiguousarray(self.xp.asarray(wdm_lookup_table.table_sin))
-        
+
         delta_f = wdm_lookup_table.f_vals_norm[1] - wdm_lookup_table.f_vals_norm[0]
         try:
             delta_fdot = wdm_lookup_table.fdot_vals[1] - wdm_lookup_table.fdot_vals[0]
         except IndexError:
             # this happens when there is no fdot
             delta_fdot = 1.0
-
-        is_m_ref_n_ref_even = False
 
         self.cpp_wdm_lookup_table = self.backend.WaveletLookupTableWrap(
             self.c_nm_all,
@@ -129,6 +150,8 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             wdm_lookup_table.settings.ind_min_f,
             wdm_lookup_table.settings.ind_max_f,
             int(wdm_lookup_table.m_ref),
+            int(getattr(wdm_lookup_table, "n_ref", 0)),
+            kind_int,
         )
 
     @classmethod

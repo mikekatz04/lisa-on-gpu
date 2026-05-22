@@ -423,6 +423,17 @@ class FDDomain {
 };
 
 
+// Lookup table kind. Selects how linear_interp indexes the coefficient buffer
+// and which extra sign corrections get_w_mn_lookup applies.
+//   PER_N      — legacy. Table is (Nt, num_fdot, num_f); layer_n offsets into
+//                the time axis. No extra dn-sign needed (the per-n parity
+//                swap is baked into each n slice at build time).
+//   N_REF_ONLY — Plan A. Table is (num_fdot, num_f) — only the (m_ref, n_ref)
+//                pixel was extracted at build time. layer_n is unused for
+//                indexing; eval applies (-1)^(layer_n - n_ref) to translate
+//                from the built n_ref pixel to the desired layer_n.
+enum LookupKind : int { LOOKUP_PER_N = 0, LOOKUP_N_REF_ONLY = 1 };
+
 class WaveletLookupTable : public WDMSettings{
   public:
     double *c_nm_all;
@@ -439,10 +450,15 @@ class WaveletLookupTable : public WDMSettings{
     // OPPOSITE parity from m_ref pick up an overall (-1) on the WDM
     // coefficient — see the parity-correction comment in get_w_mn_lookup.
     int m_ref;
+    // Build-time reference time pixel. Only consulted for kind==N_REF_ONLY
+    // (the dn-sign correction). Pass 0 for PER_N.
+    int n_ref;
+    // Dispatch flag: see LookupKind. Stored as int for CUDA portability.
+    int kind;
 
     CUDA_CALLABLE_MEMBER
     WaveletLookupTable(double *c_nm_all_, double *s_nm_all_, int num_f_, int num_fdot_, double df_interp_, double dfdot_interp_, double min_f_scaled_, double min_fdot_,
-        double layer_df_, double layer_dt_, int Nf_, int Nt_, int num_channel_, int ind_min_t_, int ind_max_t_, int ind_min_f_, int ind_max_f_, int m_ref_): WDMSettings(layer_df_, layer_dt_, Nf_, Nt_, num_channel_, ind_min_t_, ind_max_t_, ind_min_f_, ind_max_f_) {
+        double layer_df_, double layer_dt_, int Nf_, int Nt_, int num_channel_, int ind_min_t_, int ind_max_t_, int ind_min_f_, int ind_max_f_, int m_ref_, int n_ref_, int kind_): WDMSettings(layer_df_, layer_dt_, Nf_, Nt_, num_channel_, ind_min_t_, ind_max_t_, ind_min_f_, ind_max_f_) {
         // n * Nf + m
         c_nm_all = c_nm_all_;
         s_nm_all = s_nm_all_;
@@ -453,6 +469,8 @@ class WaveletLookupTable : public WDMSettings{
         min_f_scaled = min_f_scaled_;
         min_fdot = min_fdot_;
         m_ref = m_ref_;
+        n_ref = n_ref_;
+        kind = kind_;
     };
     CUDA_DEVICE
     double get_wdm_in_channel_over_layers(cmplx tdi_channel_val, double f, double fdot, int m, int n);

@@ -454,10 +454,14 @@ void WDMDomain::get_inner_product_value_cross_channel(double *d_h, double *h_h, 
 CUDA_DEVICE
 double WaveletLookupTable::linear_interp(double f_scaled, double fdot, double *z_vals, int layer_n)
 {
-    // Table layout is (Nt, num_fdot, num_f). Offset by layer_n to the correct
-    // time-pixel slice; the Python lookup is genuinely n-dependent because of
-    // the (m + n) parity swap baked in at table-construction time.
-    double *z_slice = z_vals + (size_t)layer_n * (size_t)num_fdot * (size_t)num_f;
+    // PER_N      table is (Nt, num_fdot, num_f) — offset by layer_n.
+    // N_REF_ONLY table is     (num_fdot, num_f) — no per-n axis; the
+    //            (-1)^(layer_n - n_ref) correction is applied in
+    //            get_w_mn_lookup, not here.
+    double *z_slice = z_vals;
+    if (kind == LOOKUP_PER_N) {
+        z_slice += (size_t)layer_n * (size_t)num_fdot * (size_t)num_f;
+    }
 
     if (num_fdot > 1)
     {
@@ -520,6 +524,20 @@ double WaveletLookupTable::get_w_mn_lookup(cmplx tdi_channel_val, double f, doub
     double _s_nm = linear_interp(f_scaled, fdot, s_nm_all, layer_n);
     double c_nm, s_nm;
 
+    // N_REF_ONLY: the table was built at a single (m_ref, n_ref) pixel,
+    // so n-translation is recovered via (-1)^(layer_n - n_ref) on both
+    // sin and cos coefficients. (Exact for fdot=0; an approximation for
+    // chirp — see Plan A notes in WDM_FDOT_LOOKUP_PLAN.md.) PER_N tables
+    // already carry the per-n information so no dn-sign is needed.
+    if (kind == LOOKUP_N_REF_ONLY)
+    {
+        if (((layer_n - n_ref) & 1) != 0)
+        {
+            _c_nm = -_c_nm;
+            _s_nm = -_s_nm;
+        }
+    }
+
     bool is_m_plus_n_even = (layer_m + layer_n) % 2 == 0;
 
     // Build pre-applies an (m+n)-parity sin/cos swap to the table.
@@ -546,7 +564,8 @@ double WaveletLookupTable::get_w_mn_lookup(cmplx tdi_channel_val, double f, doub
     // imprints (-1)^(m_source - layer_m) onto the looked-up value.
     // Combined with the original FFT-mirror correction
     // (-1)^(m_source - m_ref), the net eval sign is
-    // (-1)^((layer_m - m_ref) parity).
+    // (-1)^((layer_m - m_ref) parity). Applies to BOTH per_n and
+    // n_ref_only builds — see get_wdm_coeffs in lisatools/domains.py.
     if (((layer_m - m_ref) & 1) != 0)
     {
         w_mn = -w_mn;
