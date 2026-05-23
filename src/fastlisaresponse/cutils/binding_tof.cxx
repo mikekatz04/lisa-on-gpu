@@ -59,6 +59,25 @@ void GBTDIonTheFlyWrap::run_fd_wave_tdi_wrap(
 }
 
 
+void SOBBHTDIonTheFlyWrap::run_wave_tdi_wrap(
+    array_type<std::complex<double>>tdi_channels_arr,
+    array_type<double>tdi_amp, array_type<double>tdi_phase, array_type<double>phi_ref,
+    array_type<double>params, array_type<double>t_arr, int N, int num_bin, int n_params, int nchannels
+)
+{
+    sobbh_run_wave_tdi_wrap(
+        waveform,
+        (cmplx*)return_pointer_and_check_length(tdi_channels_arr, "tdi_channels_arr", N, num_bin * nchannels),
+        return_pointer_and_check_length(tdi_amp, "tdi_amp", N, num_bin * nchannels),
+        return_pointer_and_check_length(tdi_phase, "tdi_phase", N, num_bin * nchannels),
+        return_pointer_and_check_length(phi_ref, "phi_ref", N, num_bin),
+        return_pointer_and_check_length(params, "params", n_params, num_bin),
+        return_pointer_and_check_length(t_arr, "t_arr", N, num_bin),
+        N, num_bin, n_params, nchannels
+    );
+}
+
+
 void TDSplineTDIWaveformWrap::run_wave_tdi_wrap(
     array_type<std::complex<double>>tdi_channels_arr, 
     array_type<double>tdi_amp, array_type<double>tdi_phase, array_type<double>phi_ref, 
@@ -559,7 +578,31 @@ void tdionthefly_part(py::module &m) {
 #endif
 
     // Bind the constructor
-    .def(py::init<Orbits *, TDIConfig*, double, double>(), 
+    .def(py::init<Orbits *, TDIConfig*, double, double>(),
+         py::arg("orbits"), py::arg("tdi_config"), py::arg("Tobs"), py::arg("t_ref"))
+    ;
+
+#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
+    py::class_<SOBBHTDIonTheFlyWrap>(m, "SOBBHTDIonTheFlyWrapGPU")
+#else
+    py::class_<SOBBHTDIonTheFlyWrap>(m, "SOBBHTDIonTheFlyWrapCPU")
+#endif
+
+    .def(py::init<OrbitsWrap_responselisa *, TDIConfigWrap *, double, double>(),
+         py::arg("orbits"), py::arg("tdi_config"), py::arg("Tobs"), py::arg("t_ref"))
+    .def("run_wave_tdi_wrap", &SOBBHTDIonTheFlyWrap::run_wave_tdi_wrap, "Run SOBBH TDI on the fly.")
+    .def("get_buffer_size", &SOBBHTDIonTheFlyWrap::get_buffer_size, "Get needed buffer size.")
+    .def_readwrite("orbits", &SOBBHTDIonTheFlyWrap::orbits)
+    .def_readwrite("tdi_config", &SOBBHTDIonTheFlyWrap::tdi_config)
+    ;
+
+#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
+    py::class_<SOBBHTDIonTheFly>(m, "SOBBHTDIonTheFlyGPU")
+#else
+    py::class_<SOBBHTDIonTheFly>(m, "SOBBHTDIonTheFlyCPU")
+#endif
+
+    .def(py::init<Orbits *, TDIConfig*, double, double>(),
          py::arg("orbits"), py::arg("tdi_config"), py::arg("Tobs"), py::arg("t_ref"))
     ;
 

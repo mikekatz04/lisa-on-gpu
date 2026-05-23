@@ -19,6 +19,7 @@ namespace py = pybind11;
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
 #include "pybind11_cuda_array_interface.hpp"
 #define GBTDIonTheFlyWrap GBTDIonTheFlyWrapGPU
+#define SOBBHTDIonTheFlyWrap SOBBHTDIonTheFlyWrapGPU
 #define FDSplineTDIWaveformWrap FDSplineTDIWaveformWrapGPU
 #define TDSplineTDIWaveformWrap TDSplineTDIWaveformWrapGPU
 #define WaveletLookupTableWrap WaveletLookupTableWrapGPU
@@ -26,6 +27,7 @@ namespace py = pybind11;
 #define GBComputationGroupWrap GBComputationGroupWrapGPU
 #else
 #define GBTDIonTheFlyWrap GBTDIonTheFlyWrapCPU
+#define SOBBHTDIonTheFlyWrap SOBBHTDIonTheFlyWrapCPU
 #define FDSplineTDIWaveformWrap FDSplineTDIWaveformWrapCPU
 #define TDSplineTDIWaveformWrap TDSplineTDIWaveformWrapCPU
 #define WaveletLookupTableWrap WaveletLookupTableWrapCPU
@@ -137,6 +139,35 @@ class GBTDIonTheFlyWrap : public LISATDIonTheFlyWrap {
         return waveform->get_gb_fd_buffer_size(N_sparse, nchannels);
     }
 
+};
+
+
+// Pybind11 wrapper for SOBBHTDIonTheFly. Mirrors GBTDIonTheFlyWrap but
+// exposes only the time-domain run_wave_tdi path; SOBBH currently has no
+// WDM-lookup / heterodyne-FD counterparts.
+class SOBBHTDIonTheFlyWrap : public LISATDIonTheFlyWrap {
+  public:
+    SOBBHTDIonTheFly *waveform;
+    double T;
+    double t_ref;
+
+    SOBBHTDIonTheFlyWrap(OrbitsWrap_responselisa *orbits_, TDIConfigWrap *tdi_config_, double T_, double t_ref_): LISATDIonTheFlyWrap(orbits_, tdi_config_)
+    {
+        T = T_;
+        t_ref = t_ref_;
+        waveform = new SOBBHTDIonTheFly(orbits_->orbits, tdi_config_->tdi_config, T_, t_ref_);
+    };
+    ~SOBBHTDIonTheFlyWrap(){
+        delete waveform;
+    };
+
+    void run_wave_tdi_wrap(
+        array_type<std::complex<double>>tdi_channels_arr,
+        array_type<double>tdi_amp, array_type<double>tdi_phase, array_type<double>phi_ref,
+        array_type<double>params, array_type<double>t_arr, int N, int num_bin, int n_params, int nchannels
+    );
+
+    int get_buffer_size(int N){return waveform->get_sobbh_buffer_size(N);};
 };
 
 

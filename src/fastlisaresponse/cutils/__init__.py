@@ -15,6 +15,7 @@ class FastLISAResponseBackendMethods(BackendMethods):
     TDSplineTDIWaveformWrap: object
     FDSplineTDIWaveformWrap: object
     GBTDIonTheFlyWrap: object
+    SOBBHTDIonTheFlyWrap: object
     LISAResponseWrap: object
     LISAResponse: object
     OrbitsWrap: object
@@ -31,6 +32,7 @@ class FastLISAResponseBackend:
     TDSplineTDIWaveformWrap: object
     FDSplineTDIWaveformWrap: object
     GBTDIonTheFlyWrap: object
+    SOBBHTDIonTheFlyWrap: object
     LISAResponseWrap: object
     LISAResponse: object
     OrbitsWrap: object
@@ -52,6 +54,7 @@ class FastLISAResponseBackend:
         self.TDSplineTDIWaveformWrap = fastlisaresponse_backend_methods.TDSplineTDIWaveformWrap
         self.FDSplineTDIWaveformWrap = fastlisaresponse_backend_methods.FDSplineTDIWaveformWrap
         self.GBTDIonTheFlyWrap = fastlisaresponse_backend_methods.GBTDIonTheFlyWrap
+        self.SOBBHTDIonTheFlyWrap = fastlisaresponse_backend_methods.SOBBHTDIonTheFlyWrap
         self.OrbitsWrap = fastlisaresponse_backend_methods.OrbitsWrap
         self.TDIConfigWrap = fastlisaresponse_backend_methods.TDIConfigWrap
         self.TDIConfig = fastlisaresponse_backend_methods.TDIConfig
@@ -95,6 +98,7 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
             TDSplineTDIWaveformWrap=fastlisaresponse_backend_cpu.tdionthefly.TDSplineTDIWaveformWrapCPU,
             FDSplineTDIWaveformWrap=fastlisaresponse_backend_cpu.tdionthefly.FDSplineTDIWaveformWrapCPU,
             GBTDIonTheFlyWrap=fastlisaresponse_backend_cpu.tdionthefly.GBTDIonTheFlyWrapCPU,
+            SOBBHTDIonTheFlyWrap=fastlisaresponse_backend_cpu.tdionthefly.SOBBHTDIonTheFlyWrapCPU,
             LISAResponseWrap=fastlisaresponse_backend_cpu.responselisa.LISAResponseWrapCPU,
             LISAResponse=fastlisaresponse_backend_cpu.responselisa.LISAResponseCPU,
             OrbitsWrap=fastlisaresponse_backend_cpu.responselisa.OrbitsWrapCPU_responselisa,
@@ -147,6 +151,7 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
             TDSplineTDIWaveformWrap=fastlisaresponse_backend_cuda11x.tdionthefly.TDSplineTDIWaveformWrapGPU,
             FDSplineTDIWaveformWrap=fastlisaresponse_backend_cuda11x.tdionthefly.FDSplineTDIWaveformWrapGPU,
             GBTDIonTheFlyWrap=fastlisaresponse_backend_cuda11x.tdionthefly.GBTDIonTheFlyWrapGPU,
+            SOBBHTDIonTheFlyWrap=fastlisaresponse_backend_cuda11x.tdionthefly.SOBBHTDIonTheFlyWrapGPU,
             LISAResponseWrap=fastlisaresponse_backend_cuda11x.responselisa.LISAResponseWrapGPU,
             LISAResponse=fastlisaresponse_backend_cuda11x.responselisa.LISAResponseGPU,
             OrbitsWrap=fastlisaresponse_backend_cuda11x.responselisa.OrbitsWrapGPU_responselisa,
@@ -196,6 +201,7 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
             TDSplineTDIWaveformWrap=fastlisaresponse_backend_cuda12x.tdionthefly.TDSplineTDIWaveformWrapGPU,
             FDSplineTDIWaveformWrap=fastlisaresponse_backend_cuda12x.tdionthefly.FDSplineTDIWaveformWrapGPU,
             GBTDIonTheFlyWrap=fastlisaresponse_backend_cuda12x.tdionthefly.GBTDIonTheFlyWrapGPU,
+            SOBBHTDIonTheFlyWrap=fastlisaresponse_backend_cuda12x.tdionthefly.SOBBHTDIonTheFlyWrapGPU,
             LISAResponseWrap=fastlisaresponse_backend_cuda12x.responselisa.LISAResponseWrapGPU,
             LISAResponse=fastlisaresponse_backend_cuda12x.responselisa.LISAResponseGPU,
             OrbitsWrap=fastlisaresponse_backend_cuda12x.responselisa.OrbitsWrapGPU_responselisa,
@@ -249,6 +255,18 @@ KNOWN_BACKENDS = {
     "cuda11x": FastLISAResponseCuda11xBackend,
     "cpu": FastLISAResponseCpuBackend,
 }
+
+# The JAX backend lives in ``fastlisaresponse.jax`` (one directory up)
+# and is gated on ``import jax`` at module load time. Aggregating it
+# in here keeps ``KNOWN_BACKENDS`` as the single registry users /
+# config validators look at, even though the implementation lives
+# outside ``cutils``.
+try:
+    from ..jax import FastLISAResponseJaxBackend as _FastLISAResponseJaxBackend
+    if _FastLISAResponseJaxBackend is not None:
+        KNOWN_BACKENDS["jax"] = _FastLISAResponseJaxBackend
+except (ImportError, ModuleNotFoundError):
+    pass
 
 """List of existing backends, per default order of preference."""
 # TODO: __all__ ?

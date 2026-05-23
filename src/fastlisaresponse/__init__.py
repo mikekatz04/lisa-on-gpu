@@ -34,12 +34,24 @@ from gpubackendtools import Globals
 from .cutils import FastLISAResponseCpuBackend, FastLISAResponseCuda11xBackend, FastLISAResponseCuda12xBackend, FastLISAResponseCuda13xBackend
 
 
+# Backend registry. The cutils-side (C++/CUDA) backends are always
+# registered. The JAX backend is added on top if jax is importable, so
+# users without jax can keep using the C++ path without paying any cost.
 add_backends = {
     "fastlisaresponse_cpu": FastLISAResponseCpuBackend,
     "fastlisaresponse_cuda11x": FastLISAResponseCuda11xBackend,
     "fastlisaresponse_cuda12x": FastLISAResponseCuda12xBackend,
     "fastlisaresponse_cuda13x": FastLISAResponseCuda13xBackend,
 }
+
+try:
+    # Importing the .jax subpackage gates on `import jax`; the symbol
+    # is None if jax is missing.
+    from .jax import FastLISAResponseJaxBackend as _FastLISAResponseJaxBackend
+    if _FastLISAResponseJaxBackend is not None:
+        add_backends["fastlisaresponse_jax"] = _FastLISAResponseJaxBackend
+except (ImportError, ModuleNotFoundError):
+    pass
 
 Globals().backends_manager.add_backends(add_backends)
 

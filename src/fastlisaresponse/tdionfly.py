@@ -157,7 +157,10 @@ class TDIonTheFly(FastLISAResponseParallelModule):
     
     @classmethod
     def supported_backends(cls):
-        return ["fastlisaresponse_" + _tmp for _tmp in cls.GPU_RECOMMENDED()]
+        # GPU_RECOMMENDED_WITH_JAX includes 'jax' so that GBTDIonTheFly and
+        # SOBBHTDIonTheFly (which inherit this) can dispatch to the pure
+        # JAX backend in fastlisaresponse.jax via force_backend='jax'.
+        return ["fastlisaresponse_" + _tmp for _tmp in cls.GPU_RECOMMENDED_WITH_JAX()]
 
     def __call__(self, inc, psi, lam, beta, return_spline: bool =False) -> TDIOutput:
         
@@ -337,7 +340,7 @@ class TDIOutput(FastLISAResponseParallelModule):
 
     @classmethod
     def supported_backends(cls) -> list:
-        return ["fastlisaresponse_" + _tmp for _tmp in cls.GPU_RECOMMENDED()]
+        return ["fastlisaresponse_" + _tmp for _tmp in cls.GPU_RECOMMENDED_WITH_JAX()]
 
     @property
     def X(self) -> np.ndarray:
@@ -748,13 +751,41 @@ class GBTDIonTheFly(TDIonTheFly):
         return self._wave_gen
     
     def __call__(self, amp, f0, fdot0, fddot0, phi0, inc, psi, lam, beta, convert_to_ra_dec: bool = True, return_spline: bool = False) -> TDIOutput:
-        
+
         if convert_to_ra_dec:
             lam, beta = ecliptic_to_icrs(lam, beta)
         params = self.xp.asarray([amp, f0, fdot0, fddot0, phi0, inc, psi, lam, beta]).T.flatten().copy()
 
         assert len(params) == 9 * self.num_sub
+        reshape_shape = (self.num_sub, self.tdi_config.nchannels, self.N)
 
+        # The JAX backend exposes a pure-functional wave_gen.run_wave_tdi
+        # that returns (M, tdi_amp, tdi_phase, phase_ref) directly --
+        # immutable arrays, no buffer mutation -- so jax.grad / jax.jit
+        # work over the full pipeline. The C++ backends keep the
+        # in-place buffer signature run_wave_tdi_wrap(buffer, ...).
+        if self.backend.name == "fastlisaresponse_jax":
+            params_2d = params.reshape(self.num_sub, self.n_params)
+            t_2d = self.t_arr.reshape(self.num_sub, self.N)
+            _, tdi_amp_arr, tdi_phase_arr, phase_ref_arr = self.wave_gen.run_wave_tdi(
+                params_2d, t_2d,
+            )
+            # fill_splines=False on the inner TDIOutput: gpubackendtools
+            # doesn't ship a 'jax' cubic-spline backend, so building one
+            # on JAX arrays would crash. Splines are a CPU-only post-step
+            # for now; users wanting them should pass force_backend='cpu'
+            # or pull the JAX arrays out and feed them to a CPU
+            # CubicSplineInterpolant manually.
+            return self.from_tdi_output(TDIOutput(
+                self.t_arr,
+                tdi_amp_arr,                  # (num_sub, nchannels, N)
+                tdi_phase_arr,                # (num_sub, nchannels, N)
+                phase_ref_arr,                # (num_sub, N)
+                fill_splines=False,
+                force_backend=self.backend,
+            ), fill_splines=False if return_spline is False else return_spline)
+
+        # C++ in-place path (unchanged).
         tdi_channels_arr = self.xp.zeros((self.N * self.tdi_config.nchannels * self.num_sub), dtype=complex)
         tdi_amp = self.xp.zeros((self.N * self.tdi_config.nchannels * self.num_sub), dtype=float)
         tdi_phase = self.xp.zeros((self.N * self.tdi_config.nchannels * self.num_sub), dtype=float)
@@ -769,12 +800,111 @@ class GBTDIonTheFly(TDIonTheFly):
             self.N, self.num_sub, self.n_params, self.tdi_config.nchannels
         )
 
+        return self.from_tdi_output(TDIOutput(
+            self.t_arr,
+            tdi_amp.reshape(reshape_shape),
+            tdi_phase.reshape(reshape_shape),
+            phase_ref.reshape(self.t_arr.shape),
+            force_backend=self.backend
+        ), fill_splines=return_spline)
+
+
+class SOBBHTDIonTheFly(TDIonTheFly):
+    """Stellar-origin black-hole binary TDI on the fly.
+
+    Mirrors :class:`GBTDIonTheFly`. The underlying C++ kernel evaluates the
+    SOBBH amplitude and phase point-wise from the PN intrinsic-quantity
+    expressions and feeds them through the shared LISA TDI projection.
+
+    Parameter order on ``__call__`` (length-``num_sub`` arrays each):
+        ``m1``       -- primary mass [solar masses]
+        ``m2``       -- secondary mass [solar masses]
+        ``s1``       -- primary aligned spin [dimensionless]
+        ``s2``       -- secondary aligned spin [dimensionless]
+        ``distance`` -- luminosity distance [parsecs]
+        ``f_low``    -- GW frequency at ``t_ref`` [Hz]
+        ``phi_c``    -- reference orbital phase [rad]
+        ``inc``      -- inclination [rad]
+        ``psi``      -- polarization [rad]
+        ``lam``      -- ecliptic longitude [rad]
+        ``beta``     -- ecliptic latitude [rad]
+    """
+
+    def __init__(self,
+        t: np.ndarray,
+        T: float,
+        t_ref: float,
+        *args,
+        **kwargs
+    ):
+        super().__init__(*args, n_params=11, **kwargs)
+
+        self.t_arr = self.xp.atleast_2d(self.xp.asarray(t))
+        self.T = T
+        self.t_ref = t_ref
+        self.N = self.t_arr.shape[1]
+
+        if self.t_arr.shape[0] == 1:
+            self.t_arr = self.xp.repeat(self.t_arr, self.num_sub, axis=0)
+
+        self.dt = self.t_arr[:, 1] - self.t_arr[:, 0]
+
+    @property
+    def wave_gen(self) -> callable:
+        self._wave_gen = self.backend.SOBBHTDIonTheFlyWrap(self.cpp_orbits, self.cpp_tdi_config, self.T, self.t_ref)
+        return self._wave_gen
+
+    def from_tdi_output(self, tdi_output: TDIOutput, fill_splines: Optional[bool] = False) -> FDTDIOutput:
+        assert self.xp.allclose(tdi_output.x, self.t_arr)
+        return TDTDIOutput(
+            tdi_output.x, tdi_output.tdi_amp, tdi_output.tdi_phase, tdi_output.phase_ref, fill_splines=fill_splines, force_backend=tdi_output.backend.name.split("_")[-1]
+        )
+
+    def __call__(self, m1, m2, s1, s2, distance, f_low, phi_c, inc, psi, lam, beta,
+                 convert_to_ra_dec: bool = True, return_spline: bool = False) -> TDIOutput:
+
+        if convert_to_ra_dec:
+            lam, beta = ecliptic_to_icrs(lam, beta)
+        params = self.xp.asarray([m1, m2, s1, s2, distance, f_low, phi_c, inc, psi, lam, beta]).T.flatten().copy()
+
+        assert len(params) == 11 * self.num_sub
         reshape_shape = (self.num_sub, self.tdi_config.nchannels, self.N)
 
+        # JAX branch: functional wave_gen.run_wave_tdi (see GBTDIonTheFly).
+        if self.backend.name == "fastlisaresponse_jax":
+            params_2d = params.reshape(self.num_sub, self.n_params)
+            t_2d = self.t_arr.reshape(self.num_sub, self.N)
+            _, tdi_amp_arr, tdi_phase_arr, phase_ref_arr = self.wave_gen.run_wave_tdi(
+                params_2d, t_2d,
+            )
+            return self.from_tdi_output(TDIOutput(
+                self.t_arr,
+                tdi_amp_arr,
+                tdi_phase_arr,
+                phase_ref_arr,
+                fill_splines=False,
+                force_backend=self.backend,
+            ), fill_splines=False if return_spline is False else return_spline)
+
+        # C++ in-place path (unchanged).
+        tdi_channels_arr = self.xp.zeros((self.N * self.tdi_config.nchannels * self.num_sub), dtype=complex)
+        tdi_amp = self.xp.zeros((self.N * self.tdi_config.nchannels * self.num_sub), dtype=float)
+        tdi_phase = self.xp.zeros((self.N * self.tdi_config.nchannels * self.num_sub), dtype=float)
+        phase_ref = self.xp.zeros((self.N * self.num_sub), dtype=float)
+        assert int(np.prod(self.t_arr.shape)) == self.N * self.num_sub
+
+        self.wave_gen.run_wave_tdi_wrap(
+            tdi_channels_arr,
+            tdi_amp, tdi_phase,
+            phase_ref,
+            params, self.t_arr.flatten().copy(),
+            self.N, self.num_sub, self.n_params, self.tdi_config.nchannels
+        )
+
         return self.from_tdi_output(TDIOutput(
-            self.t_arr, 
-            tdi_amp.reshape(reshape_shape), 
-            tdi_phase.reshape(reshape_shape), 
+            self.t_arr,
+            tdi_amp.reshape(reshape_shape),
+            tdi_phase.reshape(reshape_shape),
             phase_ref.reshape(self.t_arr.shape),
             force_backend=self.backend
         ), fill_splines=return_spline)

@@ -9,6 +9,7 @@
 
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
 #define GBTDIonTheFly GBTDIonTheFlyGPU
+#define SOBBHTDIonTheFly SOBBHTDIonTheFlyGPU
 #define FDSplineTDIWaveform FDSplineTDIWaveformGPU
 #define TDSplineTDIWaveform TDSplineTDIWaveformGPU
 #define WaveletLookupTable WaveletLookupTableGPU
@@ -17,6 +18,7 @@
 #define GBComputationGroup GBComputationGroupGPU
 #else
 #define GBTDIonTheFly GBTDIonTheFlyCPU
+#define SOBBHTDIonTheFly SOBBHTDIonTheFlyCPU
 #define FDSplineTDIWaveform FDSplineTDIWaveformCPU
 #define TDSplineTDIWaveform TDSplineTDIWaveformCPU
 #define WDMDomain WDMDomainCPU
@@ -191,6 +193,87 @@ void gb_run_fd_wave_tdi_wrap(GBTDIonTheFly *tdi_on_fly,
     cmplx *X_het, int *k_f0_out, double *f0_grid_out,
     double *params, double t_start, double Tobs,
     int N_sparse, int num_bin, int n_params, int nchannels);
+
+
+// Stellar-origin black-hole binary TDI-on-the-fly. Mirrors GBTDIonTheFly:
+// per-time-sample (amplitude, phase) device methods feed into the shared
+// LISATDIonTheFly::get_tdi -> get_hp_hc projection. The intrinsic post-Newtonian
+// content (intrinsic_quantities, phase_fn, time_to_merger_fn, tau_to_x_fn) is
+// ported verbatim from the prototype sobbh_intrinsic_Ladeeda.cpp; only style
+// (CUDA decorators, no std:: qualifiers) has been adapted.
+//
+// Parameter layout (n_params = 11):
+//   0: m1            (solar masses)
+//   1: m2            (solar masses)
+//   2: s1            (dimensionless spin component, primary)
+//   3: s2            (dimensionless spin component, secondary)
+//   4: distance      (parsecs)
+//   5: f_low         (Hz, GW frequency at t_ref)
+//   6: phi_c         (rad, reference orbital phase)
+//   7: inc           (rad, inclination)
+//   8: psi           (rad, polarization)
+//   9: lam           (rad, ecliptic longitude)
+//  10: beta          (rad, ecliptic latitude)
+class SOBBHTDIonTheFly : public LISATDIonTheFly{
+    public:
+        double T;
+        double t_ref;
+        int m1_index;
+        int m2_index;
+        int s1_index;
+        int s2_index;
+        int distance_index;
+        int f_low_index;
+        int phi_c_index;
+
+        CUDA_CALLABLE_MEMBER
+        SOBBHTDIonTheFly(Orbits *orbits_, TDIConfig *tdi_config_, double T_, double t_ref_) : LISATDIonTheFly(orbits_, tdi_config_, 7, 8, 9, 10)
+        {
+            T = T_;
+            t_ref = t_ref_;
+            m1_index = 0;
+            m2_index = 1;
+            s1_index = 2;
+            s2_index = 3;
+            distance_index = 4;
+            f_low_index = 5;
+            phi_c_index = 6;
+        };
+        CUDA_CALLABLE_MEMBER
+        ~SOBBHTDIonTheFly();
+        // Intrinsic-quantity helpers (PN expansions ported from sobbh_intrinsic_Ladeeda.cpp).
+        CUDA_DEVICE
+        double sobbh_phase_fn(double x, double sigma, double delta, double eta, double s);
+        CUDA_DEVICE
+        double sobbh_time_to_merger_fn(double x, double sigma, double delta, double eta, double s);
+        CUDA_DEVICE
+        double sobbh_tau_to_x_fn(double tau, double sigma, double delta, double eta, double s);
+        // Per-sample on-the-fly evaluators. amplitude/phase are GW-quadrupole
+        // conventions: phase = 2 * (phi_c - phase_fn(x)), amp = 2 M eta x / D
+        // (positive); get_hp_hc folds in -cos / -sin and the (1+cos^2 iota),
+        // 2 cos(iota) factors.
+        CUDA_DEVICE
+        double sobbh_amplitude(double t, double *params);
+        CUDA_DEVICE
+        double sobbh_phase(double t, double *params);
+        CUDA_DEVICE
+        double sobbh_f(double t, double *params);
+        CUDA_DEVICE
+        double sobbh_fdot(double t, double *params);
+        int get_sobbh_buffer_size(int N);
+        CUDA_DEVICE
+        double get_amp(double t, double *params, int bin_i);
+        CUDA_DEVICE
+        double get_phase(double t, double *params, int bin_i);
+        CUDA_DEVICE
+        double get_f(double t, double *params, int bin_i);
+        CUDA_DEVICE
+        double get_fdot(double t, double *params, int bin_i);
+};
+
+void sobbh_run_wave_tdi_wrap(SOBBHTDIonTheFly *tdi_on_fly, cmplx *tdi_channels_arr,
+    double *tdi_amp, double *tdi_phase, double *phi_ref,
+    double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels);
 
 
 class TDSplineTDIWaveform : public LISATDIonTheFly{
