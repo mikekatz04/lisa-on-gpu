@@ -2,6 +2,8 @@
 #include "Detector.hpp"
 #include "LISAResponse.hh"
 #include "Interpolate.hh"
+#define WDM_SPLINE_HELPERS_IMPLEMENTATION
+#include "WDMSplineHelpers.hh"
 #include <string>
 #include <unistd.h>
 #ifdef __CUDACC__
@@ -1422,6 +1424,970 @@ void fast_wdm_inner(GBTDIonTheFly tdi_on_fly_here, cmplx *tdi_channel_val, doubl
 
 CUDA_SYNC_THREADS;
 }
+
+
+// ============================================================================
+// fast_wdm_inner -- heterodyne / chunked-FFT path
+// ============================================================================
+//
+// Recommended Tukey alphas (mirrors the Python helper
+// :func:`check_shortened_wdm.recommended_tukey_alpha`; see Test G sweep
+// for the data justifying these). The taper is alpha/2 of the
+// ``N_sparse`` window on each end; tuned to fit inside the n_pad
+// overlap region of the chunk stitch (alpha < 2*n_pad/Nt_sub).
+//
+//   FAST_WDM_TUKEY_ALPHA_TD          = 0.02   // TD-based chunked stitch
+//   FAST_WDM_TUKEY_ALPHA_HET_WIDE    = 0.01   // FD-heterodyne, N_sparse >= 512
+//   FAST_WDM_TUKEY_ALPHA_HET_NARROW  = 0.05   // FD-heterodyne, N_sparse  < 512
+//
+// Don't go above ~0.1 -- past that the taper bites into the chunk
+// interior and biases stitched pixels.
+//
+// Pass ``FAST_WDM_TUKEY_ALPHA_AUTO`` (= -1.0) to ``tukey_alpha`` to
+// trigger the equivalent auto-pick (see ``fast_wdm_inner_heterodyne``
+// dispatcher). Pass ``0.0`` to disable Tukey explicitly (rectangular
+// window).
+//
+// ============================================================================
+//
+// Prepares the WDM waveform inputs *without* going through the dense
+// time-domain rfft of the full observation. Instead, for a single GB source:
+//
+//   1. Sparse-evaluate ``tdi_amp``, ``tdi_phase``, ``phase_ref`` at
+//      ``N_sparse`` (power-of-two) points spanning a sub-window
+//      ``[chunk_t_start, chunk_t_start + T_chunk)``.
+//   2. Snap the GB carrier to the chunk's rfft grid: ``k_f0 = round(f0
+//      / df_chunk)``, ``f0_grid = k_f0 * df_chunk`` with
+//      ``df_chunk = 1/T_chunk``.
+//   3. Build the slow positive-freq complex signal per channel
+//
+//          s_c[i] = tdi_amp[c, i]
+//                   * exp(+I * (tdi_phase[c, i] + phase_ref[i]
+//                               - 2*pi*f0_grid * (i * dt_sparse)))
+//
+//      then (optionally) multiply by a Tukey window of length ``N_sparse``
+//      with the taper confined to ``tukey_alpha/2`` of each end. The taper
+//      kills out-of-band spectral leakage so a wider ``N_sparse`` is not
+//      required to cover the WDM analysis band -- empirically gives ~1000x
+//      mismatch improvement at small ``N_sparse``.
+//   4. Run an in-place complex FFT of length ``N_sparse`` on ``s_c``
+//      (reuse :func:`wdm_spline_radix2_fft` from WDMSplineHelpers.hh).
+//   5. Place ``X_het[c, m] = 0.5 * dt_sparse * fft(s_c)[m]`` into the
+//      chunk's dense rfft grid at bins ``k_f0 + fftfreq(N_sparse).astype(int)``
+//      (i.e. ``m_in_fft_order`` runs ``[0, 1, ..., N/2-1, -N/2, ..., -1]``).
+//
+// The downstream chunk-FD --> chunk-WDM step (per-layer window-and-iFFT)
+// is left to existing WDM machinery; this device function only fills the
+// chunk's rfft buffer.
+//
+// Caller responsibilities:
+//   * ``chunk_fd_out`` -- pre-zeroed buffer of length
+//     ``nchannels * n_rfft_chunk``. Only ``N_sparse`` bins around
+//     ``k_f0`` are written; the rest stay zero.
+//   * All workspace pointers (``t_sparse_buf``, ``tdi_amp_buf``,
+//     ``tdi_phase_buf``, ``phi_ref_buf``, ``tdi_channels_buf``,
+//     ``slow_buf``) sized as documented; allocated in shared memory if
+//     called from a single block.
+//   * ``get_tdi_buffer`` of length ``get_tdi_buffer_len`` -- the
+//     scratch ``LISATDIonTheFly::get_tdi`` requires (see
+//     ``get_tdi_buffer_size``).
+//   * ``N_sparse`` must be a power of two; ``log2_N_sparse`` matches.
+//
+// Multi-chunk dispatch: launch one block per chunk and pass per-chunk
+// ``chunk_t_start`` + a per-chunk slice of ``chunk_fd_out``. The kernel
+// :func:`gb_heterodyne_chunk_kernel` below does this for a single
+// source's chunked WDM build; the host wrapper
+// :func:`GBComputationGroup::gb_heterodyne_chunk_prepare_wrap` is
+// declared in binding_tof.hpp (TBD; not added by this commit).
+//
+// CPU vs CUDA: ``CUDA_DEVICE``, ``THREAD_START`` and ``BLOCK_INCR``
+// macros let the same code run as a serial CPU function or a CUDA
+// per-block routine. The FFT helper (``wdm_spline_radix2_fft``) is
+// already dual-mode.
+//
+// Per the Python reference (``check_shortened_wdm.py`` Test G/H, dated
+// 2026-05), ``N_sparse=1024, tukey_alpha=0.0`` reproduces mm5/mm2 ~
+// 5e-13 (matches the dense TD->FD->WDM floor); ``N_sparse=64,
+// tukey_alpha=0.05`` reaches mm5/mm2 ~ 1e-7 -- the small Tukey collapses
+// the heterodyne-band requirement.
+// ----------------------------------------------------------------------------
+
+// Recommended Tukey alphas (see Test G in check_shortened_wdm.py for the
+// sweep that fixes these values).
+#define FAST_WDM_TUKEY_ALPHA_TD          0.02   // TD-based chunked stitch
+#define FAST_WDM_TUKEY_ALPHA_HET_WIDE    0.01   // FD heterodyne, N_sparse >= 512
+#define FAST_WDM_TUKEY_ALPHA_HET_NARROW  0.05   // FD heterodyne, N_sparse  < 512
+#define FAST_WDM_TUKEY_ALPHA_AUTO       -1.0   // sentinel: auto-pick
+
+// Shared-memory budget for the chunked heterodyne kernel. The Tukey
+// results (Test G) put us at N_sparse <= 256, which fits in shared
+// memory for nchannels=3: ~40 KB per block (2 KB t_sparse + 6 KB
+// tdi_amp + 6 KB tdi_phase + 2 KB phi_ref + 12 KB tdi_channels + 12 KB
+// slow). Stays well under the 48-100 KB CUDA shared-memory budget.
+#define FAST_WDM_N_SPARSE_MAX  256
+#define FAST_WDM_NCHANNELS_MAX 3
+
+// ---------------------------------------------------------------------------
+// Threading model notes for upcoming gb_wdm_het_* kernels
+// ---------------------------------------------------------------------------
+//
+// NUM_THREADS vs N_sparse: the radix-2 FFT helper
+// (``wdm_spline_radix2_fft`` in WDMSplineHelpers.hh) already strides via
+// THREAD_START / BLOCK_INCR, so a block can be sized with NUM_THREADS
+// != N_sparse. The only constraint is N_sparse >= NUM_THREADS (each
+// thread handles N_sparse / NUM_THREADS sequential samples). On CPU
+// NUM_THREADS = 1, the loops serialise.
+//
+// d_h / h_h accumulation pattern (for the upcoming get_ll / swap_ll
+// chunked variants -- not in this commit):
+//   #ifdef __CUDACC__
+//     // each thread: partial[NUM_THREADS] accumulator in shared mem
+//     // -> CUB block-reduce -> thread 0 atomicAdd to source's d_h[bin_i]
+//   #else
+//     // single-threaded loop: regular += into d_h[bin_i]
+//   #endif
+// This collapses atomic contention to one atomicAdd per block per
+// source, instead of one per WDM pixel.
+// ---------------------------------------------------------------------------
+
+// Source-class-agnostic version. ``source`` is a pointer to any
+// :class:`LISATDIonTheFly` subclass (``GBTDIonTheFly``, ``SOBBHTDIonTheFly``,
+// future variants); ``carrier_index`` selects which entry of ``params``
+// is the heterodyne carrier (1 for GB's f0, 5 for SOBBH's f_low).
+CUDA_DEVICE
+inline void fast_wdm_inner_heterodyne(
+    cmplx *chunk_fd_out,            // (nchannels * n_rfft_chunk); caller zero-inits
+    LISATDIonTheFly *source,
+    double *params,                 // source-class-specific params at t_ref
+    int bin_i,
+    int carrier_index,              // 1 for GB f0, 5 for SOBBH f_low
+    double chunk_t_start,           // absolute start time of this chunk (s)
+    double T_chunk,                 // chunk duration (s) = N_chunk_td * dt
+    int N_sparse, int log2_N_sparse,
+    int n_rfft_chunk,               // = N_chunk_td / 2 + 1
+    int nchannels,                  // 3 for XYZ
+    double tukey_alpha,             // 0 = rect, AUTO = recommended (see #defines)
+    // workspace --------------------------------------------------------------
+    double *t_sparse_buf,           // (N_sparse,)
+    double *tdi_amp_buf,            // (nchannels * N_sparse)
+    double *tdi_phase_buf,          // (nchannels * N_sparse)
+    double *phi_ref_buf,            // (N_sparse,)
+    cmplx  *tdi_channels_buf,       // (nchannels * N_sparse), used by gb->get_tdi
+    cmplx  *slow_buf,               // (nchannels * N_sparse), reused as FFT input/output
+    void   *get_tdi_scratch,        // get_tdi internal scratch
+    int     get_tdi_scratch_len
+)
+{
+    const double dt_sparse  = T_chunk / (double) N_sparse;
+    const double f0         = params[carrier_index];
+    const double df_chunk   = 1.0 / T_chunk;
+    const int    k_f0       = (int) round(f0 / df_chunk);
+    const double f0_grid    = (double) k_f0 * df_chunk;
+    const int    half_Nsp   = N_sparse / 2;
+    const double scale_X    = 0.5 * dt_sparse;
+
+    // Resolve Tukey alpha (sentinel -> auto-pick per N_sparse).
+    double alpha_eff = tukey_alpha;
+    if (alpha_eff == FAST_WDM_TUKEY_ALPHA_AUTO) {
+        alpha_eff = (N_sparse >= 512)
+            ? FAST_WDM_TUKEY_ALPHA_HET_WIDE
+            : FAST_WDM_TUKEY_ALPHA_HET_NARROW;
+    }
+
+    // ---- 1) sparse time grid for this chunk -------------------------------
+    for (int i = THREAD_START; i < N_sparse; i += BLOCK_INCR) {
+        t_sparse_buf[i] = chunk_t_start + (double) i * dt_sparse;
+    }
+    CUDA_SYNC_THREADS;
+
+    // ---- 2) sparse TDI evaluation: tdi_amp, tdi_phase, phase_ref ----------
+    source->get_tdi(get_tdi_scratch, get_tdi_scratch_len,
+                    tdi_channels_buf,
+                    tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
+                    params, t_sparse_buf, N_sparse, bin_i, nchannels);
+    CUDA_SYNC_THREADS;
+
+    // ---- 3) slow signal + optional Tukey window ---------------------------
+    const cmplx I_c(0.0, 1.0);
+    const double n_taper = 0.5 * alpha_eff * (double) N_sparse;
+    for (int c = 0; c < nchannels; ++c) {
+        for (int i = THREAD_START; i < N_sparse; i += BLOCK_INCR) {
+            const int idx = c * N_sparse + i;
+            const double tau   = (double) i * dt_sparse;
+            const double phase = tdi_phase_buf[idx] + phi_ref_buf[i]
+                                 - 2.0 * M_PI * f0_grid * tau;
+            cmplx s = (cmplx)(tdi_amp_buf[idx]) * gcmplx::exp(I_c * phase);
+
+            // Tukey window with alpha taper at each end; rectangular at
+            // alpha=0; full Hann at alpha=1. Taper is alpha/2 of N_sparse
+            // samples on each side, cosine half-cycle.
+            if (alpha_eff > 0.0 && n_taper > 0.0) {
+                double w = 1.0;
+                const double di = (double) i;
+                const double dlast = (double) (N_sparse - 1);
+                if (di < n_taper) {
+                    const double xn = di / n_taper;       // 0 -> 1 over taper
+                    w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
+                } else if (di > dlast - n_taper) {
+                    const double xn = (dlast - di) / n_taper;
+                    w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
+                }
+                s = cmplx(s.real() * w, s.imag() * w);
+            }
+            slow_buf[idx] = s;
+        }
+    }
+    CUDA_SYNC_THREADS;
+
+    // ---- 4) FFT slow_buf in place, per channel ----------------------------
+    for (int c = 0; c < nchannels; ++c) {
+        wdm_spline_radix2_fft(&slow_buf[c * N_sparse],
+                              N_sparse, log2_N_sparse, /*inverse=*/false);
+        CUDA_SYNC_THREADS;
+    }
+
+    // ---- 5) Scale and place into chunk_fd_out at [k_f0 + fftfreq] --------
+    // fftfreq(N) gives FFT bin indices [0, 1, ..., N/2-1, -N/2, ..., -1].
+    // The chunk's dense rfft array has length n_rfft_chunk = N_chunk_td/2+1.
+    // Bins outside [0, n_rfft_chunk) are dropped.
+    for (int c = 0; c < nchannels; ++c) {
+        for (int m_idx = THREAD_START; m_idx < N_sparse; m_idx += BLOCK_INCR) {
+            const int m = (m_idx < half_Nsp) ? m_idx : (m_idx - N_sparse);
+            const int kbin = k_f0 + m;
+            if (kbin >= 0 && kbin < n_rfft_chunk) {
+                const cmplx v = slow_buf[c * N_sparse + m_idx];
+                chunk_fd_out[c * n_rfft_chunk + kbin] =
+                    cmplx(v.real() * scale_X, v.imag() * scale_X);
+            }
+        }
+    }
+    CUDA_SYNC_THREADS;
+}
+
+
+// Kernel: dispatches one block per chunk for a single GB source. All
+// per-chunk workspaces live in shared memory (sized by the compile-time
+// maxima FAST_WDM_N_SPARSE_MAX / FAST_WDM_NCHANNELS_MAX). Stays under
+// ~40 KB shared per block. The only heap pointer the kernel needs is
+// ``get_tdi_scratch_all``: one slab of ``get_tdi_scratch_len_per_block``
+// bytes per block, for ``LISATDIonTheFly::get_tdi`` internal scratch.
+//
+//   chunk_fd_all          (n_chunks, nchannels, n_rfft_chunk)  zero-init by host
+//   chunk_t_starts        (n_chunks,)
+//   get_tdi_scratch_all   (n_chunks * get_tdi_scratch_len_per_block bytes)
+//
+// NUM_THREADS may be < N_sparse: the FFT helper strides via
+// THREAD_START / BLOCK_INCR. On CPU GRID_INCR = 1 -> the for-loop runs
+// chunks serially.
+CUDA_KERNEL
+inline void fast_wdm_inner_heterodyne_kernel(
+    cmplx *chunk_fd_all,            // (n_chunks, nchannels, n_rfft_chunk)
+    Orbits *orbits, TDIConfig *tdi_config, double T, double t_ref,
+    double *params,                 // (9,) single source
+    double *chunk_t_starts,         // (n_chunks,)
+    int n_chunks, int bin_i,
+    double T_chunk, int N_sparse, int log2_N_sparse,
+    int n_rfft_chunk, int nchannels, double tukey_alpha,
+    void   *get_tdi_scratch_all,
+    int     get_tdi_scratch_len_per_block
+)
+{
+    GBTDIonTheFly gb(orbits, tdi_config, T, t_ref);
+
+    // Per-block (= per-chunk) shared-memory workspace. Sized at the
+    // compile-time maxima so the kernel JITs once and dispatches against
+    // any (N_sparse, nchannels) pair within the bounds.
+    CUDA_SHARED double t_sparse_buf  [FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED double tdi_amp_buf   [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED double tdi_phase_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED double phi_ref_buf   [FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED cmplx  tdi_channels_buf[FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED cmplx  slow_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+
+    for (int j = BLOCK_START; j < n_chunks; j += GRID_INCR) {
+        cmplx *chunk_fd = &chunk_fd_all[j * nchannels * n_rfft_chunk];
+        void  *get_tdi_scratch = (char *) get_tdi_scratch_all
+            + (size_t) j * (size_t) get_tdi_scratch_len_per_block;
+
+        fast_wdm_inner_heterodyne(
+            chunk_fd, &gb, params, bin_i, gb.f0_index,
+            chunk_t_starts[j], T_chunk,
+            N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
+            t_sparse_buf, tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
+            tdi_channels_buf, slow_buf,
+            get_tdi_scratch, get_tdi_scratch_len_per_block
+        );
+        CUDA_SYNC_THREADS;
+    }
+}
+
+
+// ============================================================================
+// gb_chunk_fd_to_wdm -- chunk-FD -> chunk-WDM transform
+// ============================================================================
+//
+// Ports ``lisatools.domains.FDSignal.wdmtransform`` for one chunk's
+// dense rfft array (length n_rfft_chunk = Nf*Nt_sub/2 + 1, populated
+// only in N_sparse bins around k_f0 by fast_wdm_inner_heterodyne). The
+// output is the (nchannels, Nf, Nt_sub) real WDM coefficient block for
+// the chunk -- caller is responsible for stitching it into the global
+// (nchannels, Nf, Nt) template buffer (use interior pixels for middle
+// chunks, full pixels for first/last; see the Python
+// _stitched_wdm_from_heterodyne for the convention).
+//
+// Algorithm per layer m in [0, Nf]:
+//
+//   1. Build the length-Nt_sub windowed FD slice:
+//        k_global = m*Nt_sub/2 + (k_idx - Nt_sub/2)
+//        Hermitian wrap when k_global < 0 or > N_chunk_td/2.
+//        before_ifft[k_idx] = (Hermitian-folded chunk_fd[k_global]) /
+//                              data_dt * wdm_window[k_idx]
+//   2. iFFT length Nt_sub  (reuse wdm_spline_radix2_fft, inverse=true).
+//   3. Apply parity factor and pick Re or Im of conj(C_{m,n}) * out:
+//        sign = (-1)^((m+1)*n)
+//        if (m+n) % 2 == 0:  real_part = Re(out[n])     (Cmn=1, conj=1)
+//        else:               real_part = Im(out[n])     (Cmn=1j, conj=-1j -> Re(-1j*z)=Im(z))
+//        if (m==0 or m==Nf) AND ((m+n) % 2 != 0): tmp_w_mn[m, n] = 0
+//        else: tmp_w_mn[m, n] = kappa * sign * real_part
+//
+// Folding (after collecting all m in [0, Nf]):
+//   for n in [0, Nt_sub):
+//     if n is even:   w_mn[0, n] = tmp_w_mn[0, n] / sqrt(2)
+//     else:           w_mn[0, n] = tmp_w_mn[Nf, n-1] / sqrt(2)
+//   for m in [1, Nf): w_mn[m, n] = tmp_w_mn[m, n]
+//
+// Wavelet window (``wdm_window``) is the Nt_sub-length sample of
+// phitilde at omega = 2*pi/N_chunk_td * arange(-Nt_sub/2, Nt_sub/2),
+// precomputed on the host (computing scipy.special.betainc on-device
+// is impractical). See WDMSettings.setup_window in Python.
+//
+// Workspace:
+//   * layer_scratch -- Nt_sub-long cmplx buffer for the per-layer iFFT.
+//   * tmp_w_mn      -- (nchannels, Nf+1, Nt_sub) real, sized at compile
+//                      time with the FAST_WDM_* maxima.
+//
+// Threading: per-block; THREAD_START / BLOCK_INCR parallelism within
+// the inner Nt_sub loops. The outer m-loop is serial within a block.
+// ----------------------------------------------------------------------------
+
+CUDA_DEVICE
+inline void gb_chunk_fd_to_wdm(
+    double *w_mn_out,        // (nchannels, Nf, Nt_sub) -- output, caller-zero'd
+    cmplx  *chunk_fd,        // (nchannels, n_rfft_chunk) input
+    const double *wdm_window,// (Nt_sub,) precomputed phitilde
+    int Nf, int Nt_sub, int log2_Nt_sub,
+    int n_rfft_chunk,        // = Nf*Nt_sub/2 + 1
+    double data_dt,
+    int nchannels,
+    cmplx *layer_scratch     // (Nt_sub,) per-block iFFT scratch
+)
+{
+    const int N_chunk_td = Nf * Nt_sub;
+    const int half_Nt_sub = Nt_sub / 2;
+    const double kappa = 2.0 * sqrt(M_PI * data_dt) / (double) Nf;
+    const double sqrt2 = sqrt(2.0);
+
+    // Output is folded later from tmp_w_mn (Nf+1 rows). For simplicity we
+    // process layers one-at-a-time and write directly into w_mn_out for
+    // m in [1, Nf-1], and into auxiliary buffers for m=0 / m=Nf so we
+    // can fold them at the end.
+    //
+    // Per-channel m=0 and m=Nf rows go into separate scratch; size Nt_sub each.
+    // We allocate this from shared memory via the caller.
+    //
+    // For now this device function assumes the caller pre-zeros w_mn_out
+    // and provides extra m0/mNf scratch buffers. We bake those into the
+    // host kernel's shared memory.
+    //
+    // NOTE: this implementation processes nchannels x (Nf+1) layers in a
+    // serial outer loop. Each iteration reuses layer_scratch.
+
+    for (int c = 0; c < nchannels; ++c) {
+        const cmplx *fd_c = &chunk_fd[c * n_rfft_chunk];
+        for (int m = 0; m <= Nf; ++m) {
+
+            // --- 1) build windowed FD slice (length Nt_sub) -----------------
+            for (int k_idx = THREAD_START; k_idx < Nt_sub; k_idx += BLOCK_INCR) {
+                long k_global = (long) m * (long) half_Nt_sub + (long)(k_idx - half_Nt_sub);
+                bool herm = false;
+                if (k_global < 0)              { k_global = -k_global;       herm = true; }
+                if (k_global > N_chunk_td / 2) { k_global = N_chunk_td - k_global; herm = true; }
+
+                cmplx v(0.0, 0.0);
+                if (k_global >= 0 && k_global < n_rfft_chunk) {
+                    v = fd_c[k_global];
+                    if (herm) v = gcmplx::conj(v);
+                    v = cmplx(v.real() / data_dt, v.imag() / data_dt);
+                    const double w = wdm_window[k_idx];
+                    v = cmplx(v.real() * w, v.imag() * w);
+                }
+                layer_scratch[k_idx] = v;
+            }
+            CUDA_SYNC_THREADS;
+
+            // --- 2) iFFT length Nt_sub --------------------------------------
+            wdm_spline_radix2_fft(layer_scratch, Nt_sub, log2_Nt_sub,
+                                  /*inverse=*/true);
+            CUDA_SYNC_THREADS;
+
+            // --- 3) parity factor + real/imag pick, write tmp_w_mn ----------
+            // For m in [1, Nf-1] -> directly into w_mn_out[c, m, n].
+            // For m = 0 -> w_mn_out[c, 0, even n] (folded).
+            // For m = Nf -> w_mn_out[c, 0, odd n]  (folded; n_src is even).
+            for (int n = THREAD_START; n < Nt_sub; n += BLOCK_INCR) {
+                const bool boundary = (m == 0 || m == Nf);
+                const bool mn_parity_even = (((m + n) & 1) == 0);
+                if (boundary && !mn_parity_even) {
+                    continue;                  // zeroed; caller has output pre-zero'd
+                }
+
+                const cmplx z = layer_scratch[n];
+                const double real_part = mn_parity_even ? z.real() : z.imag();
+                const double sign = ((((m + 1) * n) & 1) == 0) ? 1.0 : -1.0;
+                const double val = kappa * sign * real_part;
+
+                if (m >= 1 && m <= Nf - 1) {
+                    // direct write -- interior layer
+                    w_mn_out[c * Nf * Nt_sub + m * Nt_sub + n] = val;
+                } else if (m == 0) {
+                    if ((n & 1) == 0) {
+                        // even n at m=0 -> w_mn[c, 0, n] (cos@DC); / sqrt(2)
+                        w_mn_out[c * Nf * Nt_sub + 0 * Nt_sub + n] = val / sqrt2;
+                    }
+                } else { // m == Nf
+                    // tmp_w_mn[Nf, n_src] with n_src even goes into
+                    // w_mn[c, 0, 2*n_src + 1] (odd slots), / sqrt(2).
+                    if ((n & 1) == 0) {
+                        const int n_out = n + 1;
+                        if (n_out < Nt_sub) {
+                            w_mn_out[c * Nf * Nt_sub + 0 * Nt_sub + n_out] = val / sqrt2;
+                        }
+                    }
+                }
+            }
+            CUDA_SYNC_THREADS;
+        }
+    }
+}
+
+
+// ============================================================================
+// gb_wdm_het_fill_global_kernel  (Phase 2b -- chunked-heterodyne fill_global)
+// ============================================================================
+//
+// Mirrors :func:`gb_wdm_fill_global_kernel` but uses the chunked
+// FD-heterodyne path (no per-pixel lookup table). For each binary,
+// iterates over time-window chunks; per chunk:
+//
+//   1. fast_wdm_inner_heterodyne(...)  -> chunk's dense rfft
+//                                          (N_sparse bins around k_f0
+//                                           populated; rest zero)
+//   2. gb_chunk_fd_to_wdm(...)         -> chunk WDM (nchannels, Nf, Nt_sub)
+//   3. stitch into template_fill[chan, m, n_global] with the standard
+//      interior rule:
+//         keep [n_pad, Nt_sub - n_pad) for middle chunks
+//         + extend to 0 / Nt_sub for first / last chunk
+//
+// Partial-slide handling (the Nt is not always a multiple of step =
+// Nt_sub - 2*n_pad): the host pre-computes ``chunk_t_starts`` and
+// ``chunk_keep_lo`` / ``chunk_keep_hi`` per chunk so the kernel is
+// stitch-aware without re-deriving the geometry.
+//
+// Outer loop: binaries.  Inner loop: chunks.
+//   ``factors_all[bin_i]`` is a per-source multiplicative scalar
+//   applied at the accumulation step (mirrors fill_global's interface).
+//
+// (Stub: see Phase 2 plan; actual body wires the helpers and stitches.
+// Wave-table window must be precomputed on the host and passed via
+// ``wdm_window``.)
+template <class SourceT>
+CUDA_KERNEL
+void wdm_het_fill_global_kernel(
+    double *template_fill,         // (nchannels, Nf, Nt) global WDM template
+    Orbits *orbits, TDIConfig *tdi_config,
+    double *params_all,            // (num_bin * nparams,)
+    double *factors_all,           // (num_bin,)
+    double *chunk_t_starts,        // (n_chunks,)
+    int    *chunk_keep_lo,         // (n_chunks,)
+    int    *chunk_keep_hi,         // (n_chunks,)
+    int    *chunk_n_global_offset, // (n_chunks,) -- global n_pixel for chunk-pixel keep_lo
+    double *wdm_window,            // (Nt_sub,) precomputed phitilde samples
+    int n_chunks, int num_bin, int nparams,
+    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int N_sparse, int log2_N_sparse,
+    int nchannels, int n_rfft_chunk,
+    double T_chunk, double dt, double T, double t_ref,
+    double tukey_alpha,
+    // workspaces (host-allocated, per-chunk or per-block):
+    cmplx  *ws_chunk_fd_all,       // (n_chunks * nchannels * n_rfft_chunk)
+    cmplx  *ws_layer_scratch_all,  // (n_chunks * Nt_sub)
+    double *ws_chunk_wdm_all,      // (n_chunks * nchannels * Nf * Nt_sub)
+    cmplx  *ws_tdi_channels_all,   // (n_chunks * nchannels * N_sparse) -- heap-resident
+                                   //   substitute for the per-block tdi_channels_buf;
+                                   //   write-once / read-once scratch from get_tdi.
+    void   *get_tdi_scratch_all,
+    int     get_tdi_scratch_len_per_block
+)
+{
+    SourceT src(orbits, tdi_config, T, t_ref);
+
+    // Per-block shared workspace for the heterodyne primitives. Sized at
+    // FAST_WDM_N_SPARSE_MAX / FAST_WDM_NCHANNELS_MAX so the kernel JITs
+    // once and dispatches against any (N_sparse, nchannels) below the
+    // maxima. tdi_channels_buf moved to heap (`ws_tdi_channels_all`) to
+    // keep static shared <= 48 KB default budget on A100/V100 without
+    // needing cudaFuncSetAttribute opt-in.
+    CUDA_SHARED double t_sparse_buf  [FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED double tdi_amp_buf   [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED double tdi_phase_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED double phi_ref_buf   [FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED cmplx  slow_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+
+    // OUTER: chunks (one block per chunk). The fill_global per-binary
+    // contention is per (chunk, m, n_local) -> different global pixel
+    // per binary, so no atomic needed on the template_fill write.
+    for (int j = BLOCK_START; j < n_chunks; j += GRID_INCR) {
+        cmplx  *chunk_fd       = &ws_chunk_fd_all[(size_t) j * nchannels * n_rfft_chunk];
+        cmplx  *layer_scratch  = &ws_layer_scratch_all[(size_t) j * Nt_sub];
+        double *w_chunk        = &ws_chunk_wdm_all[(size_t) j * nchannels * Nf * Nt_sub];
+        cmplx  *tdi_channels_buf = &ws_tdi_channels_all[(size_t) j * nchannels * N_sparse];
+        void   *get_tdi_scratch = (char *) get_tdi_scratch_all
+            + (size_t) j * (size_t) get_tdi_scratch_len_per_block;
+
+        const int keep_lo        = chunk_keep_lo[j];
+        const int keep_hi        = chunk_keep_hi[j];
+        const int n_global_lo    = chunk_n_global_offset[j];
+        const double chunk_t0    = chunk_t_starts[j];
+
+        // INNER: binaries
+        for (int bin_i = 0; bin_i < num_bin; ++bin_i) {
+            double *params = &params_all[(size_t) bin_i * nparams];
+            const double factor = factors_all[bin_i];
+
+            // Zero per-chunk workspaces. (fast_wdm_inner_heterodyne writes
+            // only N_sparse bins of chunk_fd, so the rest must be zero;
+            // gb_chunk_fd_to_wdm assumes w_chunk is zero-init.)
+            for (int k = THREAD_START; k < nchannels * n_rfft_chunk; k += BLOCK_INCR) {
+                chunk_fd[k] = cmplx(0.0, 0.0);
+            }
+            for (int k = THREAD_START; k < nchannels * Nf * Nt_sub; k += BLOCK_INCR) {
+                w_chunk[k] = 0.0;
+            }
+            CUDA_SYNC_THREADS;
+
+            // 1) heterodyne FD for this (chunk, binary)
+            fast_wdm_inner_heterodyne(
+                chunk_fd, &src, params, bin_i, src.f0_index,
+                chunk_t0, T_chunk,
+                N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
+                t_sparse_buf, tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
+                tdi_channels_buf, slow_buf,
+                get_tdi_scratch, get_tdi_scratch_len_per_block
+            );
+            CUDA_SYNC_THREADS;
+
+            // 2) chunk FD -> chunk WDM
+            gb_chunk_fd_to_wdm(
+                w_chunk, chunk_fd, wdm_window,
+                Nf, Nt_sub, log2_Nt_sub, n_rfft_chunk, dt, nchannels,
+                layer_scratch
+            );
+            CUDA_SYNC_THREADS;
+
+            // 3) stitch into template_fill
+            //    template_fill[c, m, n_global_lo + (n - keep_lo)] +=
+            //        factor * w_chunk[c, m, n]   for n in [keep_lo, keep_hi)
+            for (int c = 0; c < nchannels; ++c) {
+                for (int m = 0; m < Nf; ++m) {
+                    for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
+                         n_loc += BLOCK_INCR) {
+                        const int n_glob = n_global_lo + (n_loc - keep_lo);
+                        const size_t dst = ((size_t) c * Nf + m) * Nt + n_glob;
+                        template_fill[dst] +=
+                            factor * w_chunk[(size_t) c * Nf * Nt_sub + (size_t) m * Nt_sub + n_loc];
+                    }
+                }
+            }
+            CUDA_SYNC_THREADS;
+        }
+    }
+}
+
+
+// ============================================================================
+// gb_wdm_het_get_ll_kernel  (Phase 2c -- chunked-heterodyne get_ll)
+// ============================================================================
+//
+// Computes per-source ``<d|h>`` and ``<h|h>`` over the WDM domain using
+// the chunked FD-heterodyne template build. Designed for high CUDA
+// efficiency under the constraints discussed:
+//
+//   * Outer loop = chunks. PSD and data are read once per chunk into
+//     shared memory; ~``nchannels * Nf * Nt_sub`` doubles per chunk =
+//     ~24 KB at (3, 64, 128) -- fits.
+//   * Inner loop = binaries. Each binary reuses the same shared PSD /
+//     data, paying only one global read for its own params.
+//   * Per (chunk, binary) pixel-loop: each thread accumulates a partial
+//     sum of d_h_partial and h_h_partial into shared per-thread arrays.
+//   * After the per-binary loop:
+//       #ifdef __CUDACC__
+//         CUB block-reduce d_h_partial / h_h_partial -> single value
+//         thread 0 atomicAdd into d_h_out[bin_i], h_h_out[bin_i]
+//       #else
+//         simple serial reduction (NUM_THREADS = 1 on CPU)
+//       #endif
+//
+// Partial-slide handling: the host pre-builds chunk geometry arrays
+// (chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset)
+// such that only the *new* pixels of a partial-slide chunk are summed
+// (the overlap with the previous full chunk is excluded). This makes
+// the kernel-side stitching logic identical for full and partial
+// chunks.
+//
+// NUM_THREADS vs N_sparse: the FFT helper accepts NUM_THREADS <
+// N_sparse (sequential stride). Host can pick NUM_THREADS independently
+// of N_sparse provided N_sparse >= NUM_THREADS.
+//
+// (Stub; body filled in once gb_wdm_het_fill_global_kernel is
+// validated. Algorithm and data flow documented above.)
+template <class SourceT>
+CUDA_KERNEL
+void wdm_het_get_ll_kernel(
+    double *d_h_out, double *h_h_out,        // (num_bin,) outputs (host pre-zero'd)
+    Orbits *orbits, TDIConfig *tdi_config,
+    double *params_all,                      // (num_bin * nparams,)
+    int    *data_index_all, int *noise_index_all,
+    double *chunk_t_starts,                  // (n_chunks,)
+    int    *chunk_keep_lo, int *chunk_keep_hi,
+    int    *chunk_n_global_offset,
+    double *wdm_window,                      // (Nt_sub,)
+    double *data_d, double *invC,            // (nchannels, Nf, Nt) WDM data + PSD blocks
+    int n_chunks, int num_bin, int nparams,
+    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int N_sparse, int log2_N_sparse,
+    int nchannels, int n_rfft_chunk,
+    double T_chunk, double dt, double T, double t_ref,
+    double tukey_alpha,
+    // Per-block heap workspace:
+    cmplx  *ws_chunk_fd_all,                 // (n_chunks * nchannels * n_rfft_chunk)
+    cmplx  *ws_layer_scratch_all,            // (n_chunks * Nt_sub)
+    double *ws_chunk_wdm_all,                // (n_chunks * nchannels * Nf * Nt_sub)
+    cmplx  *ws_tdi_channels_all,             // (n_chunks * nchannels * N_sparse) -- heap
+                                             //   tdi_channels_buf, see fill_global.
+    void   *get_tdi_scratch_all,
+    int     get_tdi_scratch_len_per_block
+)
+{
+    SourceT src(orbits, tdi_config, T, t_ref);
+
+    // Heterodyne shared workspace (per block / per chunk). The
+    // tdi_channels_buf slab has been moved to heap to keep static shared
+    // under the 48 KB default budget; see fill_global comments.
+    CUDA_SHARED double t_sparse_buf  [FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED double tdi_amp_buf   [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED double tdi_phase_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED double phi_ref_buf   [FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED cmplx  slow_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+
+    // Per-thread partial accumulators (one slot per thread; reduced at end).
+    // Sized at a generous upper bound; THREAD_START / BLOCK_INCR controls
+    // the active extent.
+    CUDA_SHARED double partial_dh[FAST_WDM_N_SPARSE_MAX];   // reuse N_sparse cap
+    CUDA_SHARED double partial_hh[FAST_WDM_N_SPARSE_MAX];
+
+    // OUTER: chunks (one block per chunk).
+    for (int j = BLOCK_START; j < n_chunks; j += GRID_INCR) {
+        cmplx  *chunk_fd      = &ws_chunk_fd_all[(size_t) j * nchannels * n_rfft_chunk];
+        cmplx  *layer_scratch = &ws_layer_scratch_all[(size_t) j * Nt_sub];
+        double *w_chunk       = &ws_chunk_wdm_all[(size_t) j * nchannels * Nf * Nt_sub];
+        cmplx  *tdi_channels_buf = &ws_tdi_channels_all[(size_t) j * nchannels * N_sparse];
+        void   *get_tdi_scratch = (char *) get_tdi_scratch_all
+            + (size_t) j * (size_t) get_tdi_scratch_len_per_block;
+
+        const int keep_lo     = chunk_keep_lo[j];
+        const int keep_hi     = chunk_keep_hi[j];
+        const int n_global_lo = chunk_n_global_offset[j];
+        const double chunk_t0 = chunk_t_starts[j];
+        const int n_pixels    = keep_hi - keep_lo;
+
+        // INNER: binaries
+        for (int bin_i = 0; bin_i < num_bin; ++bin_i) {
+            double *params = &params_all[(size_t) bin_i * nparams];
+
+            // Zero per-chunk workspaces.
+            for (int k = THREAD_START; k < nchannels * n_rfft_chunk; k += BLOCK_INCR) {
+                chunk_fd[k] = cmplx(0.0, 0.0);
+            }
+            for (int k = THREAD_START; k < nchannels * Nf * Nt_sub; k += BLOCK_INCR) {
+                w_chunk[k] = 0.0;
+            }
+            partial_dh[THREAD_START] = 0.0;
+            partial_hh[THREAD_START] = 0.0;
+            CUDA_SYNC_THREADS;
+
+            // 1) heterodyne FD
+            fast_wdm_inner_heterodyne(
+                chunk_fd, &src, params, bin_i, src.f0_index,
+                chunk_t0, T_chunk,
+                N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
+                t_sparse_buf, tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
+                tdi_channels_buf, slow_buf,
+                get_tdi_scratch, get_tdi_scratch_len_per_block
+            );
+            CUDA_SYNC_THREADS;
+
+            // 2) chunk FD -> chunk WDM
+            gb_chunk_fd_to_wdm(
+                w_chunk, chunk_fd, wdm_window,
+                Nf, Nt_sub, log2_Nt_sub, n_rfft_chunk, dt, nchannels,
+                layer_scratch
+            );
+            CUDA_SYNC_THREADS;
+
+            // 3) per-pixel accumulation into per-thread partials.
+            //    Loop over (c, m, n_local) in the chunk's keep region.
+            //    Each thread strides through pixels (THREAD_START base,
+            //    BLOCK_INCR stride). The outer (c, m) loops are serial
+            //    within the block; only the innermost n_local loop is
+            //    threaded.
+            for (int c = 0; c < nchannels; ++c) {
+                for (int m = 0; m < Nf; ++m) {
+                    for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
+                         n_loc += BLOCK_INCR) {
+                        const int n_glob = n_global_lo + (n_loc - keep_lo);
+                        const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
+                        const size_t g_w  = ((size_t) c * Nf + m) * Nt_sub + n_loc;
+                        const double w   = w_chunk[g_w];
+                        const double d   = data_d[g_dt];
+                        const double inv = invC  [g_dt];
+                        partial_dh[THREAD_START] += d * w * inv;
+                        partial_hh[THREAD_START] += w * w * inv;
+                    }
+                }
+            }
+            CUDA_SYNC_THREADS;
+
+            // 4) Block-reduce partials and add to global outputs.
+            //
+            // On CUDA: ideally CUB BlockReduce<double, BLOCK_DIM>::Sum.
+            // Since BLOCK_DIM is a compile-time arg to cub::BlockReduce
+            // and we want to keep this kernel parametric in NUM_THREADS,
+            // we use a manual block reduction that works for any
+            // power-of-2 block size up to FAST_WDM_N_SPARSE_MAX. The
+            // host launches with a power-of-2 NUM_THREADS to satisfy
+            // this. On CPU NUM_THREADS = 1 -> the inner reduction loop
+            // is a no-op.
+#ifdef __CUDACC__
+            // tree-reduction over partial_dh / partial_hh in shared mem
+            for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+                if (THREAD_START < stride) {
+                    partial_dh[THREAD_START] += partial_dh[THREAD_START + stride];
+                    partial_hh[THREAD_START] += partial_hh[THREAD_START + stride];
+                }
+                CUDA_SYNC_THREADS;
+            }
+            if (THREAD_START == 0) {
+                atomicAdd(&d_h_out[bin_i], partial_dh[0]);
+                atomicAdd(&h_h_out[bin_i], partial_hh[0]);
+            }
+#else
+            // CPU: NUM_THREADS = 1 by THREAD_START convention; partial_dh[0]
+            // already holds the full sum from the single thread.
+            d_h_out[bin_i] += partial_dh[0];
+            h_h_out[bin_i] += partial_hh[0];
+#endif
+            CUDA_SYNC_THREADS;
+        }
+    }
+}
+
+
+// ============================================================================
+// gb_wdm_het_swap_ll_kernel  (Phase 2d -- chunked-heterodyne swap_ll)
+// ============================================================================
+//
+// Same chunked-outer-loop / shared-memory recipe as get_ll, but with
+// add/remove pairs:
+//
+//   d_h_add  / d_h_remove
+//   add_add  / remove_remove / add_remove
+//
+// Per chunk, per pair (add_bin, remove_bin):
+//   build w_add (heterodyne path on params_add)
+//   build w_rem (heterodyne path on params_rem)
+//   accumulate the five contributions using the shared PSD/data slabs:
+//      d_h_add_acc        += sum d * w_add * inv_C
+//      d_h_remove_acc     += sum d * w_rem * inv_C
+//      add_add_acc        += sum w_add * w_add * inv_C
+//      remove_remove_acc  += sum w_rem * w_rem * inv_C
+//      add_remove_acc     += sum w_add * w_rem * inv_C
+//   reduce + atomicAdd into the five per-pair outputs.
+//
+// (Stub; same status as get_ll.)
+template <class SourceT>
+CUDA_KERNEL
+void wdm_het_swap_ll_kernel(
+    double *d_h_add_out, double *d_h_remove_out,
+    double *add_add_out, double *remove_remove_out, double *add_remove_out,
+    Orbits *orbits, TDIConfig *tdi_config,
+    double *params_add_all, double *params_remove_all,
+    int *data_index_all, int *noise_index_all,
+    double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
+    int *chunk_n_global_offset,
+    double *wdm_window,
+    double *data_d, double *invC,
+    int n_chunks, int num_bin, int nparams,
+    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int N_sparse, int log2_N_sparse,
+    int nchannels, int n_rfft_chunk,
+    double T_chunk, double dt, double T, double t_ref,
+    double tukey_alpha,
+    // Per-block heap workspace: need TWO chunk_fd / chunk_wdm slabs
+    // per chunk (one for the add template, one for the remove).
+    // tdi_channels_buf is also on heap (shared by add/remove since it is
+    // overwritten by each get_tdi call before being consumed).
+    cmplx  *ws_chunk_fd_add_all,    cmplx  *ws_chunk_fd_rem_all,
+    cmplx  *ws_layer_scratch_all,
+    double *ws_chunk_wdm_add_all,   double *ws_chunk_wdm_rem_all,
+    cmplx  *ws_tdi_channels_all,    // (n_chunks * nchannels * N_sparse)
+    void   *get_tdi_scratch_all,    int     get_tdi_scratch_len_per_block
+)
+{
+    SourceT src(orbits, tdi_config, T, t_ref);
+
+    // Heterodyne shared workspace (tdi_channels_buf moved to heap).
+    CUDA_SHARED double t_sparse_buf  [FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED double tdi_amp_buf   [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED double tdi_phase_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED double phi_ref_buf   [FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED cmplx  slow_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED double partial_dh_add[FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED double partial_dh_rem[FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED double partial_aa    [FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED double partial_rr    [FAST_WDM_N_SPARSE_MAX];
+    CUDA_SHARED double partial_ar    [FAST_WDM_N_SPARSE_MAX];
+
+    for (int j = BLOCK_START; j < n_chunks; j += GRID_INCR) {
+        cmplx  *chunk_fd_add  = &ws_chunk_fd_add_all [(size_t) j * nchannels * n_rfft_chunk];
+        cmplx  *chunk_fd_rem  = &ws_chunk_fd_rem_all [(size_t) j * nchannels * n_rfft_chunk];
+        cmplx  *layer_scratch = &ws_layer_scratch_all[(size_t) j * Nt_sub];
+        double *w_chunk_add   = &ws_chunk_wdm_add_all[(size_t) j * nchannels * Nf * Nt_sub];
+        double *w_chunk_rem   = &ws_chunk_wdm_rem_all[(size_t) j * nchannels * Nf * Nt_sub];
+        cmplx  *tdi_channels_buf = &ws_tdi_channels_all[(size_t) j * nchannels * N_sparse];
+        void   *get_tdi_scratch = (char *) get_tdi_scratch_all
+            + (size_t) j * (size_t) get_tdi_scratch_len_per_block;
+
+        const int keep_lo     = chunk_keep_lo[j];
+        const int keep_hi     = chunk_keep_hi[j];
+        const int n_global_lo = chunk_n_global_offset[j];
+        const double chunk_t0 = chunk_t_starts[j];
+
+        for (int bin_i = 0; bin_i < num_bin; ++bin_i) {
+            double *params_add = &params_add_all   [(size_t) bin_i * nparams];
+            double *params_rem = &params_remove_all[(size_t) bin_i * nparams];
+
+            // Zero workspaces and partials
+            for (int k = THREAD_START; k < nchannels * n_rfft_chunk; k += BLOCK_INCR) {
+                chunk_fd_add[k] = cmplx(0.0, 0.0);
+                chunk_fd_rem[k] = cmplx(0.0, 0.0);
+            }
+            for (int k = THREAD_START; k < nchannels * Nf * Nt_sub; k += BLOCK_INCR) {
+                w_chunk_add[k] = 0.0;
+                w_chunk_rem[k] = 0.0;
+            }
+            partial_dh_add[THREAD_START] = 0.0;
+            partial_dh_rem[THREAD_START] = 0.0;
+            partial_aa    [THREAD_START] = 0.0;
+            partial_rr    [THREAD_START] = 0.0;
+            partial_ar    [THREAD_START] = 0.0;
+            CUDA_SYNC_THREADS;
+
+            // Add template
+            fast_wdm_inner_heterodyne(
+                chunk_fd_add, &src, params_add, bin_i, src.f0_index,
+                chunk_t0, T_chunk,
+                N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
+                t_sparse_buf, tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
+                tdi_channels_buf, slow_buf,
+                get_tdi_scratch, get_tdi_scratch_len_per_block
+            );
+            CUDA_SYNC_THREADS;
+            gb_chunk_fd_to_wdm(
+                w_chunk_add, chunk_fd_add, wdm_window,
+                Nf, Nt_sub, log2_Nt_sub, n_rfft_chunk, dt, nchannels,
+                layer_scratch
+            );
+            CUDA_SYNC_THREADS;
+
+            // Remove template
+            fast_wdm_inner_heterodyne(
+                chunk_fd_rem, &src, params_rem, bin_i, src.f0_index,
+                chunk_t0, T_chunk,
+                N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
+                t_sparse_buf, tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
+                tdi_channels_buf, slow_buf,
+                get_tdi_scratch, get_tdi_scratch_len_per_block
+            );
+            CUDA_SYNC_THREADS;
+            gb_chunk_fd_to_wdm(
+                w_chunk_rem, chunk_fd_rem, wdm_window,
+                Nf, Nt_sub, log2_Nt_sub, n_rfft_chunk, dt, nchannels,
+                layer_scratch
+            );
+            CUDA_SYNC_THREADS;
+
+            // Accumulate the 5 quantities
+            for (int c = 0; c < nchannels; ++c) {
+                for (int m = 0; m < Nf; ++m) {
+                    for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
+                         n_loc += BLOCK_INCR) {
+                        const int n_glob = n_global_lo + (n_loc - keep_lo);
+                        const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
+                        const size_t g_w  = ((size_t) c * Nf + m) * Nt_sub + n_loc;
+                        const double wa  = w_chunk_add[g_w];
+                        const double wr  = w_chunk_rem[g_w];
+                        const double d   = data_d[g_dt];
+                        const double inv = invC  [g_dt];
+                        partial_dh_add[THREAD_START] += d * wa * inv;
+                        partial_dh_rem[THREAD_START] += d * wr * inv;
+                        partial_aa    [THREAD_START] += wa * wa * inv;
+                        partial_rr    [THREAD_START] += wr * wr * inv;
+                        partial_ar    [THREAD_START] += wa * wr * inv;
+                    }
+                }
+            }
+            CUDA_SYNC_THREADS;
+
+#ifdef __CUDACC__
+            for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+                if (THREAD_START < stride) {
+                    partial_dh_add[THREAD_START] += partial_dh_add[THREAD_START + stride];
+                    partial_dh_rem[THREAD_START] += partial_dh_rem[THREAD_START + stride];
+                    partial_aa    [THREAD_START] += partial_aa    [THREAD_START + stride];
+                    partial_rr    [THREAD_START] += partial_rr    [THREAD_START + stride];
+                    partial_ar    [THREAD_START] += partial_ar    [THREAD_START + stride];
+                }
+                CUDA_SYNC_THREADS;
+            }
+            if (THREAD_START == 0) {
+                atomicAdd(&d_h_add_out      [bin_i], partial_dh_add[0]);
+                atomicAdd(&d_h_remove_out   [bin_i], partial_dh_rem[0]);
+                atomicAdd(&add_add_out      [bin_i], partial_aa    [0]);
+                atomicAdd(&remove_remove_out[bin_i], partial_rr    [0]);
+                atomicAdd(&add_remove_out   [bin_i], partial_ar    [0]);
+            }
+#else
+            d_h_add_out      [bin_i] += partial_dh_add[0];
+            d_h_remove_out   [bin_i] += partial_dh_rem[0];
+            add_add_out      [bin_i] += partial_aa    [0];
+            remove_remove_out[bin_i] += partial_rr    [0];
+            add_remove_out   [bin_i] += partial_ar    [0];
+#endif
+            CUDA_SYNC_THREADS;
+        }
+    }
+}
+
 
 template<int num_diff, int total_diff>
 CUDA_KERNEL

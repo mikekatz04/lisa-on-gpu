@@ -225,6 +225,10 @@ class SOBBHTDIonTheFly : public LISATDIonTheFly{
         int distance_index;
         int f_low_index;
         int phi_c_index;
+        // f0_index is an ALIAS for f_low_index so source-class-agnostic
+        // kernels (e.g. fast_wdm_inner_heterodyne) can read
+        // ``src->f0_index`` uniformly across GB and SOBBH variants.
+        int f0_index;
 
         CUDA_CALLABLE_MEMBER
         SOBBHTDIonTheFly(Orbits *orbits_, TDIConfig *tdi_config_, double T_, double t_ref_) : LISATDIonTheFly(orbits_, tdi_config_, 7, 8, 9, 10)
@@ -238,6 +242,7 @@ class SOBBHTDIonTheFly : public LISATDIonTheFly{
             distance_index = 4;
             f_low_index = 5;
             phi_c_index = 6;
+            f0_index = 5;          // alias of f_low_index for unified kernels
         };
         CUDA_CALLABLE_MEMBER
         ~SOBBHTDIonTheFly();
@@ -580,6 +585,66 @@ class GBComputationGroup{
     void gb_wdm_get_ll_wrap(double *d_h_out, double *h_h_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t);
     void gb_wdm_swap_ll_wrap(double *d_h_add_out, double *d_h_remove_out, double *add_add_out, double *remove_remove_out, double *add_remove_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_add_all, double *params_remove_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t);
 
+    // Chunked-heterodyne family. Replaces the per-pixel WaveletLookupTable path
+    // with a per-chunk dense-rfft + WDM xform built on the slow signal
+    // (heterodyne to f0_grid). Geometry (chunk_t_starts / keep_lo / keep_hi /
+    // n_global_offset / wdm_window) is precomputed on the host -- see
+    // ``gb_wdm_het.compute_chunk_geometry`` / ``compute_wdm_window``.
+    //
+    // ``grid_dim`` selects the launch grid (number of CUDA blocks). The Python
+    // helper ``chunked_het_grid_dim()`` picks an A100/H100-optimal value; pass
+    // anything > 0 on CPU (ignored). Workspaces are allocated and freed inside
+    // this wrapper.
+    void gb_wdm_het_fill_global_wrap(
+        double *template_fill,
+        Orbits *orbits, TDIConfig *tdi_config,
+        double *params_all, double *factors_all,
+        double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
+        int *chunk_n_global_offset,
+        double *wdm_window,
+        int n_chunks, int num_bin, int nparams,
+        int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+        int N_sparse, int log2_N_sparse,
+        int nchannels, int n_rfft_chunk,
+        double T_chunk, double dt, double T, double t_ref,
+        double tukey_alpha,
+        int grid_dim);
+
+    void gb_wdm_het_get_ll_wrap(
+        double *d_h_out, double *h_h_out,
+        Orbits *orbits, TDIConfig *tdi_config,
+        double *params_all,
+        int *data_index_all, int *noise_index_all,
+        double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
+        int *chunk_n_global_offset,
+        double *wdm_window,
+        double *data_d, double *invC,
+        int n_chunks, int num_bin, int nparams,
+        int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+        int N_sparse, int log2_N_sparse,
+        int nchannels, int n_rfft_chunk,
+        double T_chunk, double dt, double T, double t_ref,
+        double tukey_alpha,
+        int grid_dim);
+
+    void gb_wdm_het_swap_ll_wrap(
+        double *d_h_add_out, double *d_h_remove_out,
+        double *add_add_out, double *remove_remove_out, double *add_remove_out,
+        Orbits *orbits, TDIConfig *tdi_config,
+        double *params_add_all, double *params_remove_all,
+        int *data_index_all, int *noise_index_all,
+        double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
+        int *chunk_n_global_offset,
+        double *wdm_window,
+        double *data_d, double *invC,
+        int n_chunks, int num_bin, int nparams,
+        int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+        int N_sparse, int log2_N_sparse,
+        int nchannels, int n_rfft_chunk,
+        double T_chunk, double dt, double T, double t_ref,
+        double tukey_alpha,
+        int grid_dim);
+
     // Spline-path mirrors. `coarse_dt` (seconds) sets the coarse-grid spacing
     // for the cubic-spline window builder (smaller -> more accurate / more
     // get_tdi work). Python computes coarse_dt from a user knob
@@ -696,6 +761,69 @@ class GBComputationGroup{
         double *param_eps_add, double *param_eps_remove,
         int num_bin, int nparams, double T, double t_start, double t_ref,
         int N_sparse, int nchannels, int tdi_type);
+};
+
+
+// Parallel API for SOBBH sources. Mirrors GBComputationGroup's chunked-
+// heterodyne family with `sobbh_` prefixes. Both classes route through the
+// templated `wdm_het_*_kernel<SourceT>` so 95% of the C++ infrastructure is
+// shared -- only the per-block source-class construction
+// (`GBTDIonTheFly` vs `SOBBHTDIonTheFly`) differs.
+//
+// The pre-existing per-pixel-lookup path (gb_wdm_fill_global / get_ll /
+// swap_ll) is GB-only and has no SOBBH equivalent here; for SOBBH the
+// chunked-heterodyne path IS the canonical entry point.
+class SOBBHComputationGroup{
+  public:
+    void sobbh_wdm_het_fill_global_wrap(
+        double *template_fill,
+        Orbits *orbits, TDIConfig *tdi_config,
+        double *params_all, double *factors_all,
+        double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
+        int *chunk_n_global_offset,
+        double *wdm_window,
+        int n_chunks, int num_bin, int nparams,
+        int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+        int N_sparse, int log2_N_sparse,
+        int nchannels, int n_rfft_chunk,
+        double T_chunk, double dt, double T, double t_ref,
+        double tukey_alpha,
+        int grid_dim);
+
+    void sobbh_wdm_het_get_ll_wrap(
+        double *d_h_out, double *h_h_out,
+        Orbits *orbits, TDIConfig *tdi_config,
+        double *params_all,
+        int *data_index_all, int *noise_index_all,
+        double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
+        int *chunk_n_global_offset,
+        double *wdm_window,
+        double *data_d, double *invC,
+        int n_chunks, int num_bin, int nparams,
+        int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+        int N_sparse, int log2_N_sparse,
+        int nchannels, int n_rfft_chunk,
+        double T_chunk, double dt, double T, double t_ref,
+        double tukey_alpha,
+        int grid_dim);
+
+    void sobbh_wdm_het_swap_ll_wrap(
+        double *d_h_add_out, double *d_h_remove_out,
+        double *add_add_out, double *remove_remove_out, double *add_remove_out,
+        Orbits *orbits, TDIConfig *tdi_config,
+        double *params_add_all, double *params_remove_all,
+        int *data_index_all, int *noise_index_all,
+        double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
+        int *chunk_n_global_offset,
+        double *wdm_window,
+        double *data_d, double *invC,
+        int n_chunks, int num_bin, int nparams,
+        int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+        int N_sparse, int log2_N_sparse,
+        int nchannels, int n_rfft_chunk,
+        double T_chunk, double dt, double T, double t_ref,
+        double tukey_alpha,
+        int grid_dim);
 };
 
 #endif // __TDI_ON_THE_FLY_HH__

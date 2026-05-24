@@ -1,3 +1,5 @@
+import numpy as np
+
 from .utils.parallelbase import FastLISAResponseParallelModule
 from fastlisaresponse.tdiconfig import TDIConfig
 from lisatools.detector import Orbits, EqualArmlengthOrbits
@@ -85,11 +87,17 @@ class GBWDMComputations(FastLISAResponseParallelModule):
     def wdm_lookup_table(self, wdm_lookup_table: WDMLookupTable) -> None:
         """Set wdm lookup table.
 
-        Two table layouts are supported, picked by
+        Three table layouts are supported, picked by
         ``wdm_lookup_table.build_kind``:
 
-          * ``'per_n'``      → shape ``(Nt, num_fdot, num_f)`` (legacy)
-          * ``'n_ref_only'`` → shape ``(num_fdot, num_f)`` (Plan A)
+          * ``'per_n'``        → shape ``(Nt, num_fdot, num_f)`` (legacy)
+          * ``'n_ref_only'``   → shape ``(num_fdot, num_f)`` (Plan A, real)
+          * ``'n_ref_complex'``→ same shape as ``'n_ref_only'`` but stored
+                                as ONE complex table whose Re/Im equal the
+                                real path's (cos, sin) — 2x faster to
+                                build. Maps to ``LOOKUP_N_REF_ONLY`` on
+                                the C side; we just split table_cx into
+                                Re/Im before shipping it.
 
         The kind is forwarded to the C++ ``WaveletLookupTable`` as the
         ``kind`` int (matches the ``LookupKind`` enum in
@@ -102,7 +110,7 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         num_fdot = wdm_lookup_table.fdot_steps
         num_f = wdm_lookup_table.f_steps
         build_kind = getattr(wdm_lookup_table, "build_kind", "per_n")
-        if build_kind == "n_ref_only":
+        if build_kind in ("n_ref_only", "n_ref_complex"):
             expected_shape = (num_fdot, num_f)
             kind_int = 1
         elif build_kind == "per_n":
@@ -111,18 +119,42 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         else:
             raise ValueError(
                 f"Unknown WDMLookupTable.build_kind={build_kind!r}; "
-                "expected 'per_n' or 'n_ref_only'."
+                "expected 'per_n', 'n_ref_only', or 'n_ref_complex'."
             )
-        assert wdm_lookup_table.table_cos.shape == expected_shape, (
-            f"table_cos shape {wdm_lookup_table.table_cos.shape} != "
-            f"{expected_shape} for build_kind={build_kind!r}"
-        )
-        assert wdm_lookup_table.table_sin.shape == expected_shape, (
-            f"table_sin shape {wdm_lookup_table.table_sin.shape} != "
-            f"{expected_shape} for build_kind={build_kind!r}"
-        )
-        self.c_nm_all = self.xp.ascontiguousarray(self.xp.asarray(wdm_lookup_table.table_cos))
-        self.s_nm_all = self.xp.ascontiguousarray(self.xp.asarray(wdm_lookup_table.table_sin))
+
+        if build_kind == "n_ref_complex":
+            # Split the stored complex table into real cos / sin arrays for
+            # the C kernel. ``Re(table_cx) == table_cos`` and
+            # ``Im(table_cx) == table_sin`` of the real-path build (build
+            # applies the same heroics in both paths), so the C side
+            # consumes these identically.
+            assert wdm_lookup_table.table_cx.shape == expected_shape, (
+                f"table_cx shape {wdm_lookup_table.table_cx.shape} != "
+                f"{expected_shape} for build_kind={build_kind!r}"
+            )
+            _cos_src = self.xp.real(self.xp.asarray(wdm_lookup_table.table_cx))
+            _sin_src = self.xp.imag(self.xp.asarray(wdm_lookup_table.table_cx))
+        else:
+            assert wdm_lookup_table.table_cos.shape == expected_shape, (
+                f"table_cos shape {wdm_lookup_table.table_cos.shape} != "
+                f"{expected_shape} for build_kind={build_kind!r}"
+            )
+            assert wdm_lookup_table.table_sin.shape == expected_shape, (
+                f"table_sin shape {wdm_lookup_table.table_sin.shape} != "
+                f"{expected_shape} for build_kind={build_kind!r}"
+            )
+            _cos_src = self.xp.asarray(wdm_lookup_table.table_cos)
+            _sin_src = self.xp.asarray(wdm_lookup_table.table_sin)
+
+        # ``jax.numpy`` doesn't expose ``ascontiguousarray``; ``jnp.asarray``
+        # already returns a contiguous immutable buffer. For the numpy /
+        # cupy backends we keep the explicit contiguous coercion.
+        if hasattr(self.xp, "ascontiguousarray"):
+            self.c_nm_all = self.xp.ascontiguousarray(_cos_src)
+            self.s_nm_all = self.xp.ascontiguousarray(_sin_src)
+        else:
+            self.c_nm_all = _cos_src
+            self.s_nm_all = _sin_src
 
         delta_f = wdm_lookup_table.f_vals_norm[1] - wdm_lookup_table.f_vals_norm[0]
         try:
@@ -156,7 +188,10 @@ class GBWDMComputations(FastLISAResponseParallelModule):
 
     @classmethod
     def supported_backends(cls):
-        return ["fastlisaresponse_" + _tmp for _tmp in cls.GPU_RECOMMENDED()]
+        # GPU_RECOMMENDED_WITH_JAX appends 'jax' to the CPU/GPU options
+        # so this class can dispatch to the pure JAX backend in
+        # fastlisaresponse.jax via force_backend='jax'.
+        return ["fastlisaresponse_" + _tmp for _tmp in cls.GPU_RECOMMENDED_WITH_JAX()]
 
     def get_ll_wdm(self, params, wdm_holder, data_index=None, noise_index=None, convert_to_ra_dec: bool = True,
                    use_spline: bool = False, coarse_pts_per_year: int = 256):
@@ -170,9 +205,16 @@ class GBWDMComputations(FastLISAResponseParallelModule):
 
         params_tmp = self.xp.asarray(self.xp.atleast_2d(params)).copy()
         num_bin = params_tmp.shape[0]
-        
-        self.d_h_out = self.xp.zeros(num_bin)
-        self.h_h_out = self.xp.zeros(num_bin)
+
+        # The JAX backend's GBComputationGroupWrap can't mutate
+        # immutable jnp arrays; allocate numpy host buffers in that
+        # case and rebind ``d_h_out``/``h_h_out`` to jnp at the end.
+        if self.backend.name == "fastlisaresponse_jax":
+            self.d_h_out = np.zeros(num_bin)
+            self.h_h_out = np.zeros(num_bin)
+        else:
+            self.d_h_out = self.xp.zeros(num_bin)
+            self.h_h_out = self.xp.zeros(num_bin)
 
         if convert_to_ra_dec:
             lam = params_tmp[:, -2].copy()
@@ -295,11 +337,20 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         )
         num_bin = params_add_tmp.shape[0]
 
-        self.d_h_add_out = self.xp.zeros(num_bin)
-        self.d_h_remove_out = self.xp.zeros(num_bin)
-        self.add_add_out = self.xp.zeros(num_bin)
-        self.remove_remove_out = self.xp.zeros(num_bin)
-        self.add_remove_out = self.xp.zeros(num_bin)
+        # See note in get_ll_wdm: the JAX-backend computation group
+        # mutates host (numpy) buffers; jnp arrays would error out.
+        if self.backend.name == "fastlisaresponse_jax":
+            self.d_h_add_out = np.zeros(num_bin)
+            self.d_h_remove_out = np.zeros(num_bin)
+            self.add_add_out = np.zeros(num_bin)
+            self.remove_remove_out = np.zeros(num_bin)
+            self.add_remove_out = np.zeros(num_bin)
+        else:
+            self.d_h_add_out = self.xp.zeros(num_bin)
+            self.d_h_remove_out = self.xp.zeros(num_bin)
+            self.add_add_out = self.xp.zeros(num_bin)
+            self.remove_remove_out = self.xp.zeros(num_bin)
+            self.add_remove_out = self.xp.zeros(num_bin)
 
         if convert_to_ra_dec:
             for params_tmp in (params_add_tmp, params_remove_tmp):
@@ -772,8 +823,24 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         which replaces fast_wdm_inner with cubic-spline interpolation of the
         get_tdi outputs on a coarse uniform time grid of
         ``coarse_pts_per_year`` points per Julian year.
+
+        With ``force_backend='jax'`` the ``templates`` buffer must be a
+        *numpy* array (not jnp). JAX arrays are immutable; the JAX
+        kernel internally uses a functional ``segment_sum`` and writes
+        the result back into the numpy buffer via standard host-side
+        assignment. The caller's ``templates`` reference is mutated in
+        place, matching the C++ contract.
         """
-        assert isinstance(templates, self.xp.ndarray)
+        if self.backend.name == "fastlisaresponse_jax":
+            # Accept numpy on the JAX path -- jnp arrays are immutable
+            # so the in-place buffer contract would silently break.
+            assert isinstance(templates, np.ndarray), (
+                "On the JAX backend, ``templates`` must be a numpy "
+                "ndarray (not jnp.ndarray). The kernel mutates it "
+                "in place to match the C++ contract."
+            )
+        else:
+            assert isinstance(templates, self.xp.ndarray)
 
         if templates.ndim == 1:
             num_templates = int(templates.shape[-1] / (self.wdm_lookup_table.nchannels * self.wdm_lookup_table.settings.Nf_active * self.wdm_lookup_table.settings.Nt_active))
