@@ -26,6 +26,7 @@ class FastLISAResponseBackendMethods(BackendMethods):
     FDDomainWrap: object
     WaveletLookupTableWrap: object
     GBComputationGroupWrap: object
+    SOBBHComputationGroupWrap: object
     TDITypeDict: object
 
 class FastLISAResponseBackend:
@@ -43,6 +44,7 @@ class FastLISAResponseBackend:
     FDDomainWrap: object
     WaveletLookupTableWrap: object
     GBComputationGroupWrap: object
+    SOBBHComputationGroupWrap: object
     TDITypeDict: object
     
     def __init__(self, fastlisaresponse_backend_methods):
@@ -65,6 +67,7 @@ class FastLISAResponseBackend:
         self.FDDomainWrap = fastlisaresponse_backend_methods.FDDomainWrap
         self.WaveletLookupTableWrap = fastlisaresponse_backend_methods.WaveletLookupTableWrap
         self.GBComputationGroupWrap = fastlisaresponse_backend_methods.GBComputationGroupWrap
+        self.SOBBHComputationGroupWrap = fastlisaresponse_backend_methods.SOBBHComputationGroupWrap
         self.TDITypeDict = fastlisaresponse_backend_methods.TDITypeDict
 
 class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
@@ -109,6 +112,7 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
             FDDomainWrap=fastlisaresponse_backend_cpu.tdionthefly.FDDomainWrapCPU,
             WaveletLookupTableWrap=fastlisaresponse_backend_cpu.tdionthefly.WaveletLookupTableWrapCPU,
             GBComputationGroupWrap=fastlisaresponse_backend_cpu.tdionthefly.GBComputationGroupWrapCPU,
+            SOBBHComputationGroupWrap=fastlisaresponse_backend_cpu.tdionthefly.SOBBHComputationGroupWrapCPU,
             TDITypeDict=tmp,
             xp=numpy,
         )
@@ -162,6 +166,7 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
             FDDomainWrap=fastlisaresponse_backend_cuda11x.tdionthefly.FDDomainWrapGPU,
             WaveletLookupTableWrap=fastlisaresponse_backend_cuda11x.tdionthefly.WaveletLookupTableWrapGPU,
             GBComputationGroupWrap=fastlisaresponse_backend_cuda11x.tdionthefly.GBComputationGroupWrapGPU,
+            SOBBHComputationGroupWrap=fastlisaresponse_backend_cuda11x.tdionthefly.SOBBHComputationGroupWrapGPU,
             TDITypeDict=tmp,
             xp=cupy,
         )
@@ -212,6 +217,7 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
             FDDomainWrap=fastlisaresponse_backend_cuda12x.tdionthefly.FDDomainWrapGPU,
             WaveletLookupTableWrap=fastlisaresponse_backend_cuda12x.tdionthefly.WaveletLookupTableWrapGPU,
             GBComputationGroupWrap=fastlisaresponse_backend_cuda12x.tdionthefly.GBComputationGroupWrapGPU,
+            SOBBHComputationGroupWrap=fastlisaresponse_backend_cuda12x.tdionthefly.SOBBHComputationGroupWrapGPU,
             TDITypeDict=tmp,
             xp=cupy,
         )

@@ -46,12 +46,20 @@ def _resolve_alpha(alpha: float, N_sparse: int) -> float:
 
 
 def _tukey_window(N: int, alpha: float) -> jnp.ndarray:
-    """Tukey window of length ``N``; alpha in [0, 1]."""
+    """Tukey window of length ``N``; alpha in [0, 1].
+
+    Uses ``alpha * (N - 1) / 2`` as the taper-region length, matching
+    ``scipy.signal.windows.tukey`` and the C++ kernel's
+    ``fast_wdm_inner_heterodyne``. The previous ``alpha * N / 2`` form
+    shifts ~0.1-0.3% of spectral leakage into adjacent bins relative
+    to the lisatools reference -- the C++ side had the same bug; both
+    are now fixed.
+    """
     if alpha <= 0.0:
         return jnp.ones(N)
     n = jnp.arange(N)
     last = N - 1
-    n_taper = 0.5 * alpha * N
+    n_taper = 0.5 * alpha * (N - 1)
     # left taper (cosine ramp 0->1 over n_taper samples)
     xl = jnp.clip(n / n_taper, 0.0, 1.0)
     left = 0.5 * (1.0 + jnp.cos(jnp.pi * (xl - 1.0)))

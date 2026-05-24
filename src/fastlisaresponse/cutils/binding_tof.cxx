@@ -474,6 +474,292 @@ std::string get_module_path_tdionthefly() {
 }
 
 
+// ===========================================================================
+// Chunked-heterodyne wrappers: thin pybind shims that unpack numpy arrays
+// into raw pointers and forward to the C++ host wrappers in TDIonTheFly.cu.
+//
+// Both GB and SOBBH share an identical method body modulo source-class name;
+// we keep them separate (not a template) for readability of the pybind layer.
+// ===========================================================================
+
+void GBComputationGroupWrap::gb_wdm_het_fill_global(
+    array_type<double> template_fill,
+    OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+    array_type<double> params_all, array_type<double> factors_all,
+    array_type<double> chunk_t_starts,
+    array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
+    array_type<int> chunk_n_global_offset,
+    array_type<double> wdm_window,
+    int n_chunks, int num_bin, int nparams,
+    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int N_sparse, int log2_N_sparse,
+    int nchannels, int n_rfft_chunk,
+    double T_chunk, double dt, double T, double t_ref,
+    double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit)
+{
+    gb_wdm_het_fill_global_wrap(
+        return_pointer_and_check_length(template_fill, "template_fill",
+                                        (size_t) nchannels * Nf * Nt, 1),
+        orbits_wrap->orbits, tdi_config_wrap->tdi_config,
+        return_pointer_and_check_length(params_all, "params_all", nparams, num_bin),
+        return_pointer_and_check_length(factors_all, "factors_all", num_bin, 1),
+        return_pointer_and_check_length(chunk_t_starts, "chunk_t_starts", n_chunks, 1),
+        return_pointer_and_check_length(chunk_keep_lo, "chunk_keep_lo", n_chunks, 1),
+        return_pointer_and_check_length(chunk_keep_hi, "chunk_keep_hi", n_chunks, 1),
+        return_pointer_and_check_length(chunk_n_global_offset, "chunk_n_global_offset", n_chunks, 1),
+        return_pointer_and_check_length(wdm_window, "wdm_window", Nt_sub, 1),
+        n_chunks, num_bin, nparams,
+        Nf, Nt, Nt_sub, log2_Nt_sub,
+        N_sparse, log2_N_sparse,
+        nchannels, n_rfft_chunk,
+        T_chunk, dt, T, t_ref, tukey_alpha, grid_dim, N_cp_sig, N_cp_orbit);
+}
+
+void GBComputationGroupWrap::gb_wdm_het_get_ll(
+    array_type<double> d_h_out, array_type<double> h_h_out,
+    OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+    array_type<double> params_all,
+    array_type<int> data_index_all, array_type<int> noise_index_all,
+    array_type<double> chunk_t_starts,
+    array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
+    array_type<int> chunk_n_global_offset,
+    array_type<double> wdm_window,
+    array_type<double> data_d, array_type<double> invC,
+    int n_chunks, int num_bin, int nparams,
+    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int N_sparse, int log2_N_sparse,
+    int nchannels, int n_rfft_chunk,
+    double T_chunk, double dt, double T, double t_ref,
+    double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
+    array_type<int> binary_perm, array_type<int> group_starts, array_type<int> group_ends,
+    array_type<int> group_m_lo, array_type<int> group_m_hi, int n_groups)
+{
+    // Group-array lengths: binary_perm is num_bin; the four group_*
+    // arrays are length max(n_groups, 1) (caller passes length-1 stubs
+    // when n_groups == 0).
+    const int gn = (n_groups > 0) ? n_groups : 1;
+    gb_wdm_het_get_ll_wrap(
+        return_pointer_and_check_length(d_h_out, "d_h_out", num_bin, 1),
+        return_pointer_and_check_length(h_h_out, "h_h_out", num_bin, 1),
+        orbits_wrap->orbits, tdi_config_wrap->tdi_config,
+        return_pointer_and_check_length(params_all, "params_all", nparams, num_bin),
+        return_pointer_and_check_length(data_index_all, "data_index_all", num_bin, 1),
+        return_pointer_and_check_length(noise_index_all, "noise_index_all", num_bin, 1),
+        return_pointer_and_check_length(chunk_t_starts, "chunk_t_starts", n_chunks, 1),
+        return_pointer_and_check_length(chunk_keep_lo, "chunk_keep_lo", n_chunks, 1),
+        return_pointer_and_check_length(chunk_keep_hi, "chunk_keep_hi", n_chunks, 1),
+        return_pointer_and_check_length(chunk_n_global_offset, "chunk_n_global_offset", n_chunks, 1),
+        return_pointer_and_check_length(wdm_window, "wdm_window", Nt_sub, 1),
+        return_pointer_and_check_length(data_d, "data_d", (size_t) nchannels * Nf * Nt, 1),
+        return_pointer_and_check_length(invC,   "invC",   (size_t) nchannels * Nf * Nt, 1),
+        n_chunks, num_bin, nparams,
+        Nf, Nt, Nt_sub, log2_Nt_sub,
+        N_sparse, log2_N_sparse,
+        nchannels, n_rfft_chunk,
+        T_chunk, dt, T, t_ref, tukey_alpha, grid_dim, N_cp_sig, N_cp_orbit,
+        return_pointer_and_check_length(binary_perm,  "binary_perm",  num_bin, 1),
+        return_pointer_and_check_length(group_starts, "group_starts", gn, 1),
+        return_pointer_and_check_length(group_ends,   "group_ends",   gn, 1),
+        return_pointer_and_check_length(group_m_lo,   "group_m_lo",   gn, 1),
+        return_pointer_and_check_length(group_m_hi,   "group_m_hi",   gn, 1),
+        n_groups);
+}
+
+void GBComputationGroupWrap::gb_wdm_het_swap_ll(
+    array_type<double> d_h_add_out, array_type<double> d_h_remove_out,
+    array_type<double> add_add_out, array_type<double> remove_remove_out,
+    array_type<double> add_remove_out,
+    OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+    array_type<double> params_add_all, array_type<double> params_remove_all,
+    array_type<int> data_index_all, array_type<int> noise_index_all,
+    array_type<double> chunk_t_starts,
+    array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
+    array_type<int> chunk_n_global_offset,
+    array_type<double> wdm_window,
+    array_type<double> data_d, array_type<double> invC,
+    int n_chunks, int num_bin, int nparams,
+    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int N_sparse, int log2_N_sparse,
+    int nchannels, int n_rfft_chunk,
+    double T_chunk, double dt, double T, double t_ref,
+    double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
+    array_type<int> binary_perm, array_type<int> group_starts, array_type<int> group_ends,
+    array_type<int> group_m_lo, array_type<int> group_m_hi, int n_groups,
+    array_type<int> pair_m_lo_b, array_type<int> pair_m_hi_b)
+{
+    const int gn = (n_groups > 0) ? n_groups : 1;
+    gb_wdm_het_swap_ll_wrap(
+        return_pointer_and_check_length(d_h_add_out,       "d_h_add_out",       num_bin, 1),
+        return_pointer_and_check_length(d_h_remove_out,    "d_h_remove_out",    num_bin, 1),
+        return_pointer_and_check_length(add_add_out,       "add_add_out",       num_bin, 1),
+        return_pointer_and_check_length(remove_remove_out, "remove_remove_out", num_bin, 1),
+        return_pointer_and_check_length(add_remove_out,    "add_remove_out",    num_bin, 1),
+        orbits_wrap->orbits, tdi_config_wrap->tdi_config,
+        return_pointer_and_check_length(params_add_all,    "params_add_all",    nparams, num_bin),
+        return_pointer_and_check_length(params_remove_all, "params_remove_all", nparams, num_bin),
+        return_pointer_and_check_length(data_index_all,    "data_index_all",    num_bin, 1),
+        return_pointer_and_check_length(noise_index_all,   "noise_index_all",   num_bin, 1),
+        return_pointer_and_check_length(chunk_t_starts,    "chunk_t_starts",    n_chunks, 1),
+        return_pointer_and_check_length(chunk_keep_lo,     "chunk_keep_lo",     n_chunks, 1),
+        return_pointer_and_check_length(chunk_keep_hi,     "chunk_keep_hi",     n_chunks, 1),
+        return_pointer_and_check_length(chunk_n_global_offset, "chunk_n_global_offset", n_chunks, 1),
+        return_pointer_and_check_length(wdm_window, "wdm_window", Nt_sub, 1),
+        return_pointer_and_check_length(data_d, "data_d", (size_t) nchannels * Nf * Nt, 1),
+        return_pointer_and_check_length(invC,   "invC",   (size_t) nchannels * Nf * Nt, 1),
+        n_chunks, num_bin, nparams,
+        Nf, Nt, Nt_sub, log2_Nt_sub,
+        N_sparse, log2_N_sparse,
+        nchannels, n_rfft_chunk,
+        T_chunk, dt, T, t_ref, tukey_alpha, grid_dim, N_cp_sig, N_cp_orbit,
+        return_pointer_and_check_length(binary_perm,  "binary_perm",  num_bin, 1),
+        return_pointer_and_check_length(group_starts, "group_starts", gn, 1),
+        return_pointer_and_check_length(group_ends,   "group_ends",   gn, 1),
+        return_pointer_and_check_length(group_m_lo,   "group_m_lo",   gn, 1),
+        return_pointer_and_check_length(group_m_hi,   "group_m_hi",   gn, 1),
+        n_groups,
+        return_pointer_and_check_length(pair_m_lo_b, "pair_m_lo_b", num_bin, 1),
+        return_pointer_and_check_length(pair_m_hi_b, "pair_m_hi_b", num_bin, 1));
+}
+
+
+// ---- SOBBH-flavored pybind shims -------------------------------------------
+void SOBBHComputationGroupWrap::sobbh_wdm_het_fill_global(
+    array_type<double> template_fill,
+    OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+    array_type<double> params_all, array_type<double> factors_all,
+    array_type<double> chunk_t_starts,
+    array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
+    array_type<int> chunk_n_global_offset,
+    array_type<double> wdm_window,
+    int n_chunks, int num_bin, int nparams,
+    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int N_sparse, int log2_N_sparse,
+    int nchannels, int n_rfft_chunk,
+    double T_chunk, double dt, double T, double t_ref,
+    double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit)
+{
+    sobbh_wdm_het_fill_global_wrap(
+        return_pointer_and_check_length(template_fill, "template_fill",
+                                        (size_t) nchannels * Nf * Nt, 1),
+        orbits_wrap->orbits, tdi_config_wrap->tdi_config,
+        return_pointer_and_check_length(params_all, "params_all", nparams, num_bin),
+        return_pointer_and_check_length(factors_all, "factors_all", num_bin, 1),
+        return_pointer_and_check_length(chunk_t_starts, "chunk_t_starts", n_chunks, 1),
+        return_pointer_and_check_length(chunk_keep_lo, "chunk_keep_lo", n_chunks, 1),
+        return_pointer_and_check_length(chunk_keep_hi, "chunk_keep_hi", n_chunks, 1),
+        return_pointer_and_check_length(chunk_n_global_offset, "chunk_n_global_offset", n_chunks, 1),
+        return_pointer_and_check_length(wdm_window, "wdm_window", Nt_sub, 1),
+        n_chunks, num_bin, nparams,
+        Nf, Nt, Nt_sub, log2_Nt_sub,
+        N_sparse, log2_N_sparse,
+        nchannels, n_rfft_chunk,
+        T_chunk, dt, T, t_ref, tukey_alpha, grid_dim, N_cp_sig, N_cp_orbit);
+}
+
+void SOBBHComputationGroupWrap::sobbh_wdm_het_get_ll(
+    array_type<double> d_h_out, array_type<double> h_h_out,
+    OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+    array_type<double> params_all,
+    array_type<int> data_index_all, array_type<int> noise_index_all,
+    array_type<double> chunk_t_starts,
+    array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
+    array_type<int> chunk_n_global_offset,
+    array_type<double> wdm_window,
+    array_type<double> data_d, array_type<double> invC,
+    int n_chunks, int num_bin, int nparams,
+    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int N_sparse, int log2_N_sparse,
+    int nchannels, int n_rfft_chunk,
+    double T_chunk, double dt, double T, double t_ref,
+    double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
+    array_type<int> binary_perm, array_type<int> group_starts, array_type<int> group_ends,
+    array_type<int> group_m_lo, array_type<int> group_m_hi, int n_groups)
+{
+    const int gn = (n_groups > 0) ? n_groups : 1;
+    sobbh_wdm_het_get_ll_wrap(
+        return_pointer_and_check_length(d_h_out, "d_h_out", num_bin, 1),
+        return_pointer_and_check_length(h_h_out, "h_h_out", num_bin, 1),
+        orbits_wrap->orbits, tdi_config_wrap->tdi_config,
+        return_pointer_and_check_length(params_all, "params_all", nparams, num_bin),
+        return_pointer_and_check_length(data_index_all, "data_index_all", num_bin, 1),
+        return_pointer_and_check_length(noise_index_all, "noise_index_all", num_bin, 1),
+        return_pointer_and_check_length(chunk_t_starts, "chunk_t_starts", n_chunks, 1),
+        return_pointer_and_check_length(chunk_keep_lo, "chunk_keep_lo", n_chunks, 1),
+        return_pointer_and_check_length(chunk_keep_hi, "chunk_keep_hi", n_chunks, 1),
+        return_pointer_and_check_length(chunk_n_global_offset, "chunk_n_global_offset", n_chunks, 1),
+        return_pointer_and_check_length(wdm_window, "wdm_window", Nt_sub, 1),
+        return_pointer_and_check_length(data_d, "data_d", (size_t) nchannels * Nf * Nt, 1),
+        return_pointer_and_check_length(invC,   "invC",   (size_t) nchannels * Nf * Nt, 1),
+        n_chunks, num_bin, nparams,
+        Nf, Nt, Nt_sub, log2_Nt_sub,
+        N_sparse, log2_N_sparse,
+        nchannels, n_rfft_chunk,
+        T_chunk, dt, T, t_ref, tukey_alpha, grid_dim, N_cp_sig, N_cp_orbit,
+        return_pointer_and_check_length(binary_perm,  "binary_perm",  num_bin, 1),
+        return_pointer_and_check_length(group_starts, "group_starts", gn, 1),
+        return_pointer_and_check_length(group_ends,   "group_ends",   gn, 1),
+        return_pointer_and_check_length(group_m_lo,   "group_m_lo",   gn, 1),
+        return_pointer_and_check_length(group_m_hi,   "group_m_hi",   gn, 1),
+        n_groups);
+}
+
+void SOBBHComputationGroupWrap::sobbh_wdm_het_swap_ll(
+    array_type<double> d_h_add_out, array_type<double> d_h_remove_out,
+    array_type<double> add_add_out, array_type<double> remove_remove_out,
+    array_type<double> add_remove_out,
+    OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+    array_type<double> params_add_all, array_type<double> params_remove_all,
+    array_type<int> data_index_all, array_type<int> noise_index_all,
+    array_type<double> chunk_t_starts,
+    array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
+    array_type<int> chunk_n_global_offset,
+    array_type<double> wdm_window,
+    array_type<double> data_d, array_type<double> invC,
+    int n_chunks, int num_bin, int nparams,
+    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int N_sparse, int log2_N_sparse,
+    int nchannels, int n_rfft_chunk,
+    double T_chunk, double dt, double T, double t_ref,
+    double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
+    array_type<int> binary_perm, array_type<int> group_starts, array_type<int> group_ends,
+    array_type<int> group_m_lo, array_type<int> group_m_hi, int n_groups,
+    array_type<int> pair_m_lo_b, array_type<int> pair_m_hi_b)
+{
+    const int gn = (n_groups > 0) ? n_groups : 1;
+    sobbh_wdm_het_swap_ll_wrap(
+        return_pointer_and_check_length(d_h_add_out,       "d_h_add_out",       num_bin, 1),
+        return_pointer_and_check_length(d_h_remove_out,    "d_h_remove_out",    num_bin, 1),
+        return_pointer_and_check_length(add_add_out,       "add_add_out",       num_bin, 1),
+        return_pointer_and_check_length(remove_remove_out, "remove_remove_out", num_bin, 1),
+        return_pointer_and_check_length(add_remove_out,    "add_remove_out",    num_bin, 1),
+        orbits_wrap->orbits, tdi_config_wrap->tdi_config,
+        return_pointer_and_check_length(params_add_all,    "params_add_all",    nparams, num_bin),
+        return_pointer_and_check_length(params_remove_all, "params_remove_all", nparams, num_bin),
+        return_pointer_and_check_length(data_index_all,    "data_index_all",    num_bin, 1),
+        return_pointer_and_check_length(noise_index_all,   "noise_index_all",   num_bin, 1),
+        return_pointer_and_check_length(chunk_t_starts,    "chunk_t_starts",    n_chunks, 1),
+        return_pointer_and_check_length(chunk_keep_lo,     "chunk_keep_lo",     n_chunks, 1),
+        return_pointer_and_check_length(chunk_keep_hi,     "chunk_keep_hi",     n_chunks, 1),
+        return_pointer_and_check_length(chunk_n_global_offset, "chunk_n_global_offset", n_chunks, 1),
+        return_pointer_and_check_length(wdm_window, "wdm_window", Nt_sub, 1),
+        return_pointer_and_check_length(data_d, "data_d", (size_t) nchannels * Nf * Nt, 1),
+        return_pointer_and_check_length(invC,   "invC",   (size_t) nchannels * Nf * Nt, 1),
+        n_chunks, num_bin, nparams,
+        Nf, Nt, Nt_sub, log2_Nt_sub,
+        N_sparse, log2_N_sparse,
+        nchannels, n_rfft_chunk,
+        T_chunk, dt, T, t_ref, tukey_alpha, grid_dim, N_cp_sig, N_cp_orbit,
+        return_pointer_and_check_length(binary_perm,  "binary_perm",  num_bin, 1),
+        return_pointer_and_check_length(group_starts, "group_starts", gn, 1),
+        return_pointer_and_check_length(group_ends,   "group_ends",   gn, 1),
+        return_pointer_and_check_length(group_m_lo,   "group_m_lo",   gn, 1),
+        return_pointer_and_check_length(group_m_hi,   "group_m_hi",   gn, 1),
+        n_groups,
+        return_pointer_and_check_length(pair_m_lo_b, "pair_m_lo_b", num_bin, 1),
+        return_pointer_and_check_length(pair_m_hi_b, "pair_m_hi_b", num_bin, 1));
+}
+
+
 // PYBIND11_MODULE creates the entry point for the Python module
 // The module name here must match the one used in CMakeLists.txt
 void tdionthefly_part(py::module &m) {
@@ -763,6 +1049,36 @@ void tdionthefly_part(py::module &m) {
          "Spline diagnostic: builds one WDM_SPLINE_L-point spline window "
          "starting at t_window_start with spacing coarse_dt, then evaluates "
          "at every tn in tn_arr. Output layout matches gb_wdm_eval_inputs.")
+    // ---- Chunked-heterodyne (no lookup table) ----------------------
+    .def("gb_wdm_het_fill_global", &GBComputationGroupWrap::gb_wdm_het_fill_global,
+         "Chunked-heterodyne fill_global. Builds the WDM-domain GB template by "
+         "iterating over precomputed chunks (chunk_t_starts / keep_lo / keep_hi / "
+         "n_global_offset). Each block (chunk) walks all binaries so per-chunk "
+         "PSD/data slabs are reused. grid_dim picks the launch grid (use "
+         "chunked_het_grid_dim).")
+    .def("gb_wdm_het_get_ll", &GBComputationGroupWrap::gb_wdm_het_get_ll,
+         "Chunked-heterodyne get_ll. Returns <d|h> and <h|h> per binary, "
+         "matching gb_wdm_get_ll up to numerical precision.")
+    .def("gb_wdm_het_swap_ll", &GBComputationGroupWrap::gb_wdm_het_swap_ll,
+         "Chunked-heterodyne swap_ll. Returns the same five inner products as "
+         "gb_wdm_swap_ll: <d|h_add>, <d|h_remove>, <h_add|h_add>, "
+         "<h_remove|h_remove>, <h_add|h_remove>.")
+    ;
+
+    #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
+    py::class_<SOBBHComputationGroupWrap>(m, "SOBBHComputationGroupWrapGPU")
+#else
+    py::class_<SOBBHComputationGroupWrap>(m, "SOBBHComputationGroupWrapCPU")
+#endif
+    .def(py::init<>())
+    .def("sobbh_wdm_het_fill_global", &SOBBHComputationGroupWrap::sobbh_wdm_het_fill_global,
+         "SOBBH chunked-heterodyne fill_global. Same as gb_wdm_het_fill_global "
+         "but with SOBBHTDIonTheFly as the source class. 11-parameter source "
+         "vector (see SOBBHTDIonTheFly).")
+    .def("sobbh_wdm_het_get_ll", &SOBBHComputationGroupWrap::sobbh_wdm_het_get_ll,
+         "SOBBH chunked-heterodyne get_ll.")
+    .def("sobbh_wdm_het_swap_ll", &SOBBHComputationGroupWrap::sobbh_wdm_het_swap_ll,
+         "SOBBH chunked-heterodyne swap_ll.")
     ;
 }
 

@@ -1527,6 +1527,23 @@ CUDA_SYNC_THREADS;
 #define FAST_WDM_N_SPARSE_MAX  256
 #define FAST_WDM_NCHANNELS_MAX 3
 
+// Source-signal spline cache (within-(chunk, binary) optimization).
+// Selected at RUNTIME per kernel call via the ``N_cp_sig`` parameter:
+//   N_cp_sig <= 0  -> direct path: source->get_tdi at all N_sparse points.
+//   N_cp_sig >  0  -> spline cache: source->get_tdi_heterodyned at N_cp_sig
+//                     points, cubic-spline-interpolate to the N_sparse grid.
+//
+// The spline-cache buffers are statically sized at FAST_WDM_N_CP_SIG_MAX,
+// so they always occupy shared mem (cost: ~25 KB extra per block at max).
+// The direct-path buffers also stay allocated; the kernel just branches
+// on N_cp_sig at the inner heterodyne call. This trades a bit of shared-mem
+// for runtime flexibility (= no rebuild to switch between modes).
+//
+// Per the density study at the half-day-wavelet baseline,
+// N_cp_sig=48 -> mm < 4e-11 (GB) / 4e-9 (SOBBH) vs lisatools.
+// See CHUNKED_HET_DESIGN_NOTES.md.
+#define FAST_WDM_N_CP_SIG_MAX 64
+
 // ---------------------------------------------------------------------------
 // Threading model notes for upcoming gb_wdm_het_* kernels
 // ---------------------------------------------------------------------------
@@ -1549,6 +1566,409 @@ CUDA_SYNC_THREADS;
 // This collapses atomic contention to one atomicAdd per block per
 // source, instead of one per WDM pixel.
 // ---------------------------------------------------------------------------
+
+// CPU/GPU dispatching wrapper for the cubic-spline fitter from
+// GPUBackendTools/Interpolate.hh.  GPU uses the cooperative PCR solver
+// (requires pcr_scratch of size 8*N doubles); CPU uses the sequential
+// Thomas algorithm (pcr_scratch unused).
+CUDA_DEVICE
+inline void wdm_fit_cubic_spline(double *x, double *y,
+                                  double *c1, double *c2, double *c3,
+                                  double *B, double *pcr_scratch,
+                                  int N, int spline_type)
+{
+#ifdef __CUDACC__
+    fit_cubic_spline_pcr(x, y, c1, c2, c3, B, pcr_scratch, N, spline_type);
+#else
+    (void) pcr_scratch;
+    fit_cubic_spline_thomas(x, y, c1, c2, c3, B, N, spline_type);
+#endif
+}
+
+
+// ===========================================================================
+// OrbitsSplineCache  --  in-kernel cubic-spline cache for LISA orbit data
+// ---------------------------------------------------------------------------
+// Built once at chunk entry: sample ``orbits->get_pos`` (3 spacecraft x 3 xyz)
+// and ``orbits->get_light_travel_time`` (6 links) at a sparse uniform t-grid
+// inside the chunk, then PCR-fit cubic splines through each scalar series.
+// Stored in shared mem; reused across all binaries in the chunk (the orbits
+// don't depend on the source). Replaces what would otherwise be ~num_bin x
+// N_sparse x (32-64) global-mem orbit lookups per chunk with one cooperative
+// fit + cheap shared-mem cubic evals.
+//
+// Storage (caller allocates):
+//   t_cp[N_cp]                              -- uniform time grid, shared
+//   ltt_y[6 * N_cp]  + 3 coefs (4 arrays)   -- per-link LTT splines
+//   pos_y[9 * N_cp]  + 3 coefs (4 arrays)   -- per-(sc, xyz) position splines
+//   B_buf[N_cp]                             -- tridiagonal RHS scratch
+//   pcr_scratch[8 * N_cp]                   -- PCR ping-pong scratch (GPU only)
+// Total persistent: (1 + 4*6 + 4*9) * N_cp = 61 * N_cp doubles.
+// For N_cp=32 (the density-study baseline at 30-day chunks): ~15.6 KB.
+//
+// The normal-link vector ``n_link`` does NOT need its own cache -- it can be
+// derived in-loop from the cached positions: n = (x_em - x_rec) / L.
+//
+// The link indexing (0..5) follows ``Orbits::get_link_ind``:
+//   0 = 12, 1 = 23, 2 = 31, 3 = 13, 4 = 32, 5 = 21.
+// ===========================================================================
+
+#define FAST_WDM_N_CP_ORBIT_MAX 48
+
+// OrbitsSplineCache struct is declared in TDIonTheFly.hh so that
+// LISATDIonTheFly's cached member functions can take it as a parameter.
+
+// Populate the cache. Called ONCE per chunk per block (before the binary
+// loop). All threads in the block cooperate -- spline fits use the PCR
+// solver on GPU, Thomas on CPU. Caller pre-allocates all buffers + scratch.
+CUDA_DEVICE
+inline void populate_orbit_spline_cache(
+    OrbitsSplineCache *cache,
+    Orbits *orbits,
+    double chunk_t_start, double T_chunk,
+    int N_cp,
+    double *t_cp_buf,
+    double *ltt_y_buf, double *ltt_c1_buf, double *ltt_c2_buf, double *ltt_c3_buf,
+    double *pos_y_buf, double *pos_c1_buf, double *pos_c2_buf, double *pos_c3_buf,
+    double *B_buf, double *pcr_scratch)
+{
+    // Link order matches Orbits::get_link_ind: 12, 23, 31, 13, 32, 21
+    static const int LINKS[6] = {12, 23, 31, 13, 32, 21};
+    const double dt_cp = T_chunk / (double) (N_cp - 1);
+
+    cache->t_cp0   = chunk_t_start;
+    cache->dt_cp   = dt_cp;
+    cache->N_cp    = N_cp;
+    cache->t_cp    = t_cp_buf;
+    cache->ltt_y   = ltt_y_buf;
+    cache->ltt_c1  = ltt_c1_buf;
+    cache->ltt_c2  = ltt_c2_buf;
+    cache->ltt_c3  = ltt_c3_buf;
+    cache->pos_y   = pos_y_buf;
+    cache->pos_c1  = pos_c1_buf;
+    cache->pos_c2  = pos_c2_buf;
+    cache->pos_c3  = pos_c3_buf;
+
+    // 1) Build t_cp grid and sample raw orbits at the cp times.
+    for (int i = THREAD_START; i < N_cp; i += BLOCK_INCR) {
+        t_cp_buf[i] = chunk_t_start + (double) i * dt_cp;
+    }
+    CUDA_SYNC_THREADS;
+    // Sample LTT per link, per cp time.
+    for (int idx = THREAD_START; idx < 6 * N_cp; idx += BLOCK_INCR) {
+        const int link_i = idx / N_cp;
+        const int i      = idx - link_i * N_cp;
+        ltt_y_buf[link_i * N_cp + i] =
+            orbits->get_light_travel_time(t_cp_buf[i], LINKS[link_i]);
+    }
+    // Sample positions per (sc, xyz), per cp time.
+    for (int idx = THREAD_START; idx < 9 * N_cp; idx += BLOCK_INCR) {
+        const int sx = idx / N_cp;        // 0..8 (= sc * 3 + xyz)
+        const int i  = idx - sx * N_cp;
+        const int sc  = sx / 3 + 1;       // spacecraft index 1..3
+        const int xyz = sx - (sx / 3) * 3;
+        Vec p = orbits->get_pos(t_cp_buf[i], sc);
+        double v;
+        if      (xyz == 0) v = p.x;
+        else if (xyz == 1) v = p.y;
+        else               v = p.z;
+        pos_y_buf[sx * N_cp + i] = v;
+    }
+    CUDA_SYNC_THREADS;
+
+    // 2) Fit cubic splines (uniform grid -> LINEAR_SPACING).
+    for (int link_i = 0; link_i < 6; ++link_i) {
+        wdm_fit_cubic_spline(t_cp_buf,
+                              &ltt_y_buf  [link_i * N_cp],
+                              &ltt_c1_buf [link_i * N_cp],
+                              &ltt_c2_buf [link_i * N_cp],
+                              &ltt_c3_buf [link_i * N_cp],
+                              B_buf, pcr_scratch,
+                              N_cp, CUBIC_SPLINE_LINEAR_SPACING);
+        CUDA_SYNC_THREADS;
+    }
+    for (int sx = 0; sx < 9; ++sx) {
+        wdm_fit_cubic_spline(t_cp_buf,
+                              &pos_y_buf  [sx * N_cp],
+                              &pos_c1_buf [sx * N_cp],
+                              &pos_c2_buf [sx * N_cp],
+                              &pos_c3_buf [sx * N_cp],
+                              B_buf, pcr_scratch,
+                              N_cp, CUBIC_SPLINE_LINEAR_SPACING);
+        CUDA_SYNC_THREADS;
+    }
+}
+
+
+// Inline helper: locate the segment index for an arbitrary t in the cache's
+// uniform grid, clamped to [0, N_cp - 2].
+CUDA_DEVICE
+inline int _orbit_cache_seg(const OrbitsSplineCache *c, double t)
+{
+    int seg = (int) ((t - c->t_cp0) / c->dt_cp);
+    if (seg < 0)             seg = 0;
+    if (seg > c->N_cp - 2)   seg = c->N_cp - 2;
+    return seg;
+}
+
+CUDA_DEVICE
+inline int _orbit_cache_link_index(int link)
+{
+    // Mirrors Orbits::get_link_ind. Returns -1 on bad link (caller bug).
+    switch (link) {
+        case 12: return 0;
+        case 23: return 1;
+        case 31: return 2;
+        case 13: return 3;
+        case 32: return 4;
+        case 21: return 5;
+        default: return -1;
+    }
+}
+
+CUDA_DEVICE
+inline double cache_get_light_travel_time(const OrbitsSplineCache *c,
+                                           double t, int link)
+{
+    const int link_i = _orbit_cache_link_index(link);
+    const int seg    = _orbit_cache_seg(c, t);
+    const int p      = link_i * c->N_cp + seg;
+    const double dx  = t - c->t_cp[seg];
+    return c->ltt_y[p]
+         + c->ltt_c1[p] * dx
+         + c->ltt_c2[p] * dx * dx
+         + c->ltt_c3[p] * dx * dx * dx;
+}
+
+CUDA_DEVICE
+inline Vec cache_get_pos(const OrbitsSplineCache *c, double t, int sc)
+{
+    const int seg = _orbit_cache_seg(c, t);
+    const double dx = t - c->t_cp[seg];
+    const int base = (sc - 1) * 3;   // sc in 1..3
+    double v[3];
+    for (int xyz = 0; xyz < 3; ++xyz) {
+        const int p = (base + xyz) * c->N_cp + seg;
+        v[xyz] = c->pos_y[p]
+              + c->pos_c1[p] * dx
+              + c->pos_c2[p] * dx * dx
+              + c->pos_c3[p] * dx * dx * dx;
+    }
+    return Vec(v[0], v[1], v[2]);
+}
+
+
+// ============================================================================
+// fast_wdm_inner_heterodyne_spline  --  source-signal spline-cache variant
+// ----------------------------------------------------------------------------
+//
+// Replaces the ``N_sparse`` get_tdi calls per (chunk, binary) with only
+// ``N_cp_sig`` get_tdi_heterodyned calls + an in-kernel cubic-spline fit
+// + dense evaluation. The heterodyned phi_ref makes the unwrap robust at
+// sparse N_cp_sig sampling (carrier removed in-kernel).
+//
+// Algorithm:
+//   1. Build uniform t_cp[N_cp_sig] grid over the chunk.
+//   2. Call source->get_tdi_heterodyned(... f0_grid) at the cp times.
+//      This returns: amp[c, i], tdi_phase[c, i], dphi_ref_het[i].
+//   3. Fit 7 cubic splines (3 amp + 3 tdi_phase + 1 dphi_ref_het) through
+//      the cp values, cooperatively (PCR on GPU, Thomas on CPU).
+//   4. Slow-signal loop over N_sparse evaluates the splines on the fly:
+//         phase = tdi_phase_spl(t) + dphi_ref_het_spl(t)
+//                 + 2*pi*f0_grid*chunk_t_start
+//      (The constant offset comes from
+//         phi_ref(t) - 2*pi*f0_grid*tau
+//       = (dphi_ref_het + 2*pi*f0_grid*t) - 2*pi*f0_grid*tau
+//       = dphi_ref_het + 2*pi*f0_grid*chunk_t_start
+//       since t = chunk_t_start + tau.)
+//   5. FFT + place into chunk_fd_out (identical to direct path).
+//
+// Per-(chunk, binary) get_tdi cost: ~N_cp_sig/N_sparse = 48/256 = 5x cheaper.
+// Per the density study: GB mm ~ 4e-11, SOBBH mm ~ 4e-9 at the half-day
+// wavelet baseline. Both clear the science threshold.
+//
+// All workspaces (t_cp, amp/phase/dphi_ref y0+c1+c2+c3 buffers, PCR/B
+// scratch, get_tdi cp scratch) are caller-allocated.
+// ============================================================================
+CUDA_DEVICE
+inline void fast_wdm_inner_heterodyne_spline(
+    cmplx *chunk_fd_out,            // (nchannels * n_rfft_chunk); caller zero-inits
+    LISATDIonTheFly *source,
+    double *params,
+    int bin_i, int carrier_index,
+    double chunk_t_start, double T_chunk,
+    int N_sparse, int log2_N_sparse, int N_cp_sig,
+    int n_rfft_chunk, int nchannels, double tukey_alpha,
+    // Spline workspaces:
+    double *t_cp_buf,               // (N_cp_sig,)
+    double *amp_y_buf,              // (nchannels * N_cp_sig)  -- input y, preserved
+    double *amp_c1_buf,             // (nchannels * N_cp_sig)
+    double *amp_c2_buf,             // (nchannels * N_cp_sig)
+    double *amp_c3_buf,             // (nchannels * N_cp_sig)
+    double *phase_y_buf,            // (nchannels * N_cp_sig)
+    double *phase_c1_buf, double *phase_c2_buf, double *phase_c3_buf,
+    double *dphi_ref_y_buf,         // (N_cp_sig,)
+    double *dphi_ref_c1_buf, double *dphi_ref_c2_buf, double *dphi_ref_c3_buf,
+    double *B_buf,                  // (N_cp_sig,) tridiagonal RHS scratch
+    double *pcr_scratch,            // (8 * N_cp_sig,) GPU-only scratch
+    cmplx  *tdi_channels_cp_buf,    // (nchannels * N_cp_sig) -- scratch for get_tdi
+    cmplx  *slow_buf,               // (nchannels * N_sparse) -- FFT in/out
+    void   *get_tdi_scratch_cp,
+    int     get_tdi_scratch_cp_len,
+    OrbitsSplineCache *orbit_cache)  // nullptr -> direct orbit lookups
+{
+    const double dt_sparse  = T_chunk / (double) N_sparse;
+    const double dt_cp      = T_chunk / (double) (N_cp_sig - 1);
+    const double f0         = params[carrier_index];
+    const double df_chunk   = 1.0 / T_chunk;
+    const int    k_f0       = (int) round(f0 / df_chunk);
+    const double f0_grid    = (double) k_f0 * df_chunk;
+    const int    half_Nsp   = N_sparse / 2;
+    const double scale_X    = 0.5 * dt_sparse;
+    const double phi0_chunk = 2.0 * M_PI * f0_grid * chunk_t_start;
+
+    double alpha_eff = tukey_alpha;
+    if (alpha_eff == FAST_WDM_TUKEY_ALPHA_AUTO) {
+        alpha_eff = (N_sparse >= 512)
+            ? FAST_WDM_TUKEY_ALPHA_HET_WIDE
+            : FAST_WDM_TUKEY_ALPHA_HET_NARROW;
+    }
+
+    // ---- 1) cp time grid (uniform) ----------------------------------------
+    for (int i = THREAD_START; i < N_cp_sig; i += BLOCK_INCR) {
+        t_cp_buf[i] = chunk_t_start + (double) i * dt_cp;
+    }
+    CUDA_SYNC_THREADS;
+
+    // ---- 2) sparse heterodyned TDI evaluation at cp times -----------------
+    // If an orbit cache is available, dispatch to the cached variant
+    // (cheap shared-mem cubic evals replace the global-mem orbit
+    // lookups inside get_tdi).
+    if (orbit_cache != nullptr) {
+        source->get_tdi_heterodyned_cached(
+            get_tdi_scratch_cp, get_tdi_scratch_cp_len,
+            tdi_channels_cp_buf,
+            amp_y_buf, phase_y_buf, dphi_ref_y_buf,
+            params, t_cp_buf, N_cp_sig, bin_i, nchannels,
+            f0_grid, orbit_cache);
+    } else {
+        source->get_tdi_heterodyned(
+            get_tdi_scratch_cp, get_tdi_scratch_cp_len,
+            tdi_channels_cp_buf,
+            amp_y_buf, phase_y_buf, dphi_ref_y_buf,
+            params, t_cp_buf, N_cp_sig, bin_i, nchannels,
+            f0_grid);
+    }
+    CUDA_SYNC_THREADS;
+
+    // ---- 3) fit cubic splines (7 total: 3 amp + 3 phase + 1 dphi_ref) ----
+    // Uniform grid -> CUBIC_SPLINE_LINEAR_SPACING for O(1) segment lookup.
+    for (int c = 0; c < nchannels; ++c) {
+        wdm_fit_cubic_spline(t_cp_buf,
+                              &amp_y_buf[c * N_cp_sig],
+                              &amp_c1_buf[c * N_cp_sig],
+                              &amp_c2_buf[c * N_cp_sig],
+                              &amp_c3_buf[c * N_cp_sig],
+                              B_buf, pcr_scratch,
+                              N_cp_sig, CUBIC_SPLINE_LINEAR_SPACING);
+        CUDA_SYNC_THREADS;
+        wdm_fit_cubic_spline(t_cp_buf,
+                              &phase_y_buf[c * N_cp_sig],
+                              &phase_c1_buf[c * N_cp_sig],
+                              &phase_c2_buf[c * N_cp_sig],
+                              &phase_c3_buf[c * N_cp_sig],
+                              B_buf, pcr_scratch,
+                              N_cp_sig, CUBIC_SPLINE_LINEAR_SPACING);
+        CUDA_SYNC_THREADS;
+    }
+    wdm_fit_cubic_spline(t_cp_buf, dphi_ref_y_buf,
+                          dphi_ref_c1_buf, dphi_ref_c2_buf, dphi_ref_c3_buf,
+                          B_buf, pcr_scratch,
+                          N_cp_sig, CUBIC_SPLINE_LINEAR_SPACING);
+    CUDA_SYNC_THREADS;
+
+    // ---- 4) slow-signal loop with on-the-fly spline eval + Tukey ---------
+    const cmplx I_c(0.0, 1.0);
+    const double n_taper = 0.5 * alpha_eff * (double) (N_sparse - 1);
+    const int    N_cp_last = N_cp_sig - 1;
+    for (int c = 0; c < nchannels; ++c) {
+        for (int i = THREAD_START; i < N_sparse; i += BLOCK_INCR) {
+            const double tau = (double) i * dt_sparse;
+            const double t   = chunk_t_start + tau;
+
+            // Segment lookup (uniform t_cp): seg = floor((t - cp[0]) / dt_cp).
+            int seg = (int) ((t - chunk_t_start) / dt_cp);
+            if (seg < 0)         seg = 0;
+            if (seg > N_cp_last - 1) seg = N_cp_last - 1;
+            const double dx = t - t_cp_buf[seg];
+
+            const int seg_c = c * N_cp_sig + seg;
+            const int seg_0 = seg;
+            const double amp =
+                amp_y_buf [seg_c]
+              + amp_c1_buf[seg_c] * dx
+              + amp_c2_buf[seg_c] * dx * dx
+              + amp_c3_buf[seg_c] * dx * dx * dx;
+            const double tdi_phase =
+                phase_y_buf [seg_c]
+              + phase_c1_buf[seg_c] * dx
+              + phase_c2_buf[seg_c] * dx * dx
+              + phase_c3_buf[seg_c] * dx * dx * dx;
+            const double dphi_ref =
+                dphi_ref_y_buf [seg_0]
+              + dphi_ref_c1_buf[seg_0] * dx
+              + dphi_ref_c2_buf[seg_0] * dx * dx
+              + dphi_ref_c3_buf[seg_0] * dx * dx * dx;
+
+            // Slow phase. The chunk_t_start carrier offset folds in here
+            // because we splined the heterodyned-against-t_abs phi_ref:
+            //   phase_total = tdi_phase + phi_ref - 2*pi*f0_grid*tau
+            //              = tdi_phase + (dphi_ref + 2*pi*f0_grid*t) - 2*pi*f0_grid*tau
+            //              = tdi_phase + dphi_ref + 2*pi*f0_grid*chunk_t_start.
+            const double phase_total = tdi_phase + dphi_ref + phi0_chunk;
+            cmplx s = (cmplx)(amp) * gcmplx::exp(I_c * phase_total);
+
+            // Tukey window: same formula as the direct path (scipy convention).
+            if (alpha_eff > 0.0 && n_taper > 0.0) {
+                double w = 1.0;
+                const double di = (double) i;
+                const double dlast = (double) (N_sparse - 1);
+                if (di < n_taper) {
+                    const double xn = di / n_taper;
+                    w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
+                } else if (di > dlast - n_taper) {
+                    const double xn = (dlast - di) / n_taper;
+                    w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
+                }
+                s = cmplx(s.real() * w, s.imag() * w);
+            }
+            slow_buf[c * N_sparse + i] = s;
+        }
+    }
+    CUDA_SYNC_THREADS;
+
+    // ---- 5) FFT slow_buf in place, per channel ----------------------------
+    for (int c = 0; c < nchannels; ++c) {
+        wdm_spline_radix2_fft(&slow_buf[c * N_sparse],
+                              N_sparse, log2_N_sparse, /*inverse=*/false);
+        CUDA_SYNC_THREADS;
+    }
+
+    // ---- 6) Place into chunk_fd_out (identical to direct path) -----------
+    for (int c = 0; c < nchannels; ++c) {
+        for (int m_idx = THREAD_START; m_idx < N_sparse; m_idx += BLOCK_INCR) {
+            const int m = (m_idx < half_Nsp) ? m_idx : (m_idx - N_sparse);
+            const int kbin = k_f0 + m;
+            if (kbin >= 0 && kbin < n_rfft_chunk) {
+                const cmplx v = slow_buf[c * N_sparse + m_idx];
+                chunk_fd_out[c * n_rfft_chunk + kbin] =
+                    cmplx(v.real() * scale_X, v.imag() * scale_X);
+            }
+        }
+    }
+    CUDA_SYNC_THREADS;
+}
+
 
 // Source-class-agnostic version. ``source`` is a pointer to any
 // :class:`LISATDIonTheFly` subclass (``GBTDIonTheFly``, ``SOBBHTDIonTheFly``,
@@ -1575,7 +1995,8 @@ inline void fast_wdm_inner_heterodyne(
     cmplx  *tdi_channels_buf,       // (nchannels * N_sparse), used by gb->get_tdi
     cmplx  *slow_buf,               // (nchannels * N_sparse), reused as FFT input/output
     void   *get_tdi_scratch,        // get_tdi internal scratch
-    int     get_tdi_scratch_len
+    int     get_tdi_scratch_len,
+    OrbitsSplineCache *orbit_cache  // nullptr -> direct orbit lookups
 )
 {
     const double dt_sparse  = T_chunk / (double) N_sparse;
@@ -1601,15 +2022,26 @@ inline void fast_wdm_inner_heterodyne(
     CUDA_SYNC_THREADS;
 
     // ---- 2) sparse TDI evaluation: tdi_amp, tdi_phase, phase_ref ----------
-    source->get_tdi(get_tdi_scratch, get_tdi_scratch_len,
-                    tdi_channels_buf,
-                    tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
-                    params, t_sparse_buf, N_sparse, bin_i, nchannels);
+    if (orbit_cache != nullptr) {
+        source->get_tdi_cached(get_tdi_scratch, get_tdi_scratch_len,
+                                tdi_channels_buf,
+                                tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
+                                params, t_sparse_buf, N_sparse, bin_i, nchannels,
+                                orbit_cache);
+    } else {
+        source->get_tdi(get_tdi_scratch, get_tdi_scratch_len,
+                        tdi_channels_buf,
+                        tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
+                        params, t_sparse_buf, N_sparse, bin_i, nchannels);
+    }
     CUDA_SYNC_THREADS;
 
     // ---- 3) slow signal + optional Tukey window ---------------------------
     const cmplx I_c(0.0, 1.0);
-    const double n_taper = 0.5 * alpha_eff * (double) N_sparse;
+    // Tukey denominator: alpha*(N-1)/2, matching scipy.signal.windows.tukey
+    // (NOT alpha*N/2 -- using N gives a ~1% offset that shifts ~0.1-0.3% of
+    // spectral leakage into adjacent bins vs the Python reference).
+    const double n_taper = 0.5 * alpha_eff * (double) (N_sparse - 1);
     for (int c = 0; c < nchannels; ++c) {
         for (int i = THREAD_START; i < N_sparse; i += BLOCK_INCR) {
             const int idx = c * N_sparse + i;
@@ -1715,7 +2147,8 @@ inline void fast_wdm_inner_heterodyne_kernel(
             N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
             t_sparse_buf, tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
             tdi_channels_buf, slow_buf,
-            get_tdi_scratch, get_tdi_scratch_len_per_block
+            get_tdi_scratch, get_tdi_scratch_len_per_block,
+            /*orbit_cache=*/nullptr
         );
         CUDA_SYNC_THREADS;
     }
@@ -1918,6 +2351,8 @@ void wdm_het_fill_global_kernel(
     int nchannels, int n_rfft_chunk,
     double T_chunk, double dt, double T, double t_ref,
     double tukey_alpha,
+    int N_cp_sig,                  // 0 -> direct path; >0 -> source-signal spline cache
+    int N_cp_orbit,                // 0 -> raw orbits; >0 -> orbit spline cache
     // workspaces (host-allocated, per-chunk or per-block):
     cmplx  *ws_chunk_fd_all,       // (n_chunks * nchannels * n_rfft_chunk)
     cmplx  *ws_layer_scratch_all,  // (n_chunks * Nt_sub)
@@ -1937,11 +2372,47 @@ void wdm_het_fill_global_kernel(
     // maxima. tdi_channels_buf moved to heap (`ws_tdi_channels_all`) to
     // keep static shared <= 48 KB default budget on A100/V100 without
     // needing cudaFuncSetAttribute opt-in.
+    // Direct-path buffers (used when N_cp_sig <= 0).
     CUDA_SHARED double t_sparse_buf  [FAST_WDM_N_SPARSE_MAX];
     CUDA_SHARED double tdi_amp_buf   [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
     CUDA_SHARED double tdi_phase_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
     CUDA_SHARED double phi_ref_buf   [FAST_WDM_N_SPARSE_MAX];
+    // Source-signal spline-cache buffers (used when N_cp_sig > 0).
+    CUDA_SHARED double t_cp_buf            [FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double amp_y_buf           [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double amp_c1_buf          [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double amp_c2_buf          [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double amp_c3_buf          [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double phase_y_buf         [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double phase_c1_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double phase_c2_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double phase_c3_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double dphi_ref_y_buf      [FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double dphi_ref_c1_buf     [FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double dphi_ref_c2_buf     [FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double dphi_ref_c3_buf     [FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double B_buf               [FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double pcr_scratch         [8 * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED cmplx  tdi_channels_cp_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED char   get_tdi_scratch_cp_buf [21 * FAST_WDM_N_CP_SIG_MAX + 16];
     CUDA_SHARED cmplx  slow_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+    const bool use_spline_cache = (N_cp_sig > 0 && N_cp_sig <= FAST_WDM_N_CP_SIG_MAX
+                                   && N_cp_sig < N_sparse);
+
+    // Orbit spline cache (populated once per chunk; reused across binaries).
+    CUDA_SHARED double orbit_t_cp_buf  [FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_ltt_y_buf [6 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_ltt_c1_buf[6 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_ltt_c2_buf[6 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_ltt_c3_buf[6 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_pos_y_buf [9 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_pos_c1_buf[9 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_pos_c2_buf[9 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_pos_c3_buf[9 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_B_buf     [FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_pcr_buf   [8 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED OrbitsSplineCache orbit_cache_storage;
+    const bool use_orbit_cache = (N_cp_orbit > 0 && N_cp_orbit <= FAST_WDM_N_CP_ORBIT_MAX);
 
     // OUTER: chunks (one block per chunk). The fill_global per-binary
     // contention is per (chunk, m, n_local) -> different global pixel
@@ -1958,6 +2429,21 @@ void wdm_het_fill_global_kernel(
         const int keep_hi        = chunk_keep_hi[j];
         const int n_global_lo    = chunk_n_global_offset[j];
         const double chunk_t0    = chunk_t_starts[j];
+
+        // Populate the orbit cache once per chunk (if enabled). All
+        // binaries in this chunk reuse the same shared-mem splines.
+        OrbitsSplineCache *orbit_cache_ptr = nullptr;
+        if (use_orbit_cache) {
+            populate_orbit_spline_cache(
+                &orbit_cache_storage, orbits,
+                chunk_t0, T_chunk, N_cp_orbit,
+                orbit_t_cp_buf,
+                orbit_ltt_y_buf, orbit_ltt_c1_buf, orbit_ltt_c2_buf, orbit_ltt_c3_buf,
+                orbit_pos_y_buf, orbit_pos_c1_buf, orbit_pos_c2_buf, orbit_pos_c3_buf,
+                orbit_B_buf, orbit_pcr_buf);
+            CUDA_SYNC_THREADS;
+            orbit_cache_ptr = &orbit_cache_storage;
+        }
 
         // INNER: binaries
         for (int bin_i = 0; bin_i < num_bin; ++bin_i) {
@@ -1976,14 +2462,32 @@ void wdm_het_fill_global_kernel(
             CUDA_SYNC_THREADS;
 
             // 1) heterodyne FD for this (chunk, binary)
-            fast_wdm_inner_heterodyne(
-                chunk_fd, &src, params, bin_i, src.f0_index,
-                chunk_t0, T_chunk,
-                N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
-                t_sparse_buf, tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
-                tdi_channels_buf, slow_buf,
-                get_tdi_scratch, get_tdi_scratch_len_per_block
-            );
+            if (use_spline_cache) {
+                fast_wdm_inner_heterodyne_spline(
+                    chunk_fd, &src, params, bin_i, src.f0_index,
+                    chunk_t0, T_chunk,
+                    N_sparse, log2_N_sparse, N_cp_sig,
+                    n_rfft_chunk, nchannels, tukey_alpha,
+                    t_cp_buf,
+                    amp_y_buf, amp_c1_buf, amp_c2_buf, amp_c3_buf,
+                    phase_y_buf, phase_c1_buf, phase_c2_buf, phase_c3_buf,
+                    dphi_ref_y_buf, dphi_ref_c1_buf, dphi_ref_c2_buf, dphi_ref_c3_buf,
+                    B_buf, pcr_scratch,
+                    tdi_channels_cp_buf, slow_buf,
+                    get_tdi_scratch_cp_buf, (int) sizeof(get_tdi_scratch_cp_buf),
+                    orbit_cache_ptr
+                );
+            } else {
+                fast_wdm_inner_heterodyne(
+                    chunk_fd, &src, params, bin_i, src.f0_index,
+                    chunk_t0, T_chunk,
+                    N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
+                    t_sparse_buf, tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
+                    tdi_channels_buf, slow_buf,
+                    get_tdi_scratch, get_tdi_scratch_len_per_block,
+                    orbit_cache_ptr
+                );
+            }
             CUDA_SYNC_THREADS;
 
             // 2) chunk FD -> chunk WDM
@@ -2068,6 +2572,8 @@ void wdm_het_get_ll_kernel(
     int nchannels, int n_rfft_chunk,
     double T_chunk, double dt, double T, double t_ref,
     double tukey_alpha,
+    int N_cp_sig,                            // 0 -> direct path; >0 -> spline cache
+    int N_cp_orbit,                          // 0 -> raw orbits; >0 -> orbit spline cache
     // Per-block heap workspace:
     cmplx  *ws_chunk_fd_all,                 // (n_chunks * nchannels * n_rfft_chunk)
     cmplx  *ws_layer_scratch_all,            // (n_chunks * Nt_sub)
@@ -2075,7 +2581,18 @@ void wdm_het_get_ll_kernel(
     cmplx  *ws_tdi_channels_all,             // (n_chunks * nchannels * N_sparse) -- heap
                                              //   tdi_channels_buf, see fill_global.
     void   *get_tdi_scratch_all,
-    int     get_tdi_scratch_len_per_block
+    int     get_tdi_scratch_len_per_block,
+    // Layer-grouping (chunk's outer is unchanged; if n_groups > 0 we
+    // insert an intermediate group loop, iterate only binaries in the
+    // group, and restrict the m-band accumulator to [group_m_lo,
+    // group_m_hi). With n_groups == 0 the existing per-binary all-m
+    // path is used.
+    int    *binary_perm,                     // (num_bin,) -- kernel reads binary_perm[bin_iter]
+    int    *group_starts,                    // (n_groups,)
+    int    *group_ends,                      // (n_groups,) exclusive
+    int    *group_m_lo,                      // (n_groups,) inclusive
+    int    *group_m_hi,                      // (n_groups,) exclusive
+    int     n_groups
 )
 {
     SourceT src(orbits, tdi_config, T, t_ref);
@@ -2083,17 +2600,76 @@ void wdm_het_get_ll_kernel(
     // Heterodyne shared workspace (per block / per chunk). The
     // tdi_channels_buf slab has been moved to heap to keep static shared
     // under the 48 KB default budget; see fill_global comments.
+    // Direct-path buffers (used when N_cp_sig <= 0).
     CUDA_SHARED double t_sparse_buf  [FAST_WDM_N_SPARSE_MAX];
     CUDA_SHARED double tdi_amp_buf   [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
     CUDA_SHARED double tdi_phase_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
     CUDA_SHARED double phi_ref_buf   [FAST_WDM_N_SPARSE_MAX];
+    // Source-signal spline-cache buffers (used when N_cp_sig > 0).
+    CUDA_SHARED double t_cp_buf            [FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double amp_y_buf           [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double amp_c1_buf          [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double amp_c2_buf          [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double amp_c3_buf          [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double phase_y_buf         [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double phase_c1_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double phase_c2_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double phase_c3_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double dphi_ref_y_buf      [FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double dphi_ref_c1_buf     [FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double dphi_ref_c2_buf     [FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double dphi_ref_c3_buf     [FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double B_buf               [FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double pcr_scratch         [8 * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED cmplx  tdi_channels_cp_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED char   get_tdi_scratch_cp_buf [21 * FAST_WDM_N_CP_SIG_MAX + 16];
+    const bool use_spline_cache = (N_cp_sig > 0 && N_cp_sig <= FAST_WDM_N_CP_SIG_MAX
+                                   && N_cp_sig < N_sparse);
     CUDA_SHARED cmplx  slow_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+
+    // Orbit spline cache (populated once per chunk; reused across binaries).
+    CUDA_SHARED double orbit_t_cp_buf  [FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_ltt_y_buf [6 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_ltt_c1_buf[6 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_ltt_c2_buf[6 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_ltt_c3_buf[6 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_pos_y_buf [9 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_pos_c1_buf[9 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_pos_c2_buf[9 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_pos_c3_buf[9 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_B_buf     [FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_pcr_buf   [8 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED OrbitsSplineCache orbit_cache_storage;
+    const bool use_orbit_cache = (N_cp_orbit > 0 && N_cp_orbit <= FAST_WDM_N_CP_ORBIT_MAX);
 
     // Per-thread partial accumulators (one slot per thread; reduced at end).
     // Sized at a generous upper bound; THREAD_START / BLOCK_INCR controls
     // the active extent.
     CUDA_SHARED double partial_dh[FAST_WDM_N_SPARSE_MAX];   // reuse N_sparse cap
     CUDA_SHARED double partial_hh[FAST_WDM_N_SPARSE_MAX];
+
+    // Per-thread local cache for data + invC. Populated once per (chunk,
+    // group) and reused across all binaries in the group -- replaces
+    // num_bin global reads of the same (c, m, n_loc) tuples with a single
+    // populate-pass + per-binary local reads.
+    //
+    // On GPU: sized for nchannels(3) * m_band(<= 8) * n_per_thread(<= 4)
+    // = up to 96 entries per thread. Compiler may keep small caches in
+    // registers and spill larger ones into CUDA local memory (L1-cached);
+    // either way it's much cheaper than per-binary global reads.
+    //
+    // On CPU: NUM_THREADS_HERE = 1 so a single thread owns the entire
+    // group (~3 * 8 * 256 = 6144 entries for Nt_sub=256) -- this is too
+    // big for stack-allocated local arrays, so we set the cap to 1 and
+    // the kernel falls back to the direct-read path. Same code path on
+    // both platforms.
+#ifdef __CUDACC__
+    constexpr int WDM_KEEP_PER_THREAD_MAX = 96;
+#else
+    constexpr int WDM_KEEP_PER_THREAD_MAX = 1;
+#endif
+    double thr_data_cache[WDM_KEEP_PER_THREAD_MAX];
+    double thr_invC_cache[WDM_KEEP_PER_THREAD_MAX];
 
     // OUTER: chunks (one block per chunk).
     for (int j = BLOCK_START; j < n_chunks; j += GRID_INCR) {
@@ -2110,95 +2686,184 @@ void wdm_het_get_ll_kernel(
         const double chunk_t0 = chunk_t_starts[j];
         const int n_pixels    = keep_hi - keep_lo;
 
-        // INNER: binaries
-        for (int bin_i = 0; bin_i < num_bin; ++bin_i) {
-            double *params = &params_all[(size_t) bin_i * nparams];
+        // Populate orbit cache once per chunk if enabled.
+        OrbitsSplineCache *orbit_cache_ptr = nullptr;
+        if (use_orbit_cache) {
+            populate_orbit_spline_cache(
+                &orbit_cache_storage, orbits,
+                chunk_t0, T_chunk, N_cp_orbit,
+                orbit_t_cp_buf,
+                orbit_ltt_y_buf, orbit_ltt_c1_buf, orbit_ltt_c2_buf, orbit_ltt_c3_buf,
+                orbit_pos_y_buf, orbit_pos_c1_buf, orbit_pos_c2_buf, orbit_pos_c3_buf,
+                orbit_B_buf, orbit_pcr_buf);
+            CUDA_SYNC_THREADS;
+            orbit_cache_ptr = &orbit_cache_storage;
+        }
 
-            // Zero per-chunk workspaces.
-            for (int k = THREAD_START; k < nchannels * n_rfft_chunk; k += BLOCK_INCR) {
-                chunk_fd[k] = cmplx(0.0, 0.0);
+        // Choose iteration structure:
+        //   n_groups == 0 -> ungrouped: iterate binaries directly, m in [0, Nf)
+        //   n_groups  > 0 -> grouped: middle loop over groups, inner over
+        //                    binaries in group, m restricted to band.
+        const int n_group_iter = (n_groups > 0) ? n_groups : 1;
+        for (int g = 0; g < n_group_iter; ++g) {
+            int bin_iter_lo, bin_iter_hi, m_lo, m_hi;
+            if (n_groups > 0) {
+                bin_iter_lo = group_starts[g];
+                bin_iter_hi = group_ends  [g];
+                m_lo = group_m_lo[g];   if (m_lo < 0)  m_lo = 0;
+                m_hi = group_m_hi[g];   if (m_hi > Nf) m_hi = Nf;
+            } else {
+                bin_iter_lo = 0;
+                bin_iter_hi = num_bin;
+                m_lo = 0;
+                m_hi = Nf;
             }
-            for (int k = THREAD_START; k < nchannels * Nf * Nt_sub; k += BLOCK_INCR) {
-                w_chunk[k] = 0.0;
-            }
-            partial_dh[THREAD_START] = 0.0;
-            partial_hh[THREAD_START] = 0.0;
-            CUDA_SYNC_THREADS;
 
-            // 1) heterodyne FD
-            fast_wdm_inner_heterodyne(
-                chunk_fd, &src, params, bin_i, src.f0_index,
-                chunk_t0, T_chunk,
-                N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
-                t_sparse_buf, tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
-                tdi_channels_buf, slow_buf,
-                get_tdi_scratch, get_tdi_scratch_len_per_block
-            );
-            CUDA_SYNC_THREADS;
-
-            // 2) chunk FD -> chunk WDM
-            gb_chunk_fd_to_wdm(
-                w_chunk, chunk_fd, wdm_window,
-                Nf, Nt_sub, log2_Nt_sub, n_rfft_chunk, dt, nchannels,
-                layer_scratch
-            );
-            CUDA_SYNC_THREADS;
-
-            // 3) per-pixel accumulation into per-thread partials.
-            //    Loop over (c, m, n_local) in the chunk's keep region.
-            //    Each thread strides through pixels (THREAD_START base,
-            //    BLOCK_INCR stride). The outer (c, m) loops are serial
-            //    within the block; only the innermost n_local loop is
-            //    threaded.
-            for (int c = 0; c < nchannels; ++c) {
-                for (int m = 0; m < Nf; ++m) {
-                    for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
-                         n_loc += BLOCK_INCR) {
-                        const int n_glob = n_global_lo + (n_loc - keep_lo);
-                        const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
-                        const size_t g_w  = ((size_t) c * Nf + m) * Nt_sub + n_loc;
-                        const double w   = w_chunk[g_w];
-                        const double d   = data_d[g_dt];
-                        const double inv = invC  [g_dt];
-                        partial_dh[THREAD_START] += d * w * inv;
-                        partial_hh[THREAD_START] += w * w * inv;
+            // Populate per-thread data/invC cache once per group. The
+            // iteration order (c outer, m middle, n_loc inner with
+            // BLOCK_INCR stride) must EXACTLY mirror the accumulator loop
+            // below so the slot index stays in sync.
+            int thr_slot_count = 0;
+#ifdef __CUDACC__
+            {
+                int slot = 0;
+                for (int c = 0; c < nchannels; ++c) {
+                    for (int m = m_lo; m < m_hi; ++m) {
+                        for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
+                             n_loc += BLOCK_INCR) {
+                            if (slot < WDM_KEEP_PER_THREAD_MAX) {
+                                const int n_glob = n_global_lo + (n_loc - keep_lo);
+                                const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
+                                thr_data_cache[slot] = data_d[g_dt];
+                                thr_invC_cache[slot] = invC  [g_dt];
+                            }
+                            ++slot;
+                        }
                     }
                 }
+                thr_slot_count = slot;
             }
-            CUDA_SYNC_THREADS;
+#endif
+            const bool use_thr_cache = (thr_slot_count > 0
+                                        && thr_slot_count <= WDM_KEEP_PER_THREAD_MAX);
 
-            // 4) Block-reduce partials and add to global outputs.
-            //
-            // On CUDA: ideally CUB BlockReduce<double, BLOCK_DIM>::Sum.
-            // Since BLOCK_DIM is a compile-time arg to cub::BlockReduce
-            // and we want to keep this kernel parametric in NUM_THREADS,
-            // we use a manual block reduction that works for any
-            // power-of-2 block size up to FAST_WDM_N_SPARSE_MAX. The
-            // host launches with a power-of-2 NUM_THREADS to satisfy
-            // this. On CPU NUM_THREADS = 1 -> the inner reduction loop
-            // is a no-op.
-#ifdef __CUDACC__
-            // tree-reduction over partial_dh / partial_hh in shared mem
-            for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-                if (THREAD_START < stride) {
-                    partial_dh[THREAD_START] += partial_dh[THREAD_START + stride];
-                    partial_hh[THREAD_START] += partial_hh[THREAD_START + stride];
+            // INNER: binaries in this group (or all binaries when un-grouped).
+            for (int bin_iter = bin_iter_lo; bin_iter < bin_iter_hi; ++bin_iter) {
+                const int bin_i = (n_groups > 0) ? binary_perm[bin_iter] : bin_iter;
+                double *params = &params_all[(size_t) bin_i * nparams];
+
+                // Zero per-chunk workspaces.
+                for (int k = THREAD_START; k < nchannels * n_rfft_chunk; k += BLOCK_INCR) {
+                    chunk_fd[k] = cmplx(0.0, 0.0);
+                }
+                for (int k = THREAD_START; k < nchannels * Nf * Nt_sub; k += BLOCK_INCR) {
+                    w_chunk[k] = 0.0;
+                }
+                partial_dh[THREAD_START] = 0.0;
+                partial_hh[THREAD_START] = 0.0;
+                CUDA_SYNC_THREADS;
+
+                // 1) heterodyne FD
+                if (use_spline_cache) {
+                    fast_wdm_inner_heterodyne_spline(
+                        chunk_fd, &src, params, bin_i, src.f0_index,
+                        chunk_t0, T_chunk,
+                        N_sparse, log2_N_sparse, N_cp_sig,
+                        n_rfft_chunk, nchannels, tukey_alpha,
+                        t_cp_buf,
+                        amp_y_buf, amp_c1_buf, amp_c2_buf, amp_c3_buf,
+                        phase_y_buf, phase_c1_buf, phase_c2_buf, phase_c3_buf,
+                        dphi_ref_y_buf, dphi_ref_c1_buf, dphi_ref_c2_buf, dphi_ref_c3_buf,
+                        B_buf, pcr_scratch,
+                        tdi_channels_cp_buf, slow_buf,
+                        get_tdi_scratch_cp_buf, (int) sizeof(get_tdi_scratch_cp_buf),
+                        orbit_cache_ptr
+                    );
+                } else {
+                    fast_wdm_inner_heterodyne(
+                        chunk_fd, &src, params, bin_i, src.f0_index,
+                        chunk_t0, T_chunk,
+                        N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
+                        t_sparse_buf, tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
+                        tdi_channels_buf, slow_buf,
+                        get_tdi_scratch, get_tdi_scratch_len_per_block,
+                        orbit_cache_ptr
+                    );
                 }
                 CUDA_SYNC_THREADS;
-            }
-            if (THREAD_START == 0) {
-                atomicAdd(&d_h_out[bin_i], partial_dh[0]);
-                atomicAdd(&h_h_out[bin_i], partial_hh[0]);
-            }
+
+                // 2) chunk FD -> chunk WDM
+                gb_chunk_fd_to_wdm(
+                    w_chunk, chunk_fd, wdm_window,
+                    Nf, Nt_sub, log2_Nt_sub, n_rfft_chunk, dt, nchannels,
+                    layer_scratch
+                );
+                CUDA_SYNC_THREADS;
+
+                // 3) per-pixel accumulation, m restricted to the group band.
+                //    Loop over (c, m, n_local) in [m_lo, m_hi) x keep.
+                //    Iteration order must match the cache populate above so
+                //    `slot` stays in sync.
+                {
+                    int slot = 0;
+                    for (int c = 0; c < nchannels; ++c) {
+                        for (int m = m_lo; m < m_hi; ++m) {
+                            for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
+                                 n_loc += BLOCK_INCR) {
+                                const size_t g_w  = ((size_t) c * Nf + m) * Nt_sub + n_loc;
+                                const double w   = w_chunk[g_w];
+                                double d, inv;
+                                if (use_thr_cache) {
+                                    d   = thr_data_cache[slot];
+                                    inv = thr_invC_cache[slot];
+                                } else {
+                                    const int n_glob = n_global_lo + (n_loc - keep_lo);
+                                    const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
+                                    d   = data_d[g_dt];
+                                    inv = invC  [g_dt];
+                                }
+                                partial_dh[THREAD_START] += d * w * inv;
+                                partial_hh[THREAD_START] += w * w * inv;
+                                ++slot;
+                            }
+                        }
+                    }
+                }
+                CUDA_SYNC_THREADS;
+
+                // 4) Block-reduce partials and add to global outputs.
+                //
+                // On CUDA: ideally CUB BlockReduce<double, BLOCK_DIM>::Sum.
+                // Since BLOCK_DIM is a compile-time arg to cub::BlockReduce
+                // and we want to keep this kernel parametric in NUM_THREADS,
+                // we use a manual block reduction that works for any
+                // power-of-2 block size up to FAST_WDM_N_SPARSE_MAX. The
+                // host launches with a power-of-2 NUM_THREADS to satisfy
+                // this. On CPU NUM_THREADS = 1 -> the inner reduction loop
+                // is a no-op.
+#ifdef __CUDACC__
+                // tree-reduction over partial_dh / partial_hh in shared mem
+                for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+                    if (THREAD_START < stride) {
+                        partial_dh[THREAD_START] += partial_dh[THREAD_START + stride];
+                        partial_hh[THREAD_START] += partial_hh[THREAD_START + stride];
+                    }
+                    CUDA_SYNC_THREADS;
+                }
+                if (THREAD_START == 0) {
+                    atomicAdd(&d_h_out[bin_i], partial_dh[0]);
+                    atomicAdd(&h_h_out[bin_i], partial_hh[0]);
+                }
 #else
-            // CPU: NUM_THREADS = 1 by THREAD_START convention; partial_dh[0]
-            // already holds the full sum from the single thread.
-            d_h_out[bin_i] += partial_dh[0];
-            h_h_out[bin_i] += partial_hh[0];
+                // CPU: NUM_THREADS = 1 by THREAD_START convention; partial_dh[0]
+                // already holds the full sum from the single thread.
+                d_h_out[bin_i] += partial_dh[0];
+                h_h_out[bin_i] += partial_hh[0];
 #endif
-            CUDA_SYNC_THREADS;
-        }
-    }
+                CUDA_SYNC_THREADS;
+            } // bin_iter
+        } // g (group)
+    } // chunk
 }
 
 
@@ -2242,6 +2907,8 @@ void wdm_het_swap_ll_kernel(
     int nchannels, int n_rfft_chunk,
     double T_chunk, double dt, double T, double t_ref,
     double tukey_alpha,
+    int N_cp_sig,                            // 0 -> direct; >0 -> source-signal spline cache
+    int N_cp_orbit,                          // 0 -> raw orbits; >0 -> orbit spline cache
     // Per-block heap workspace: need TWO chunk_fd / chunk_wdm slabs
     // per chunk (one for the add template, one for the remove).
     // tdi_channels_buf is also on heap (shared by add/remove since it is
@@ -2250,22 +2917,87 @@ void wdm_het_swap_ll_kernel(
     cmplx  *ws_layer_scratch_all,
     double *ws_chunk_wdm_add_all,   double *ws_chunk_wdm_rem_all,
     cmplx  *ws_tdi_channels_all,    // (n_chunks * nchannels * N_sparse)
-    void   *get_tdi_scratch_all,    int     get_tdi_scratch_len_per_block
+    void   *get_tdi_scratch_all,    int     get_tdi_scratch_len_per_block,
+    // Layer-grouping (same convention as get_ll: n_groups == 0 -> per-pair
+    // all-m loop; n_groups > 0 -> middle group loop, m-band restricted).
+    // The "binary index" here is the (add, remove) pair index; both
+    // params_add_all[bin_i] and params_remove_all[bin_i] are read.
+    int    *binary_perm,
+    int    *group_starts, int *group_ends,
+    int    *group_m_lo,   int *group_m_hi,
+    int     n_groups,
+    // Two-pass swap_ll: per-pair (sorted order, indexed by bin_iter)
+    // remove-template m-band, used in pass 2 to pick up the d_h_rem and
+    // rem_rem pixels that lie outside the group's add band.
+    int    *pair_m_lo_b, int *pair_m_hi_b
 )
 {
     SourceT src(orbits, tdi_config, T, t_ref);
 
     // Heterodyne shared workspace (tdi_channels_buf moved to heap).
+    // Direct-path buffers (used when N_cp_sig <= 0).
     CUDA_SHARED double t_sparse_buf  [FAST_WDM_N_SPARSE_MAX];
     CUDA_SHARED double tdi_amp_buf   [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
     CUDA_SHARED double tdi_phase_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
     CUDA_SHARED double phi_ref_buf   [FAST_WDM_N_SPARSE_MAX];
+    // Source-signal spline-cache buffers (used when N_cp_sig > 0).
+    CUDA_SHARED double t_cp_buf            [FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double amp_y_buf           [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double amp_c1_buf          [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double amp_c2_buf          [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double amp_c3_buf          [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double phase_y_buf         [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double phase_c1_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double phase_c2_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double phase_c3_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double dphi_ref_y_buf      [FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double dphi_ref_c1_buf     [FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double dphi_ref_c2_buf     [FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double dphi_ref_c3_buf     [FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double B_buf               [FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED double pcr_scratch         [8 * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED cmplx  tdi_channels_cp_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    CUDA_SHARED char   get_tdi_scratch_cp_buf [21 * FAST_WDM_N_CP_SIG_MAX + 16];
+    const bool use_spline_cache = (N_cp_sig > 0 && N_cp_sig <= FAST_WDM_N_CP_SIG_MAX
+                                   && N_cp_sig < N_sparse);
     CUDA_SHARED cmplx  slow_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
     CUDA_SHARED double partial_dh_add[FAST_WDM_N_SPARSE_MAX];
     CUDA_SHARED double partial_dh_rem[FAST_WDM_N_SPARSE_MAX];
     CUDA_SHARED double partial_aa    [FAST_WDM_N_SPARSE_MAX];
     CUDA_SHARED double partial_rr    [FAST_WDM_N_SPARSE_MAX];
     CUDA_SHARED double partial_ar    [FAST_WDM_N_SPARSE_MAX];
+
+    // Per-thread local cache for data + invC. Same convention as get_ll
+    // -- populated once per (chunk, group) on GPU; disabled on CPU (cap
+    // = 1) so the kernel falls back to direct reads on single-thread CPU.
+    // swap_ll's m-band per group can be up to ~10 (5 add + 5 remove when
+    // the two carriers don't overlap) -- 2x the typical get_ll band --
+    // so we size the swap cache larger. With nchannels=3, m_band=12 (10
+    // + 2*margin), n_per_thread = ceil(Nt_sub / NUM_THREADS) <= 4, the
+    // worst-case per-thread footprint is 144 entries; cap of 192 leaves
+    // margin and falls back to direct reads if exceeded.
+#ifdef __CUDACC__
+    constexpr int WDM_KEEP_PER_THREAD_MAX_SWAP = 192;
+#else
+    constexpr int WDM_KEEP_PER_THREAD_MAX_SWAP = 1;
+#endif
+    double thr_data_cache[WDM_KEEP_PER_THREAD_MAX_SWAP];
+    double thr_invC_cache[WDM_KEEP_PER_THREAD_MAX_SWAP];
+
+    // Orbit spline cache (populated once per chunk; reused across binaries).
+    CUDA_SHARED double orbit_t_cp_buf  [FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_ltt_y_buf [6 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_ltt_c1_buf[6 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_ltt_c2_buf[6 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_ltt_c3_buf[6 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_pos_y_buf [9 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_pos_c1_buf[9 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_pos_c2_buf[9 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_pos_c3_buf[9 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_B_buf     [FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_pcr_buf   [8 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED OrbitsSplineCache orbit_cache_storage;
+    const bool use_orbit_cache = (N_cp_orbit > 0 && N_cp_orbit <= FAST_WDM_N_CP_ORBIT_MAX);
 
     for (int j = BLOCK_START; j < n_chunks; j += GRID_INCR) {
         cmplx  *chunk_fd_add  = &ws_chunk_fd_add_all [(size_t) j * nchannels * n_rfft_chunk];
@@ -2282,7 +3014,62 @@ void wdm_het_swap_ll_kernel(
         const int n_global_lo = chunk_n_global_offset[j];
         const double chunk_t0 = chunk_t_starts[j];
 
-        for (int bin_i = 0; bin_i < num_bin; ++bin_i) {
+        // Populate orbit cache once per chunk if enabled.
+        OrbitsSplineCache *orbit_cache_ptr = nullptr;
+        if (use_orbit_cache) {
+            populate_orbit_spline_cache(
+                &orbit_cache_storage, orbits,
+                chunk_t0, T_chunk, N_cp_orbit,
+                orbit_t_cp_buf,
+                orbit_ltt_y_buf, orbit_ltt_c1_buf, orbit_ltt_c2_buf, orbit_ltt_c3_buf,
+                orbit_pos_y_buf, orbit_pos_c1_buf, orbit_pos_c2_buf, orbit_pos_c3_buf,
+                orbit_B_buf, orbit_pcr_buf);
+            CUDA_SYNC_THREADS;
+            orbit_cache_ptr = &orbit_cache_storage;
+        }
+
+        const int n_group_iter = (n_groups > 0) ? n_groups : 1;
+        for (int g = 0; g < n_group_iter; ++g) {
+            int bin_iter_lo, bin_iter_hi, m_lo, m_hi;
+            if (n_groups > 0) {
+                bin_iter_lo = group_starts[g];
+                bin_iter_hi = group_ends  [g];
+                m_lo = group_m_lo[g];   if (m_lo < 0)  m_lo = 0;
+                m_hi = group_m_hi[g];   if (m_hi > Nf) m_hi = Nf;
+            } else {
+                bin_iter_lo = 0;
+                bin_iter_hi = num_bin;
+                m_lo = 0;
+                m_hi = Nf;
+            }
+
+            // Populate per-thread data/invC cache once per group.
+            int thr_slot_count = 0;
+#ifdef __CUDACC__
+            {
+                int slot = 0;
+                for (int c = 0; c < nchannels; ++c) {
+                    for (int m = m_lo; m < m_hi; ++m) {
+                        for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
+                             n_loc += BLOCK_INCR) {
+                            if (slot < WDM_KEEP_PER_THREAD_MAX_SWAP) {
+                                const int n_glob = n_global_lo + (n_loc - keep_lo);
+                                const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
+                                thr_data_cache[slot] = data_d[g_dt];
+                                thr_invC_cache[slot] = invC  [g_dt];
+                            }
+                            ++slot;
+                        }
+                    }
+                }
+                thr_slot_count = slot;
+            }
+#endif
+            const bool use_thr_cache = (thr_slot_count > 0
+                                        && thr_slot_count <= WDM_KEEP_PER_THREAD_MAX_SWAP);
+
+        for (int bin_iter = bin_iter_lo; bin_iter < bin_iter_hi; ++bin_iter) {
+            const int bin_i = (n_groups > 0) ? binary_perm[bin_iter] : bin_iter;
             double *params_add = &params_add_all   [(size_t) bin_i * nparams];
             double *params_rem = &params_remove_all[(size_t) bin_i * nparams];
 
@@ -2303,14 +3090,32 @@ void wdm_het_swap_ll_kernel(
             CUDA_SYNC_THREADS;
 
             // Add template
-            fast_wdm_inner_heterodyne(
-                chunk_fd_add, &src, params_add, bin_i, src.f0_index,
-                chunk_t0, T_chunk,
-                N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
-                t_sparse_buf, tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
-                tdi_channels_buf, slow_buf,
-                get_tdi_scratch, get_tdi_scratch_len_per_block
-            );
+            if (use_spline_cache) {
+                fast_wdm_inner_heterodyne_spline(
+                    chunk_fd_add, &src, params_add, bin_i, src.f0_index,
+                    chunk_t0, T_chunk,
+                    N_sparse, log2_N_sparse, N_cp_sig,
+                    n_rfft_chunk, nchannels, tukey_alpha,
+                    t_cp_buf,
+                    amp_y_buf, amp_c1_buf, amp_c2_buf, amp_c3_buf,
+                    phase_y_buf, phase_c1_buf, phase_c2_buf, phase_c3_buf,
+                    dphi_ref_y_buf, dphi_ref_c1_buf, dphi_ref_c2_buf, dphi_ref_c3_buf,
+                    B_buf, pcr_scratch,
+                    tdi_channels_cp_buf, slow_buf,
+                    get_tdi_scratch_cp_buf, (int) sizeof(get_tdi_scratch_cp_buf),
+                    orbit_cache_ptr
+                );
+            } else {
+                fast_wdm_inner_heterodyne(
+                    chunk_fd_add, &src, params_add, bin_i, src.f0_index,
+                    chunk_t0, T_chunk,
+                    N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
+                    t_sparse_buf, tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
+                    tdi_channels_buf, slow_buf,
+                    get_tdi_scratch, get_tdi_scratch_len_per_block,
+                    orbit_cache_ptr
+                );
+            }
             CUDA_SYNC_THREADS;
             gb_chunk_fd_to_wdm(
                 w_chunk_add, chunk_fd_add, wdm_window,
@@ -2320,14 +3125,32 @@ void wdm_het_swap_ll_kernel(
             CUDA_SYNC_THREADS;
 
             // Remove template
-            fast_wdm_inner_heterodyne(
-                chunk_fd_rem, &src, params_rem, bin_i, src.f0_index,
-                chunk_t0, T_chunk,
-                N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
-                t_sparse_buf, tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
-                tdi_channels_buf, slow_buf,
-                get_tdi_scratch, get_tdi_scratch_len_per_block
-            );
+            if (use_spline_cache) {
+                fast_wdm_inner_heterodyne_spline(
+                    chunk_fd_rem, &src, params_rem, bin_i, src.f0_index,
+                    chunk_t0, T_chunk,
+                    N_sparse, log2_N_sparse, N_cp_sig,
+                    n_rfft_chunk, nchannels, tukey_alpha,
+                    t_cp_buf,
+                    amp_y_buf, amp_c1_buf, amp_c2_buf, amp_c3_buf,
+                    phase_y_buf, phase_c1_buf, phase_c2_buf, phase_c3_buf,
+                    dphi_ref_y_buf, dphi_ref_c1_buf, dphi_ref_c2_buf, dphi_ref_c3_buf,
+                    B_buf, pcr_scratch,
+                    tdi_channels_cp_buf, slow_buf,
+                    get_tdi_scratch_cp_buf, (int) sizeof(get_tdi_scratch_cp_buf),
+                    orbit_cache_ptr
+                );
+            } else {
+                fast_wdm_inner_heterodyne(
+                    chunk_fd_rem, &src, params_rem, bin_i, src.f0_index,
+                    chunk_t0, T_chunk,
+                    N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
+                    t_sparse_buf, tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
+                    tdi_channels_buf, slow_buf,
+                    get_tdi_scratch, get_tdi_scratch_len_per_block,
+                    orbit_cache_ptr
+                );
+            }
             CUDA_SYNC_THREADS;
             gb_chunk_fd_to_wdm(
                 w_chunk_rem, chunk_fd_rem, wdm_window,
@@ -2336,23 +3159,115 @@ void wdm_het_swap_ll_kernel(
             );
             CUDA_SYNC_THREADS;
 
-            // Accumulate the 5 quantities
-            for (int c = 0; c < nchannels; ++c) {
-                for (int m = 0; m < Nf; ++m) {
-                    for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
-                         n_loc += BLOCK_INCR) {
-                        const int n_glob = n_global_lo + (n_loc - keep_lo);
-                        const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
-                        const size_t g_w  = ((size_t) c * Nf + m) * Nt_sub + n_loc;
-                        const double wa  = w_chunk_add[g_w];
-                        const double wr  = w_chunk_rem[g_w];
-                        const double d   = data_d[g_dt];
-                        const double inv = invC  [g_dt];
-                        partial_dh_add[THREAD_START] += d * wa * inv;
-                        partial_dh_rem[THREAD_START] += d * wr * inv;
-                        partial_aa    [THREAD_START] += wa * wa * inv;
-                        partial_rr    [THREAD_START] += wr * wr * inv;
-                        partial_ar    [THREAD_START] += wa * wr * inv;
+            // Accumulate the 5 quantities -- iteration order matches the
+            // populate loop above so `slot` stays in sync.
+            {
+                int slot = 0;
+                for (int c = 0; c < nchannels; ++c) {
+                    for (int m = m_lo; m < m_hi; ++m) {
+                        for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
+                             n_loc += BLOCK_INCR) {
+                            const size_t g_w  = ((size_t) c * Nf + m) * Nt_sub + n_loc;
+                            const double wa  = w_chunk_add[g_w];
+                            const double wr  = w_chunk_rem[g_w];
+                            double d, inv;
+                            if (use_thr_cache) {
+                                d   = thr_data_cache[slot];
+                                inv = thr_invC_cache[slot];
+                            } else {
+                                const int n_glob = n_global_lo + (n_loc - keep_lo);
+                                const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
+                                d   = data_d[g_dt];
+                                inv = invC  [g_dt];
+                            }
+                            partial_dh_add[THREAD_START] += d * wa * inv;
+                            partial_dh_rem[THREAD_START] += d * wr * inv;
+                            partial_aa    [THREAD_START] += wa * wa * inv;
+                            partial_rr    [THREAD_START] += wr * wr * inv;
+                            partial_ar    [THREAD_START] += wa * wr * inv;
+                            ++slot;
+                        }
+                    }
+                }
+            }
+
+            // Pass 2 (two-pass swap_ll): when the remove template's
+            // carrier band [pair_m_lo_b, pair_m_hi_b) extends outside
+            // source 1's band [m_lo, m_hi) we still need d_h_rem and
+            // rem_rem contributions from those out-of-band m's (w_rem is
+            // non-zero there). All cross terms (ar, aa, d_h_add) already
+            // converged in pass 1 since w_add == 0 outside [m_lo, m_hi).
+            //
+            // Strategy: re-populate the per-thread cache with source 2's
+            // 5-layer band data/invC, then iterate that band skipping any
+            // m already covered by pass 1 (to avoid double-counting).
+            //
+            // When grouping is disabled (n_groups == 0) we skip pass 2:
+            // pass 1 already iterates m in [0, Nf) which subsumes source
+            // 2's band.
+            if (n_groups > 0) {
+                const int m_lo_b = pair_m_lo_b[bin_iter];
+                const int m_hi_b_in = pair_m_hi_b[bin_iter];
+                const int m_lo_b_c = (m_lo_b < 0) ? 0 : m_lo_b;
+                const int m_hi_b   = (m_hi_b_in > Nf) ? Nf : m_hi_b_in;
+                const bool need_pass2 = (m_lo_b_c != m_lo) || (m_hi_b != m_hi);
+                if (need_pass2 && m_lo_b_c < m_hi_b) {
+                    // Re-populate cache with source 2's band data/invC
+                    // (per-thread local memory; no sync needed).
+                    int thr_slot_count2 = 0;
+#ifdef __CUDACC__
+                    {
+                        int slot = 0;
+                        for (int c = 0; c < nchannels; ++c) {
+                            for (int m = m_lo_b_c; m < m_hi_b; ++m) {
+                                for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
+                                     n_loc += BLOCK_INCR) {
+                                    if (slot < WDM_KEEP_PER_THREAD_MAX_SWAP) {
+                                        const int n_glob = n_global_lo + (n_loc - keep_lo);
+                                        const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
+                                        thr_data_cache[slot] = data_d[g_dt];
+                                        thr_invC_cache[slot] = invC  [g_dt];
+                                    }
+                                    ++slot;
+                                }
+                            }
+                        }
+                        thr_slot_count2 = slot;
+                    }
+#endif
+                    const bool use_thr_cache2 = (thr_slot_count2 > 0
+                        && thr_slot_count2 <= WDM_KEEP_PER_THREAD_MAX_SWAP);
+
+                    // Accumulate d_h_rem and rem_rem for m's outside
+                    // [m_lo, m_hi). slot iterates the SAME order as the
+                    // populate above so the cache index stays in sync.
+                    int slot = 0;
+                    for (int c = 0; c < nchannels; ++c) {
+                        for (int m = m_lo_b_c; m < m_hi_b; ++m) {
+                            const bool in_pass1 = (m >= m_lo) && (m < m_hi);
+                            for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
+                                 n_loc += BLOCK_INCR) {
+                                if (in_pass1) {
+                                    ++slot;
+                                    continue;
+                                }
+                                const size_t g_w = ((size_t) c * Nf + m) * Nt_sub + n_loc;
+                                const double wr  = w_chunk_rem[g_w];
+                                double d, inv;
+                                if (use_thr_cache2) {
+                                    d   = thr_data_cache[slot];
+                                    inv = thr_invC_cache[slot];
+                                } else {
+                                    const int n_glob = n_global_lo + (n_loc - keep_lo);
+                                    const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
+                                    d   = data_d[g_dt];
+                                    inv = invC  [g_dt];
+                                }
+                                partial_dh_rem[THREAD_START] += d * wr * inv;
+                                partial_rr    [THREAD_START] += wr * wr * inv;
+                                ++slot;
+                            }
+                        }
                     }
                 }
             }
@@ -2384,7 +3299,8 @@ void wdm_het_swap_ll_kernel(
             add_remove_out   [bin_i] += partial_ar    [0];
 #endif
             CUDA_SYNC_THREADS;
-        }
+        } // bin_iter (pair)
+        } // g (group)
     }
 }
 
@@ -4805,6 +5721,226 @@ void LISATDIonTheFly::get_tdi_Xf_single(cmplx *tdi_channel, double t, double *pa
 // BASE: 155634 1.556340000000e+06 0 3 13 9.221909189436e-23 1.556340000000e+06
 // BASE: 155634 1.556340000000e+06 0 2 31 8.403496674567e-23 1.556331661075e+06
 
+
+// ============================================================================
+// Orbit-cache variants of get_tdi_Xf_single / get_tdi_Xf / get_tdi /
+// get_tdi_heterodyned. Mirror the originals but swap raw orbit lookups
+// (orbits->get_*) for cached cubic-spline evaluations (cache_get_*).
+// ============================================================================
+CUDA_DEVICE
+void LISATDIonTheFly::get_tdi_Xf_single_cached(
+    cmplx *tdi_channel, double t, double *params,
+    Vec k, Vec u, Vec v,
+    int *link_Space_craft_rec, int *link_Space_craft_em, int bin_i,
+    OrbitsSplineCache *cache)
+{
+    Vec x_rec, x_em, n;
+    double delay_rec, phase_change, delay_em;
+    double xi_p, xi_c;
+    double k_dot_n, k_dot_x_rec, k_dot_x_em;
+    double L;
+    double hp_del_rec, hp_del_em, hc_del_rec, hc_del_em;
+    cmplx I(0.0, 1.0);
+    double pre_factor, large_factor_real, large_factor_imag;
+
+    tdi_channel[0] = 0.0;
+    tdi_channel[1] = 0.0;
+    tdi_channel[2] = 0.0;
+    int sc_r, sc_e;
+    double total_delay;
+    double time_eval, time_rec, time_em;
+    double norm;
+    cmplx tmp_channel_output[3];
+    tmp_channel_output[0] = 0.0;
+    tmp_channel_output[1] = 0.0;
+    tmp_channel_output[2] = 0.0;
+    for (int unit_i = 0; unit_i < tdi_config->num_units; unit_i += 1)
+    {
+        int unit_start  = tdi_config->unit_starts[unit_i];
+        int unit_length = tdi_config->unit_lengths[unit_i];
+        int base_link   = tdi_config->tdi_base_link[unit_i];
+        int base_link_index = _orbit_cache_link_index(base_link);
+        int channel     = tdi_config->channels[unit_i];
+        double sign     = tdi_config->tdi_signs_in[unit_i];
+
+        total_delay = 0.0;
+        for (int sub_i = 0; sub_i < unit_length; sub_i += 1)
+        {
+            int combination_index = unit_start + sub_i;
+            int combination_link  = tdi_config->tdi_link_combinations[combination_index];
+            if (combination_link != -11)
+            {
+                total_delay += cache_get_light_travel_time(cache, t, combination_link);
+            }
+        }
+
+        time_eval = t - total_delay;
+        time_rec  = time_eval;
+
+        // Bounds checks against orbits' raw global tables are not needed:
+        // by construction the cache is built from t-values inside the
+        // source's valid orbit window, so any t inside the chunk is in
+        // bounds. Compare to the original which sets is_okay=false on
+        // get_window == -1.
+
+        L       = cache_get_light_travel_time(cache, time_rec, base_link);
+        time_em = time_rec - L;
+
+        sc_r = link_Space_craft_rec[base_link_index];
+        sc_e = link_Space_craft_em[base_link_index];
+
+        x_rec = cache_get_pos(cache, time_rec, sc_r);
+        x_em  = cache_get_pos(cache, time_em, sc_e);
+        n     = x_rec - x_em;
+        norm  = sqrt(n.dot(n));
+        n     = n / norm;
+
+        k_dot_n     = k.dot(n);
+        k_dot_x_rec = k.dot(x_rec);
+        k_dot_x_em  = k.dot(x_em);
+
+        pre_factor = 1.0 / (1.0 - k_dot_n);
+        delay_rec  = time_rec - k_dot_x_rec * C_inv;
+        delay_em   = time_em  - k_dot_x_em  * C_inv;
+
+        xi_projections(&xi_p, &xi_c, u, v, n);
+
+        phase_change = 0.0;
+        get_hp_hc(&hp_del_rec, &hc_del_rec, delay_rec, params, phase_change, bin_i);
+        get_hp_hc(&hp_del_em,  &hc_del_em,  delay_em,  params, phase_change, bin_i);
+        large_factor_real = (hp_del_em - hp_del_rec) * xi_p + (hc_del_em - hc_del_rec) * xi_c;
+
+        phase_change = M_PI / 2.0;
+        get_hp_hc(&hp_del_rec, &hc_del_rec, delay_rec, params, phase_change, bin_i);
+        get_hp_hc(&hp_del_em,  &hc_del_em,  delay_em,  params, phase_change, bin_i);
+        large_factor_imag = (hp_del_em - hp_del_rec) * xi_p + (hc_del_em - hc_del_rec) * xi_c;
+
+        tmp_channel_output[channel] += sign * pre_factor * (large_factor_real + I * large_factor_imag);
+    }
+    for (int channel = 0; channel < 3; channel += 1)
+    {
+        tdi_channel[channel] = tmp_channel_output[channel];
+    }
+}
+
+
+CUDA_DEVICE
+void LISATDIonTheFly::get_tdi_Xf_cached(
+    cmplx *tdi_channels_arr, double *params, double *t_data, int N, int bin_i,
+    int *link_Space_craft_rec, int *link_Space_craft_em,
+    Vec k, Vec u, Vec v, OrbitsSplineCache *cache)
+{
+    double t;
+    cmplx tdi_channel_tmp[3];
+    for (int i = THREAD_START; i < N; i += BLOCK_INCR)
+    {
+        t = t_data[i];
+        get_tdi_Xf_single_cached(&tdi_channel_tmp[0], t, params, k, u, v,
+                                  link_Space_craft_rec, link_Space_craft_em,
+                                  bin_i, cache);
+        for (int channel = 0; channel < tdi_config->num_channels; channel += 1)
+        {
+            tdi_channels_arr[channel * N + i] = tdi_channel_tmp[channel];
+        }
+    }
+}
+
+
+CUDA_DEVICE
+void LISATDIonTheFly::get_tdi_cached(
+    void *buffer, int buffer_length,
+    cmplx *tdi_channels_arr,
+    double *tdi_amp, double *tdi_phase, double *phi_ref,
+    double *params, double *t_arr, int N, int bin_i, int nchannels,
+    OrbitsSplineCache *cache)
+{
+#ifdef __CUDACC__
+#else
+    if (buffer_length < 2 * N * sizeof(double) + 1 * N * sizeof(int) + 1 * N * sizeof(bool))
+    {
+        throw std::invalid_argument("Buffer length not long enough.");
+    }
+#endif
+
+    CUDA_SHARED int link_Space_craft_rec[NLINKS];
+    CUDA_SHARED int link_Space_craft_em[NLINKS];
+
+    fill_link_arrays(link_Space_craft_rec, link_Space_craft_em);
+    CUDA_SYNC_THREADS;
+    Vec k(0.0, 0.0, 0.0);
+    Vec u(0.0, 0.0, 0.0);
+    Vec v(0.0, 0.0, 0.0);
+    get_sky_vectors(&k, &u, &v, params);
+
+    get_tdi_Xf_cached(tdi_channels_arr, params, t_arr, N, bin_i,
+                       link_Space_craft_rec, link_Space_craft_em, k, u, v, cache);
+    CUDA_SYNC_THREADS;
+
+    // Phase-extract scratch carved out of the caller-allocated buffer.
+    double *flip      = (double *) buffer;
+    double *pjump     = &flip[N];
+    int    *count     = (int *)  &pjump[N];
+    bool   *fix_count = (bool *) &count[N];
+    CUDA_SYNC_THREADS;
+
+#ifdef __CUDACC__
+    int start = threadIdx.x;
+    int incr  = blockDim.x;
+#else
+    int start = 0;
+    int incr  = 1;
+#endif
+    for (int i = start; i < N; i += incr)
+    {
+        phi_ref[i] = get_phase_ref(t_arr[i], params, bin_i);
+    }
+    CUDA_SYNC_THREADS;
+    new_extract_amplitude_and_phase(count, fix_count, flip, pjump, N,
+                                     &tdi_amp[0],     &tdi_phase[0],
+                                     &tdi_channels_arr[0], &phi_ref[0]);
+    new_extract_amplitude_and_phase(count, fix_count, flip, pjump, N,
+                                     &tdi_amp[N],     &tdi_phase[N],
+                                     &tdi_channels_arr[N], &phi_ref[0]);
+    new_extract_amplitude_and_phase(count, fix_count, flip, pjump, N,
+                                     &tdi_amp[2 * N], &tdi_phase[2 * N],
+                                     &tdi_channels_arr[2 * N], &phi_ref[0]);
+
+    double *ph_correct_buffer = &flip[0];
+    new_unwrap_phase(ph_correct_buffer, N, &tdi_phase[0]);
+    new_unwrap_phase(ph_correct_buffer, N, &tdi_phase[N]);
+    new_unwrap_phase(ph_correct_buffer, N, &tdi_phase[2 * N]);
+}
+
+
+CUDA_DEVICE
+void LISATDIonTheFly::get_tdi_heterodyned_cached(
+    void *buffer, int buffer_length,
+    cmplx *tdi_channels_arr,
+    double *tdi_amp, double *tdi_phase, double *phi_ref_het,
+    double *params, double *t_arr, int N, int bin_i, int nchannels,
+    double f0_grid, OrbitsSplineCache *cache)
+{
+    get_tdi_cached(buffer, buffer_length, tdi_channels_arr,
+                    tdi_amp, tdi_phase, phi_ref_het,
+                    params, t_arr, N, bin_i, nchannels, cache);
+    CUDA_SYNC_THREADS;
+
+#ifdef __CUDACC__
+    int start = threadIdx.x;
+    int incr  = blockDim.x;
+#else
+    int start = 0;
+    int incr  = 1;
+#endif
+    const double two_pi_f0 = 2.0 * M_PI * f0_grid;
+    for (int i = start; i < N; i += incr)
+    {
+        phi_ref_het[i] -= two_pi_f0 * t_arr[i];
+    }
+    CUDA_SYNC_THREADS;
+}
+
+
 CUDA_DEVICE
 double LISATDIonTheFly::get_amp(double t, double *params, int bin_i)
 {
@@ -4898,8 +6034,6 @@ void LISATDIonTheFly::get_tdi(void *buffer, int buffer_length, cmplx *tdi_channe
     Vec u(0.0, 0.0, 0.0);
     Vec v(0.0, 0.0, 0.0);
     get_sky_vectors(&k, &u, &v, params);
-    // printf("INSIDE2: %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e %.12e\n", params[beta_index], params[lam_index], k.x, k.y, k.z, u.x, u.y, u.z, v.x, v.y, v.z);
-    
     get_tdi_Xf(tdi_channels_arr, params, t_arr, N, bin_i, link_Space_craft_rec, link_Space_craft_em, k, u, v);
     CUDA_SYNC_THREADS;
     
@@ -5430,6 +6564,34 @@ void LISATDIonTheFly::new_extract_phase(cmplx *M, double *phiR, int N, double *t
 int LISATDIonTheFly::get_tdi_buffer_size(int N)
 {
     return 2 * N * sizeof(double) + 1 * N * sizeof(bool) + 1 * N * sizeof(int);
+}
+
+
+// Heterodyned-phi_ref variant. See header for semantics; the only
+// difference from ``get_tdi`` is the final per-sample subtraction
+// ``phi_ref_het[i] = phi_ref[i] - 2*pi*f0_grid*t_arr[i]`` applied
+// after unwrap. ``tdi_amp`` and ``tdi_phase`` are unchanged.
+CUDA_DEVICE
+void LISATDIonTheFly::get_tdi_heterodyned(void *buffer, int buffer_length, cmplx *tdi_channels_arr, double *tdi_amp, double *tdi_phase, double *phi_ref_het, double *params, double *t_arr, int N, int bin_i, int nchannels, double f0_grid)
+{
+    get_tdi(buffer, buffer_length,
+            tdi_channels_arr, tdi_amp, tdi_phase, phi_ref_het,
+            params, t_arr, N, bin_i, nchannels);
+    CUDA_SYNC_THREADS;
+
+#ifdef __CUDACC__
+    int start = threadIdx.x;
+    int incr  = blockDim.x;
+#else
+    int start = 0;
+    int incr  = 1;
+#endif
+    const double two_pi_f0 = 2.0 * M_PI * f0_grid;
+    for (int i = start; i < N; i += incr)
+    {
+        phi_ref_het[i] -= two_pi_f0 * t_arr[i];
+    }
+    CUDA_SYNC_THREADS;
 }
 
 
@@ -7839,3 +9001,511 @@ void fd_spline_run_wave_tdi_wrap(FDSplineTDIWaveform *tdi_on_fly, cmplx *tdi_cha
 //     // ndim = 2; lam first
 //     return -1;
 // }
+
+
+// =============================================================================
+// Chunked-heterodyne host wrappers (templated over source class).
+//
+// Each impl function:
+//   - allocates the four per-chunk workspaces (plus get_tdi scratch),
+//   - launches the templated kernel,
+//   - frees the workspaces.
+//
+// On GPU, ``grid_dim`` selects the launch grid (caller picks via
+// ``gb_wdm_het.chunked_het_grid_dim`` on the Python side). On CPU,
+// ``grid_dim`` is ignored -- ``BLOCK_START`` / ``GRID_INCR`` walk the
+// whole range serially with the single fake "block".
+//
+// The 6 GBComputationGroup / SOBBHComputationGroup methods at the bottom
+// route into these impls with the appropriate SourceT.
+// =============================================================================
+
+static inline int wdm_het_get_tdi_scratch_bytes(int N_sparse)
+{
+    // Mirrors the per-block sizing in gb_wdm_spline_*_kernel:
+    //   get_tdi_buffer_size(L) = 2*L*8 + L*4 + L*1 = 21*L bytes
+    // Plus 16-byte safety pad so misaligned reads in the inner kernel
+    // can't overrun.
+    return 21 * N_sparse + 16;
+}
+
+template <class SourceT>
+static void wdm_het_fill_global_impl(
+    double *template_fill,
+    Orbits *orbits, TDIConfig *tdi_config,
+    double *params_all, double *factors_all,
+    double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
+    int *chunk_n_global_offset,
+    double *wdm_window,
+    int n_chunks, int num_bin, int nparams,
+    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int N_sparse, int log2_N_sparse,
+    int nchannels, int n_rfft_chunk,
+    double T_chunk, double dt, double T, double t_ref,
+    double tukey_alpha,
+    int grid_dim, int N_cp_sig, int N_cp_orbit)
+{
+    const size_t n_fd = (size_t) n_chunks * nchannels * n_rfft_chunk;
+    const size_t n_ls = (size_t) n_chunks * Nt_sub;
+    const size_t n_wd = (size_t) n_chunks * nchannels * Nf * Nt_sub;
+    const size_t n_tc = (size_t) n_chunks * nchannels * N_sparse;
+    const int    scratch_per = wdm_het_get_tdi_scratch_bytes(N_sparse);
+    const size_t n_sc = (size_t) n_chunks * (size_t) scratch_per;
+
+    cmplx  *ws_chunk_fd_all      = nullptr;
+    cmplx  *ws_layer_scratch_all = nullptr;
+    double *ws_chunk_wdm_all     = nullptr;
+    cmplx  *ws_tdi_channels_all  = nullptr;
+    void   *get_tdi_scratch_all  = nullptr;
+
+#ifdef __CUDACC__
+    gpuErrchk(cudaMalloc(&ws_chunk_fd_all,      n_fd * sizeof(cmplx)));
+    gpuErrchk(cudaMalloc(&ws_layer_scratch_all, n_ls * sizeof(cmplx)));
+    gpuErrchk(cudaMalloc(&ws_chunk_wdm_all,     n_wd * sizeof(double)));
+    gpuErrchk(cudaMalloc(&ws_tdi_channels_all,  n_tc * sizeof(cmplx)));
+    gpuErrchk(cudaMalloc(&get_tdi_scratch_all,  n_sc));
+    // Kernel zero-inits per-chunk slabs at chunk entry; no host-side memset
+    // needed here.
+
+    const int gd = (grid_dim > 0) ? grid_dim : n_chunks;
+    wdm_het_fill_global_kernel<SourceT><<<gd, NUM_THREADS_HERE>>>(
+        template_fill, orbits, tdi_config,
+        params_all, factors_all,
+        chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
+        wdm_window,
+        n_chunks, num_bin, nparams,
+        Nf, Nt, Nt_sub, log2_Nt_sub,
+        N_sparse, log2_N_sparse,
+        nchannels, n_rfft_chunk,
+        T_chunk, dt, T, t_ref,
+        tukey_alpha,
+        N_cp_sig, N_cp_orbit,
+        ws_chunk_fd_all, ws_layer_scratch_all, ws_chunk_wdm_all,
+        ws_tdi_channels_all,
+        get_tdi_scratch_all, scratch_per);
+    cudaDeviceSynchronize();
+    gpuErrchk(cudaGetLastError());
+
+    gpuErrchk(cudaFree(ws_chunk_fd_all));
+    gpuErrchk(cudaFree(ws_layer_scratch_all));
+    gpuErrchk(cudaFree(ws_chunk_wdm_all));
+    gpuErrchk(cudaFree(ws_tdi_channels_all));
+    gpuErrchk(cudaFree(get_tdi_scratch_all));
+#else
+    (void) grid_dim;
+    ws_chunk_fd_all      = new cmplx [n_fd]();
+    ws_layer_scratch_all = new cmplx [n_ls]();
+    ws_chunk_wdm_all     = new double[n_wd]();
+    ws_tdi_channels_all  = new cmplx [n_tc]();
+    get_tdi_scratch_all  = (void *) new char[n_sc]();
+
+    wdm_het_fill_global_kernel<SourceT>(
+        template_fill, orbits, tdi_config,
+        params_all, factors_all,
+        chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
+        wdm_window,
+        n_chunks, num_bin, nparams,
+        Nf, Nt, Nt_sub, log2_Nt_sub,
+        N_sparse, log2_N_sparse,
+        nchannels, n_rfft_chunk,
+        T_chunk, dt, T, t_ref,
+        tukey_alpha,
+        N_cp_sig, N_cp_orbit,
+        ws_chunk_fd_all, ws_layer_scratch_all, ws_chunk_wdm_all,
+        ws_tdi_channels_all,
+        get_tdi_scratch_all, scratch_per);
+
+    delete[] ws_chunk_fd_all;
+    delete[] ws_layer_scratch_all;
+    delete[] ws_chunk_wdm_all;
+    delete[] ws_tdi_channels_all;
+    delete[] (char *) get_tdi_scratch_all;
+#endif
+}
+
+
+template <class SourceT>
+static void wdm_het_get_ll_impl(
+    double *d_h_out, double *h_h_out,
+    Orbits *orbits, TDIConfig *tdi_config,
+    double *params_all,
+    int *data_index_all, int *noise_index_all,
+    double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
+    int *chunk_n_global_offset,
+    double *wdm_window,
+    double *data_d, double *invC,
+    int n_chunks, int num_bin, int nparams,
+    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int N_sparse, int log2_N_sparse,
+    int nchannels, int n_rfft_chunk,
+    double T_chunk, double dt, double T, double t_ref,
+    double tukey_alpha,
+    int grid_dim, int N_cp_sig, int N_cp_orbit,
+    int *binary_perm, int *group_starts, int *group_ends,
+    int *group_m_lo, int *group_m_hi, int n_groups)
+{
+    const size_t n_fd = (size_t) n_chunks * nchannels * n_rfft_chunk;
+    const size_t n_ls = (size_t) n_chunks * Nt_sub;
+    const size_t n_wd = (size_t) n_chunks * nchannels * Nf * Nt_sub;
+    const size_t n_tc = (size_t) n_chunks * nchannels * N_sparse;
+    const int    scratch_per = wdm_het_get_tdi_scratch_bytes(N_sparse);
+    const size_t n_sc = (size_t) n_chunks * (size_t) scratch_per;
+
+    cmplx  *ws_chunk_fd_all      = nullptr;
+    cmplx  *ws_layer_scratch_all = nullptr;
+    double *ws_chunk_wdm_all     = nullptr;
+    cmplx  *ws_tdi_channels_all  = nullptr;
+    void   *get_tdi_scratch_all  = nullptr;
+
+#ifdef __CUDACC__
+    gpuErrchk(cudaMalloc(&ws_chunk_fd_all,      n_fd * sizeof(cmplx)));
+    gpuErrchk(cudaMalloc(&ws_layer_scratch_all, n_ls * sizeof(cmplx)));
+    gpuErrchk(cudaMalloc(&ws_chunk_wdm_all,     n_wd * sizeof(double)));
+    gpuErrchk(cudaMalloc(&ws_tdi_channels_all,  n_tc * sizeof(cmplx)));
+    gpuErrchk(cudaMalloc(&get_tdi_scratch_all,  n_sc));
+
+    const int gd = (grid_dim > 0) ? grid_dim : n_chunks;
+    wdm_het_get_ll_kernel<SourceT><<<gd, NUM_THREADS_HERE>>>(
+        d_h_out, h_h_out, orbits, tdi_config, params_all,
+        data_index_all, noise_index_all,
+        chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
+        wdm_window, data_d, invC,
+        n_chunks, num_bin, nparams,
+        Nf, Nt, Nt_sub, log2_Nt_sub,
+        N_sparse, log2_N_sparse,
+        nchannels, n_rfft_chunk,
+        T_chunk, dt, T, t_ref,
+        tukey_alpha,
+        N_cp_sig, N_cp_orbit,
+        ws_chunk_fd_all, ws_layer_scratch_all, ws_chunk_wdm_all,
+        ws_tdi_channels_all,
+        get_tdi_scratch_all, scratch_per,
+        binary_perm, group_starts, group_ends,
+        group_m_lo, group_m_hi, n_groups);
+    cudaDeviceSynchronize();
+    gpuErrchk(cudaGetLastError());
+
+    gpuErrchk(cudaFree(ws_chunk_fd_all));
+    gpuErrchk(cudaFree(ws_layer_scratch_all));
+    gpuErrchk(cudaFree(ws_chunk_wdm_all));
+    gpuErrchk(cudaFree(ws_tdi_channels_all));
+    gpuErrchk(cudaFree(get_tdi_scratch_all));
+#else
+    (void) grid_dim;
+    ws_chunk_fd_all      = new cmplx [n_fd]();
+    ws_layer_scratch_all = new cmplx [n_ls]();
+    ws_chunk_wdm_all     = new double[n_wd]();
+    ws_tdi_channels_all  = new cmplx [n_tc]();
+    get_tdi_scratch_all  = (void *) new char[n_sc]();
+
+    wdm_het_get_ll_kernel<SourceT>(
+        d_h_out, h_h_out, orbits, tdi_config, params_all,
+        data_index_all, noise_index_all,
+        chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
+        wdm_window, data_d, invC,
+        n_chunks, num_bin, nparams,
+        Nf, Nt, Nt_sub, log2_Nt_sub,
+        N_sparse, log2_N_sparse,
+        nchannels, n_rfft_chunk,
+        T_chunk, dt, T, t_ref,
+        tukey_alpha,
+        N_cp_sig, N_cp_orbit,
+        ws_chunk_fd_all, ws_layer_scratch_all, ws_chunk_wdm_all,
+        ws_tdi_channels_all,
+        get_tdi_scratch_all, scratch_per,
+        binary_perm, group_starts, group_ends,
+        group_m_lo, group_m_hi, n_groups);
+
+    delete[] ws_chunk_fd_all;
+    delete[] ws_layer_scratch_all;
+    delete[] ws_chunk_wdm_all;
+    delete[] ws_tdi_channels_all;
+    delete[] (char *) get_tdi_scratch_all;
+#endif
+}
+
+
+template <class SourceT>
+static void wdm_het_swap_ll_impl(
+    double *d_h_add_out, double *d_h_remove_out,
+    double *add_add_out, double *remove_remove_out, double *add_remove_out,
+    Orbits *orbits, TDIConfig *tdi_config,
+    double *params_add_all, double *params_remove_all,
+    int *data_index_all, int *noise_index_all,
+    double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
+    int *chunk_n_global_offset,
+    double *wdm_window,
+    double *data_d, double *invC,
+    int n_chunks, int num_bin, int nparams,
+    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int N_sparse, int log2_N_sparse,
+    int nchannels, int n_rfft_chunk,
+    double T_chunk, double dt, double T, double t_ref,
+    double tukey_alpha,
+    int grid_dim, int N_cp_sig, int N_cp_orbit,
+    int *binary_perm, int *group_starts, int *group_ends,
+    int *group_m_lo, int *group_m_hi, int n_groups,
+    int *pair_m_lo_b, int *pair_m_hi_b)
+{
+    // swap_ll has two chunk_fd slabs (add + rem) and two chunk_wdm slabs.
+    const size_t n_fd = (size_t) n_chunks * nchannels * n_rfft_chunk;
+    const size_t n_ls = (size_t) n_chunks * Nt_sub;
+    const size_t n_wd = (size_t) n_chunks * nchannels * Nf * Nt_sub;
+    const size_t n_tc = (size_t) n_chunks * nchannels * N_sparse;
+    const int    scratch_per = wdm_het_get_tdi_scratch_bytes(N_sparse);
+    const size_t n_sc = (size_t) n_chunks * (size_t) scratch_per;
+
+    cmplx  *ws_chunk_fd_add_all  = nullptr;
+    cmplx  *ws_chunk_fd_rem_all  = nullptr;
+    cmplx  *ws_layer_scratch_all = nullptr;
+    double *ws_chunk_wdm_add_all = nullptr;
+    double *ws_chunk_wdm_rem_all = nullptr;
+    cmplx  *ws_tdi_channels_all  = nullptr;
+    void   *get_tdi_scratch_all  = nullptr;
+
+#ifdef __CUDACC__
+    gpuErrchk(cudaMalloc(&ws_chunk_fd_add_all,  n_fd * sizeof(cmplx)));
+    gpuErrchk(cudaMalloc(&ws_chunk_fd_rem_all,  n_fd * sizeof(cmplx)));
+    gpuErrchk(cudaMalloc(&ws_layer_scratch_all, n_ls * sizeof(cmplx)));
+    gpuErrchk(cudaMalloc(&ws_chunk_wdm_add_all, n_wd * sizeof(double)));
+    gpuErrchk(cudaMalloc(&ws_chunk_wdm_rem_all, n_wd * sizeof(double)));
+    gpuErrchk(cudaMalloc(&ws_tdi_channels_all,  n_tc * sizeof(cmplx)));
+    gpuErrchk(cudaMalloc(&get_tdi_scratch_all,  n_sc));
+
+    const int gd = (grid_dim > 0) ? grid_dim : n_chunks;
+    wdm_het_swap_ll_kernel<SourceT><<<gd, NUM_THREADS_HERE>>>(
+        d_h_add_out, d_h_remove_out, add_add_out, remove_remove_out, add_remove_out,
+        orbits, tdi_config, params_add_all, params_remove_all,
+        data_index_all, noise_index_all,
+        chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
+        wdm_window, data_d, invC,
+        n_chunks, num_bin, nparams,
+        Nf, Nt, Nt_sub, log2_Nt_sub,
+        N_sparse, log2_N_sparse,
+        nchannels, n_rfft_chunk,
+        T_chunk, dt, T, t_ref,
+        tukey_alpha,
+        N_cp_sig, N_cp_orbit,
+        ws_chunk_fd_add_all, ws_chunk_fd_rem_all,
+        ws_layer_scratch_all,
+        ws_chunk_wdm_add_all, ws_chunk_wdm_rem_all,
+        ws_tdi_channels_all,
+        get_tdi_scratch_all, scratch_per,
+        binary_perm, group_starts, group_ends, group_m_lo, group_m_hi, n_groups,
+        pair_m_lo_b, pair_m_hi_b);
+    cudaDeviceSynchronize();
+    gpuErrchk(cudaGetLastError());
+
+    gpuErrchk(cudaFree(ws_chunk_fd_add_all));
+    gpuErrchk(cudaFree(ws_chunk_fd_rem_all));
+    gpuErrchk(cudaFree(ws_layer_scratch_all));
+    gpuErrchk(cudaFree(ws_chunk_wdm_add_all));
+    gpuErrchk(cudaFree(ws_chunk_wdm_rem_all));
+    gpuErrchk(cudaFree(ws_tdi_channels_all));
+    gpuErrchk(cudaFree(get_tdi_scratch_all));
+#else
+    (void) grid_dim;
+    ws_chunk_fd_add_all  = new cmplx [n_fd]();
+    ws_chunk_fd_rem_all  = new cmplx [n_fd]();
+    ws_layer_scratch_all = new cmplx [n_ls]();
+    ws_chunk_wdm_add_all = new double[n_wd]();
+    ws_chunk_wdm_rem_all = new double[n_wd]();
+    ws_tdi_channels_all  = new cmplx [n_tc]();
+    get_tdi_scratch_all  = (void *) new char[n_sc]();
+
+    wdm_het_swap_ll_kernel<SourceT>(
+        d_h_add_out, d_h_remove_out, add_add_out, remove_remove_out, add_remove_out,
+        orbits, tdi_config, params_add_all, params_remove_all,
+        data_index_all, noise_index_all,
+        chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
+        wdm_window, data_d, invC,
+        n_chunks, num_bin, nparams,
+        Nf, Nt, Nt_sub, log2_Nt_sub,
+        N_sparse, log2_N_sparse,
+        nchannels, n_rfft_chunk,
+        T_chunk, dt, T, t_ref,
+        tukey_alpha,
+        N_cp_sig, N_cp_orbit,
+        ws_chunk_fd_add_all, ws_chunk_fd_rem_all,
+        ws_layer_scratch_all,
+        ws_chunk_wdm_add_all, ws_chunk_wdm_rem_all,
+        ws_tdi_channels_all,
+        get_tdi_scratch_all, scratch_per,
+        binary_perm, group_starts, group_ends, group_m_lo, group_m_hi, n_groups,
+        pair_m_lo_b, pair_m_hi_b);
+
+    delete[] ws_chunk_fd_add_all;
+    delete[] ws_chunk_fd_rem_all;
+    delete[] ws_layer_scratch_all;
+    delete[] ws_chunk_wdm_add_all;
+    delete[] ws_chunk_wdm_rem_all;
+    delete[] ws_tdi_channels_all;
+    delete[] (char *) get_tdi_scratch_all;
+#endif
+}
+
+
+// ---- GB-flavored wrappers --------------------------------------------------
+void GBComputationGroup::gb_wdm_het_fill_global_wrap(
+    double *template_fill, Orbits *orbits, TDIConfig *tdi_config,
+    double *params_all, double *factors_all,
+    double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
+    int *chunk_n_global_offset, double *wdm_window,
+    int n_chunks, int num_bin, int nparams,
+    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int N_sparse, int log2_N_sparse,
+    int nchannels, int n_rfft_chunk,
+    double T_chunk, double dt, double T, double t_ref,
+    double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit)
+{
+    wdm_het_fill_global_impl<GBTDIonTheFly>(
+        template_fill, orbits, tdi_config, params_all, factors_all,
+        chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
+        wdm_window, n_chunks, num_bin, nparams,
+        Nf, Nt, Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
+        nchannels, n_rfft_chunk, T_chunk, dt, T, t_ref, tukey_alpha,
+        grid_dim, N_cp_sig, N_cp_orbit);
+}
+
+void GBComputationGroup::gb_wdm_het_get_ll_wrap(
+    double *d_h_out, double *h_h_out, Orbits *orbits, TDIConfig *tdi_config,
+    double *params_all, int *data_index_all, int *noise_index_all,
+    double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
+    int *chunk_n_global_offset, double *wdm_window,
+    double *data_d, double *invC,
+    int n_chunks, int num_bin, int nparams,
+    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int N_sparse, int log2_N_sparse,
+    int nchannels, int n_rfft_chunk,
+    double T_chunk, double dt, double T, double t_ref,
+    double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
+    int *binary_perm, int *group_starts, int *group_ends,
+    int *group_m_lo, int *group_m_hi, int n_groups)
+{
+    wdm_het_get_ll_impl<GBTDIonTheFly>(
+        d_h_out, h_h_out, orbits, tdi_config, params_all,
+        data_index_all, noise_index_all,
+        chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
+        wdm_window, data_d, invC, n_chunks, num_bin, nparams,
+        Nf, Nt, Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
+        nchannels, n_rfft_chunk, T_chunk, dt, T, t_ref, tukey_alpha,
+        grid_dim, N_cp_sig, N_cp_orbit,
+        binary_perm, group_starts, group_ends,
+        group_m_lo, group_m_hi, n_groups);
+}
+
+void GBComputationGroup::gb_wdm_het_swap_ll_wrap(
+    double *d_h_add_out, double *d_h_remove_out,
+    double *add_add_out, double *remove_remove_out, double *add_remove_out,
+    Orbits *orbits, TDIConfig *tdi_config,
+    double *params_add_all, double *params_remove_all,
+    int *data_index_all, int *noise_index_all,
+    double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
+    int *chunk_n_global_offset, double *wdm_window,
+    double *data_d, double *invC,
+    int n_chunks, int num_bin, int nparams,
+    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int N_sparse, int log2_N_sparse,
+    int nchannels, int n_rfft_chunk,
+    double T_chunk, double dt, double T, double t_ref,
+    double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
+    int *binary_perm, int *group_starts, int *group_ends,
+    int *group_m_lo, int *group_m_hi, int n_groups,
+    int *pair_m_lo_b, int *pair_m_hi_b)
+{
+    wdm_het_swap_ll_impl<GBTDIonTheFly>(
+        d_h_add_out, d_h_remove_out, add_add_out, remove_remove_out, add_remove_out,
+        orbits, tdi_config, params_add_all, params_remove_all,
+        data_index_all, noise_index_all,
+        chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
+        wdm_window, data_d, invC, n_chunks, num_bin, nparams,
+        Nf, Nt, Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
+        nchannels, n_rfft_chunk, T_chunk, dt, T, t_ref, tukey_alpha,
+        grid_dim, N_cp_sig, N_cp_orbit,
+        binary_perm, group_starts, group_ends,
+        group_m_lo, group_m_hi, n_groups,
+        pair_m_lo_b, pair_m_hi_b);
+}
+
+
+// ---- SOBBH-flavored wrappers ----------------------------------------------
+void SOBBHComputationGroup::sobbh_wdm_het_fill_global_wrap(
+    double *template_fill, Orbits *orbits, TDIConfig *tdi_config,
+    double *params_all, double *factors_all,
+    double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
+    int *chunk_n_global_offset, double *wdm_window,
+    int n_chunks, int num_bin, int nparams,
+    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int N_sparse, int log2_N_sparse,
+    int nchannels, int n_rfft_chunk,
+    double T_chunk, double dt, double T, double t_ref,
+    double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit)
+{
+    wdm_het_fill_global_impl<SOBBHTDIonTheFly>(
+        template_fill, orbits, tdi_config, params_all, factors_all,
+        chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
+        wdm_window, n_chunks, num_bin, nparams,
+        Nf, Nt, Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
+        nchannels, n_rfft_chunk, T_chunk, dt, T, t_ref, tukey_alpha,
+        grid_dim, N_cp_sig, N_cp_orbit);
+}
+
+void SOBBHComputationGroup::sobbh_wdm_het_get_ll_wrap(
+    double *d_h_out, double *h_h_out, Orbits *orbits, TDIConfig *tdi_config,
+    double *params_all, int *data_index_all, int *noise_index_all,
+    double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
+    int *chunk_n_global_offset, double *wdm_window,
+    double *data_d, double *invC,
+    int n_chunks, int num_bin, int nparams,
+    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int N_sparse, int log2_N_sparse,
+    int nchannels, int n_rfft_chunk,
+    double T_chunk, double dt, double T, double t_ref,
+    double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
+    int *binary_perm, int *group_starts, int *group_ends,
+    int *group_m_lo, int *group_m_hi, int n_groups)
+{
+    wdm_het_get_ll_impl<SOBBHTDIonTheFly>(
+        d_h_out, h_h_out, orbits, tdi_config, params_all,
+        data_index_all, noise_index_all,
+        chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
+        wdm_window, data_d, invC, n_chunks, num_bin, nparams,
+        Nf, Nt, Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
+        nchannels, n_rfft_chunk, T_chunk, dt, T, t_ref, tukey_alpha,
+        grid_dim, N_cp_sig, N_cp_orbit,
+        binary_perm, group_starts, group_ends,
+        group_m_lo, group_m_hi, n_groups);
+}
+
+void SOBBHComputationGroup::sobbh_wdm_het_swap_ll_wrap(
+    double *d_h_add_out, double *d_h_remove_out,
+    double *add_add_out, double *remove_remove_out, double *add_remove_out,
+    Orbits *orbits, TDIConfig *tdi_config,
+    double *params_add_all, double *params_remove_all,
+    int *data_index_all, int *noise_index_all,
+    double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
+    int *chunk_n_global_offset, double *wdm_window,
+    double *data_d, double *invC,
+    int n_chunks, int num_bin, int nparams,
+    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int N_sparse, int log2_N_sparse,
+    int nchannels, int n_rfft_chunk,
+    double T_chunk, double dt, double T, double t_ref,
+    double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
+    int *binary_perm, int *group_starts, int *group_ends,
+    int *group_m_lo, int *group_m_hi, int n_groups,
+    int *pair_m_lo_b, int *pair_m_hi_b)
+{
+    wdm_het_swap_ll_impl<SOBBHTDIonTheFly>(
+        d_h_add_out, d_h_remove_out, add_add_out, remove_remove_out, add_remove_out,
+        orbits, tdi_config, params_add_all, params_remove_all,
+        data_index_all, noise_index_all,
+        chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
+        wdm_window, data_d, invC, n_chunks, num_bin, nparams,
+        Nf, Nt, Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
+        nchannels, n_rfft_chunk, T_chunk, dt, T, t_ref, tukey_alpha,
+        grid_dim, N_cp_sig, N_cp_orbit,
+        binary_perm, group_starts, group_ends,
+        group_m_lo, group_m_hi, n_groups,
+        pair_m_lo_b, pair_m_hi_b);
+}

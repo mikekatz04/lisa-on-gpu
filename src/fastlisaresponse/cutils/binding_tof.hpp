@@ -367,6 +367,131 @@ class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBas
         array_type<double> param_eps_add, array_type<double> param_eps_remove,
         int num_bin, int nparams, double T, double t_start, double t_ref,
         int N_sparse, int nchannels, int tdi_type);
+
+    // ---- Chunked-heterodyne path (no lookup table) ----------------------
+    // Geometry arrays (chunk_t_starts, chunk_keep_lo, chunk_keep_hi,
+    // chunk_n_global_offset, wdm_window) are precomputed on the Python side
+    // by ``gb_wdm_het.compute_chunk_geometry`` / ``compute_wdm_window``.
+    // ``grid_dim`` is the CUDA launch grid size (chosen via
+    // ``chunked_het_grid_dim``); pass anything > 0 on CPU (ignored).
+    void gb_wdm_het_fill_global(
+        array_type<double> template_fill,
+        OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+        array_type<double> params_all, array_type<double> factors_all,
+        array_type<double> chunk_t_starts,
+        array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
+        array_type<int> chunk_n_global_offset,
+        array_type<double> wdm_window,
+        int n_chunks, int num_bin, int nparams,
+        int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+        int N_sparse, int log2_N_sparse,
+        int nchannels, int n_rfft_chunk,
+        double T_chunk, double dt, double T, double t_ref,
+        double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit);
+
+    void gb_wdm_het_get_ll(
+        array_type<double> d_h_out, array_type<double> h_h_out,
+        OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+        array_type<double> params_all,
+        array_type<int> data_index_all, array_type<int> noise_index_all,
+        array_type<double> chunk_t_starts,
+        array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
+        array_type<int> chunk_n_global_offset,
+        array_type<double> wdm_window,
+        array_type<double> data_d, array_type<double> invC,
+        int n_chunks, int num_bin, int nparams,
+        int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+        int N_sparse, int log2_N_sparse,
+        int nchannels, int n_rfft_chunk,
+        double T_chunk, double dt, double T, double t_ref,
+        double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
+        array_type<int> binary_perm, array_type<int> group_starts, array_type<int> group_ends,
+        array_type<int> group_m_lo, array_type<int> group_m_hi, int n_groups);
+
+    void gb_wdm_het_swap_ll(
+        array_type<double> d_h_add_out, array_type<double> d_h_remove_out,
+        array_type<double> add_add_out, array_type<double> remove_remove_out,
+        array_type<double> add_remove_out,
+        OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+        array_type<double> params_add_all, array_type<double> params_remove_all,
+        array_type<int> data_index_all, array_type<int> noise_index_all,
+        array_type<double> chunk_t_starts,
+        array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
+        array_type<int> chunk_n_global_offset,
+        array_type<double> wdm_window,
+        array_type<double> data_d, array_type<double> invC,
+        int n_chunks, int num_bin, int nparams,
+        int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+        int N_sparse, int log2_N_sparse,
+        int nchannels, int n_rfft_chunk,
+        double T_chunk, double dt, double T, double t_ref,
+        double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
+        array_type<int> binary_perm, array_type<int> group_starts, array_type<int> group_ends,
+        array_type<int> group_m_lo, array_type<int> group_m_hi, int n_groups,
+        array_type<int> pair_m_lo_b, array_type<int> pair_m_hi_b);
+};
+
+
+// Parallel SOBBH API. Same chunked-het methods, sobbh_ prefix; routes
+// to the templated kernel with SourceT = SOBBHTDIonTheFly via
+// SOBBHComputationGroup. Pybind exposure mirrors GBComputationGroupWrap.
+class SOBBHComputationGroupWrap: public SOBBHComputationGroup, public ReturnPointerBase {
+  public:
+    void sobbh_wdm_het_fill_global(
+        array_type<double> template_fill,
+        OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+        array_type<double> params_all, array_type<double> factors_all,
+        array_type<double> chunk_t_starts,
+        array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
+        array_type<int> chunk_n_global_offset,
+        array_type<double> wdm_window,
+        int n_chunks, int num_bin, int nparams,
+        int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+        int N_sparse, int log2_N_sparse,
+        int nchannels, int n_rfft_chunk,
+        double T_chunk, double dt, double T, double t_ref,
+        double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit);
+
+    void sobbh_wdm_het_get_ll(
+        array_type<double> d_h_out, array_type<double> h_h_out,
+        OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+        array_type<double> params_all,
+        array_type<int> data_index_all, array_type<int> noise_index_all,
+        array_type<double> chunk_t_starts,
+        array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
+        array_type<int> chunk_n_global_offset,
+        array_type<double> wdm_window,
+        array_type<double> data_d, array_type<double> invC,
+        int n_chunks, int num_bin, int nparams,
+        int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+        int N_sparse, int log2_N_sparse,
+        int nchannels, int n_rfft_chunk,
+        double T_chunk, double dt, double T, double t_ref,
+        double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
+        array_type<int> binary_perm, array_type<int> group_starts, array_type<int> group_ends,
+        array_type<int> group_m_lo, array_type<int> group_m_hi, int n_groups);
+
+    void sobbh_wdm_het_swap_ll(
+        array_type<double> d_h_add_out, array_type<double> d_h_remove_out,
+        array_type<double> add_add_out, array_type<double> remove_remove_out,
+        array_type<double> add_remove_out,
+        OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+        array_type<double> params_add_all, array_type<double> params_remove_all,
+        array_type<int> data_index_all, array_type<int> noise_index_all,
+        array_type<double> chunk_t_starts,
+        array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
+        array_type<int> chunk_n_global_offset,
+        array_type<double> wdm_window,
+        array_type<double> data_d, array_type<double> invC,
+        int n_chunks, int num_bin, int nparams,
+        int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+        int N_sparse, int log2_N_sparse,
+        int nchannels, int n_rfft_chunk,
+        double T_chunk, double dt, double T, double t_ref,
+        double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
+        array_type<int> binary_perm, array_type<int> group_starts, array_type<int> group_ends,
+        array_type<int> group_m_lo, array_type<int> group_m_hi, int n_groups,
+        array_type<int> pair_m_lo_b, array_type<int> pair_m_hi_b);
 };
 
 #endif // __BINDING_TOF_HPP__
