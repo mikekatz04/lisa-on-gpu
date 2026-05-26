@@ -30,7 +30,7 @@ from __future__ import annotations
 import numpy as np
 
 from lisatools.domains import WDMSettings
-
+from lisatools.utils.utility import get_array_module
 
 # ----------------------------------------------------------------------
 # Tukey alpha
@@ -185,28 +185,36 @@ def compute_layer_groups(params_array, layer_df, f0_param_index=1,
         ``group_m_lo``, ``group_m_hi``, ``group_data_index``,
         ``n_groups``.
     """
-    params_array = np.asarray(params_array)
+    xp = get_array_module(params_array)
+    params_array = xp.asarray(params_array)
     num_bin = params_array.shape[0]
     f0 = params_array[:, int(f0_param_index)]
-    m_floor = np.floor(f0 / float(layer_df)).astype(np.int32)
+    m_floor = xp.floor(f0 / float(layer_df)).astype(xp.int32)
 
     if data_index_all is None:
-        data_index_all = np.zeros(num_bin, dtype=np.int32)
+        data_index_all = xp.zeros(num_bin, dtype=xp.int32)
     else:
-        data_index_all = np.asarray(data_index_all, dtype=np.int32)
+        data_index_all = xp.asarray(data_index_all, dtype=xp.int32)
         assert data_index_all.shape == (num_bin,)
 
     if noise_index_all is None:
-        noise_index_all = np.zeros(num_bin, dtype=np.int32)
+        noise_index_all = xp.zeros(num_bin, dtype=xp.int32)
     else:
-        noise_index_all = np.asarray(noise_index_all, dtype=np.int32)
+        noise_index_all = xp.asarray(noise_index_all, dtype=xp.int32)
         assert noise_index_all.shape == (num_bin,)
-        if np.any(noise_index_all != 0):
-            assert np.array_equal(noise_index_all, data_index_all), (
+        if xp.any(noise_index_all != 0):
+            assert xp.array_equal(noise_index_all, data_index_all), (
                 "noise_index_all must equal data_index_all when noise_index "
                 "is non-trivial; grouping path assumes data + PSD share a slab")
-
-    order = np.lexsort((m_floor, data_index_all))
+    if xp != np:
+        # Manual lexsort equivalent to np.lexsort((m_floor, data_index_all)):
+        # stable-sort by secondary key first, then stable-sort by primary.
+        # Works under both numpy and cupy (cupy.lexsort requires a 2-D keys
+        # array and rejects axis kwargs).
+        _sec = xp.argsort(m_floor, kind='stable')
+        order = _sec[xp.argsort(data_index_all[_sec], kind='stable')]
+    else:
+        order = xp.lexsort((m_floor, data_index_all))
     sorted_m = m_floor[order]
     sorted_data_idx = data_index_all[order]
 
@@ -238,12 +246,12 @@ def compute_layer_groups(params_array, layer_df, f0_param_index=1,
         i = j
 
     return dict(
-        binary_perm      = np.asarray(order,  dtype=np.int32),
-        group_starts     = np.asarray(starts, dtype=np.int32),
-        group_ends       = np.asarray(ends,   dtype=np.int32),
-        group_m_lo       = np.asarray(m_los,  dtype=np.int32),
-        group_m_hi       = np.asarray(m_his,  dtype=np.int32),
-        group_data_index = np.asarray(di,     dtype=np.int32),
+        binary_perm      = xp.asarray(order,  dtype=xp.int32),
+        group_starts     = xp.asarray(starts, dtype=xp.int32),
+        group_ends       = xp.asarray(ends,   dtype=xp.int32),
+        group_m_lo       = xp.asarray(m_los,  dtype=xp.int32),
+        group_m_hi       = xp.asarray(m_his,  dtype=xp.int32),
+        group_data_index = xp.asarray(di,     dtype=xp.int32),
         n_groups         = len(starts),
     )
 
@@ -259,8 +267,9 @@ def compute_swap_layer_groups(params_add, params_remove, layer_df,
     bands (``pair_m_lo_b``, ``pair_m_hi_b``) the kernel uses for its
     second pass over the leftover <d|rem> / <rem|rem> pixels.
     """
-    params_add    = np.asarray(params_add)
-    params_remove = np.asarray(params_remove)
+    xp = get_array_module(params_add)
+    params_add    = xp.asarray(params_add)
+    params_remove = xp.asarray(params_remove)
     num_bin = params_add.shape[0]
     assert params_remove.shape[0] == num_bin
 
@@ -271,13 +280,13 @@ def compute_swap_layer_groups(params_add, params_remove, layer_df,
 
     binary_perm = add_groups["binary_perm"]
     f0_b = params_remove[:, int(f0_param_index)]
-    m_b  = np.floor(f0_b / float(layer_df)).astype(np.int32)
+    m_b  = xp.floor(f0_b / float(layer_df)).astype(xp.int32)
     half = group_band_layers // 2
 
     m_b_sorted     = m_b[binary_perm]
-    pair_m_lo_b    = (m_b_sorted - half - margin_layers).astype(np.int32)
+    pair_m_lo_b    = (m_b_sorted - half - margin_layers).astype(xp.int32)
     pair_m_hi_b    = (m_b_sorted + (group_band_layers - half)
-                       + margin_layers).astype(np.int32)
+                       + margin_layers).astype(xp.int32)
 
     add_groups["pair_m_lo_b"] = pair_m_lo_b
     add_groups["pair_m_hi_b"] = pair_m_hi_b

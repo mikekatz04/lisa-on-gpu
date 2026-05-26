@@ -156,9 +156,9 @@ class GBWDMComputations(FastLISAResponseParallelModule):
     @tdi_config.setter
     def tdi_config(self, tdi_config: TDIConfig):
         if tdi_config is None:
-            tdi_config = TDIConfig("1st generation")
+            tdi_config = TDIConfig("1st generation", force_backend=self.backend)
         elif isinstance(tdi_config, str):
-            tdi_config = TDIConfig(tdi_config)
+            tdi_config = TDIConfig(tdi_config, force_backend=self.backend)
         elif not isinstance(tdi_config, TDIConfig):
             raise ValueError("TDI Config needs to be a string or an instnace of TDIConfig.")
         self._tdi_config = tdi_config
@@ -197,9 +197,10 @@ class GBWDMComputations(FastLISAResponseParallelModule):
                                         linear_interp_setup=True)
             except TypeError:
                 self._orbits.configure(linear_interp_setup=True)
-
-        self.cpp_orbits = self.backend.OrbitsWrap(*self._orbits.pycppdetector_args)
-
+        try:
+            self.cpp_orbits = self.backend.OrbitsWrap(*self._orbits.pycppdetector_args)
+        except:
+            breakpoint()
     @classmethod
     def supported_backends(cls):
         # GPU_RECOMMENDED_WITH_JAX appends 'jax' to the CPU/GPU options
@@ -215,7 +216,7 @@ class GBWDMComputations(FastLISAResponseParallelModule):
                        data_index=None, noise_index=None):
         """Cluster binaries by carrier WDM layer for narrow-band dispatch."""
         return compute_layer_groups(
-            np.asarray(params_2d), layer_df=self.layer_df,
+            self.xp.asarray(params_2d), layer_df=self.layer_df,
             f0_param_index=self._F0_PARAM_INDEX,
             group_band_layers=int(group_band_layers),
             margin_layers=int(margin_layers),
@@ -344,15 +345,15 @@ class GBWDMComputations(FastLISAResponseParallelModule):
                 data_index=data_index, noise_index=noise_index)
         else:
             groups = self._empty_groups(num_bin)
-
+        breakpoint()
         self._kernel("get_ll")(
             d_h_out, h_h_out,
             self.cpp_orbits, self.cpp_tdi_config,
             params_in, data_index, noise_index,
-            self.chunk_t_starts,
-            self.chunk_keep_lo, self.chunk_keep_hi,
-            self.chunk_n_global_offset,
-            self.wdm_window,
+            self.xp.asarray(self.chunk_t_starts),
+            self.xp.asarray(self.chunk_keep_lo), self.xp.asarray(self.chunk_keep_hi),
+            self.xp.asarray(self.chunk_n_global_offset),
+            self.xp.asarray(self.wdm_window),
             wdm_holder.linear_data_arr[0],
             wdm_holder.linear_psd_arr[0],
             self.n_chunks, int(num_bin), int(nparams),
@@ -363,11 +364,11 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             float(self.T), float(self.t_ref),
             float(self.resolved_tukey_alpha), int(grid_dim),
             int(self.N_cp_sig), int(self.N_cp_orbit),
-            np.asarray(groups["binary_perm"],  dtype=np.int32),
-            np.asarray(groups["group_starts"], dtype=np.int32),
-            np.asarray(groups["group_ends"],   dtype=np.int32),
-            np.asarray(groups["group_m_lo"],   dtype=np.int32),
-            np.asarray(groups["group_m_hi"],   dtype=np.int32),
+            self.xp.asarray(groups["binary_perm"],  dtype=np.int32),
+            self.xp.asarray(groups["group_starts"], dtype=np.int32),
+            self.xp.asarray(groups["group_ends"],   dtype=np.int32),
+            self.xp.asarray(groups["group_m_lo"],   dtype=np.int32),
+            self.xp.asarray(groups["group_m_hi"],   dtype=np.int32),
             int(groups["n_groups"]),
         )
 
