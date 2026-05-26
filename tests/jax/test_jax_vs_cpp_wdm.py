@@ -173,7 +173,7 @@ class TestJaxVsCppWDM(unittest.TestCase):
         tdi_config = TDIConfig("1st generation")
 
         gb = GBWDMComputations(
-            wdm_lookup_table=self.wdm_lookup, T=self.Tobs, t_ref=self.t_ref,
+            self.wdm_set, t_ref=self.t_ref,
             orbits=orbits, tdi_config=tdi_config,
             force_backend=backend_name, tdi_type="XYZ",
         )

@@ -1804,28 +1804,41 @@ inline Vec cache_get_pos(const OrbitsSplineCache *c, double t, int sc)
 // + dense evaluation. The heterodyned phi_ref makes the unwrap robust at
 // sparse N_cp_sig sampling (carrier removed in-kernel).
 //
-// Algorithm:
+// Algorithm (per-channel pipeline -- amp/phase coefficient buffers are
+// single-channel and reused across the channel loop, dropping ~6 KB of
+// static shared per kernel vs. the old all-channels-at-once layout):
 //   1. Build uniform t_cp[N_cp_sig] grid over the chunk.
-//   2. Call source->get_tdi_heterodyned(... f0_grid) at the cp times.
-//      This returns: amp[c, i], tdi_phase[c, i], dphi_ref_het[i].
-//   3. Fit 7 cubic splines (3 amp + 3 tdi_phase + 1 dphi_ref_het) through
-//      the cp values, cooperatively (PCR on GPU, Thomas on CPU).
-//   4. Slow-signal loop over N_sparse evaluates the splines on the fly:
-//         phase = tdi_phase_spl(t) + dphi_ref_het_spl(t)
-//                 + 2*pi*f0_grid*chunk_t_start
-//      (The constant offset comes from
-//         phi_ref(t) - 2*pi*f0_grid*tau
-//       = (dphi_ref_het + 2*pi*f0_grid*t) - 2*pi*f0_grid*tau
-//       = dphi_ref_het + 2*pi*f0_grid*chunk_t_start
-//       since t = chunk_t_start + tau.)
+//   2. Call source->get_tdi_heterodyned_raw[_cached](... f0_grid) at the
+//      cp times. Fills tdi_channels_cp_buf[nchannels * N_cp_sig] (raw
+//      complex TDI) and dphi_ref_y_buf[N_cp_sig] (single-channel
+//      heterodyned phi_ref). No per-channel extract/unwrap yet.
+//   3. Fit the dphi_ref cubic spline once (it is per-source, not per
+//      channel).
+//   4. For each channel c:
+//      (a) new_extract_amplitude_and_phase into single-channel
+//          amp_y_buf[N_cp_sig], phase_y_buf[N_cp_sig].
+//      (b) new_unwrap_phase on phase_y_buf.
+//      (c) Fit amp + phase splines (reusing B_buf / pcr_scratch).
+//      (d) Evaluate amp(t), phase(t), dphi_ref(t) at the N_sparse t-grid
+//          and write slow_buf[c * N_sparse + i] = amp * exp(i * phase),
+//          with Tukey taper. Barrier before reusing the single-channel
+//          coefficient buffers for the next channel.
+//      Slow phase folds in the chunk_t_start carrier offset because we
+//      splined the heterodyned-against-t_abs phi_ref:
+//         phase_total = tdi_phase + phi_ref - 2*pi*f0_grid*tau
+//                     = tdi_phase + (dphi_ref + 2*pi*f0_grid*t)
+//                                  - 2*pi*f0_grid*tau
+//                     = tdi_phase + dphi_ref + 2*pi*f0_grid*chunk_t_start
+//      since t = chunk_t_start + tau.
 //   5. FFT + place into chunk_fd_out (identical to direct path).
 //
 // Per-(chunk, binary) get_tdi cost: ~N_cp_sig/N_sparse = 48/256 = 5x cheaper.
 // Per the density study: GB mm ~ 4e-11, SOBBH mm ~ 4e-9 at the half-day
 // wavelet baseline. Both clear the science threshold.
 //
-// All workspaces (t_cp, amp/phase/dphi_ref y0+c1+c2+c3 buffers, PCR/B
-// scratch, get_tdi cp scratch) are caller-allocated.
+// All workspaces (t_cp, single-channel amp/phase y0+c1+c2+c3, single
+// dphi_ref y0+c1+c2+c3, PCR/B scratch, raw tdi_channels_cp scratch,
+// extract+unwrap scratch) are caller-allocated.
 // ============================================================================
 CUDA_DEVICE
 inline void fast_wdm_inner_heterodyne_spline(
@@ -1836,22 +1849,25 @@ inline void fast_wdm_inner_heterodyne_spline(
     double chunk_t_start, double T_chunk,
     int N_sparse, int log2_N_sparse, int N_cp_sig,
     int n_rfft_chunk, int nchannels, double tukey_alpha,
-    // Spline workspaces:
+    // Spline workspaces (amp/phase buffers are SINGLE-CHANNEL after the
+    // per-channel-pipeline refactor -- reused across the c-loop):
     double *t_cp_buf,               // (N_cp_sig,)
-    double *amp_y_buf,              // (nchannels * N_cp_sig)  -- input y, preserved
-    double *amp_c1_buf,             // (nchannels * N_cp_sig)
-    double *amp_c2_buf,             // (nchannels * N_cp_sig)
-    double *amp_c3_buf,             // (nchannels * N_cp_sig)
-    double *phase_y_buf,            // (nchannels * N_cp_sig)
+    double *amp_y_buf,              // (N_cp_sig,)          single channel, reused
+    double *amp_c1_buf,             // (N_cp_sig,)
+    double *amp_c2_buf,             // (N_cp_sig,)
+    double *amp_c3_buf,             // (N_cp_sig,)
+    double *phase_y_buf,            // (N_cp_sig,)          single channel, reused
     double *phase_c1_buf, double *phase_c2_buf, double *phase_c3_buf,
-    double *dphi_ref_y_buf,         // (N_cp_sig,)
+    double *dphi_ref_y_buf,         // (N_cp_sig,)          per-source (1 channel)
     double *dphi_ref_c1_buf, double *dphi_ref_c2_buf, double *dphi_ref_c3_buf,
     double *B_buf,                  // (N_cp_sig,) tridiagonal RHS scratch
     double *pcr_scratch,            // (8 * N_cp_sig,) GPU-only scratch
-    cmplx  *tdi_channels_cp_buf,    // (nchannels * N_cp_sig) -- scratch for get_tdi
+    cmplx  *tdi_channels_cp_buf,    // (nchannels * N_cp_sig) -- raw TDI scratch
     cmplx  *slow_buf,               // (nchannels * N_sparse) -- FFT in/out
-    void   *get_tdi_scratch_cp,
-    int     get_tdi_scratch_cp_len,
+    void   *extract_scratch,        // >= 21*N_cp_sig bytes
+                                    //   layout: flip[N_cp] | pjump[N_cp]
+                                    //         | count[N_cp] | fix_count[N_cp]
+    int     extract_scratch_len,
     OrbitsSplineCache *orbit_cache)  // nullptr -> direct orbit lookups
 {
     const double dt_sparse  = T_chunk / (double) N_sparse;
@@ -1877,91 +1893,101 @@ inline void fast_wdm_inner_heterodyne_spline(
     }
     CUDA_SYNC_THREADS;
 
-    // ---- 2) sparse heterodyned TDI evaluation at cp times -----------------
-    // If an orbit cache is available, dispatch to the cached variant
-    // (cheap shared-mem cubic evals replace the global-mem orbit
-    // lookups inside get_tdi).
+    // ---- 2) raw heterodyned TDI evaluation at cp times --------------------
+    // Fills tdi_channels_cp_buf[nchannels * N_cp_sig] with raw complex TDI
+    // samples and dphi_ref_y_buf[N_cp_sig] with the heterodyne-subtracted
+    // phi_ref. The per-channel amp/phase extract+unwrap is deferred to the
+    // c-loop below so we only need single-channel coefficient storage.
+    (void) extract_scratch_len;
     if (orbit_cache != nullptr) {
-        source->get_tdi_heterodyned_cached(
-            get_tdi_scratch_cp, get_tdi_scratch_cp_len,
-            tdi_channels_cp_buf,
-            amp_y_buf, phase_y_buf, dphi_ref_y_buf,
+        source->get_tdi_heterodyned_raw_cached(
+            tdi_channels_cp_buf, dphi_ref_y_buf,
             params, t_cp_buf, N_cp_sig, bin_i, nchannels,
             f0_grid, orbit_cache);
     } else {
-        source->get_tdi_heterodyned(
-            get_tdi_scratch_cp, get_tdi_scratch_cp_len,
-            tdi_channels_cp_buf,
-            amp_y_buf, phase_y_buf, dphi_ref_y_buf,
+        source->get_tdi_heterodyned_raw(
+            tdi_channels_cp_buf, dphi_ref_y_buf,
             params, t_cp_buf, N_cp_sig, bin_i, nchannels,
             f0_grid);
     }
     CUDA_SYNC_THREADS;
 
-    // ---- 3) fit cubic splines (7 total: 3 amp + 3 phase + 1 dphi_ref) ----
-    // Uniform grid -> CUBIC_SPLINE_LINEAR_SPACING for O(1) segment lookup.
-    for (int c = 0; c < nchannels; ++c) {
-        wdm_fit_cubic_spline(t_cp_buf,
-                              &amp_y_buf[c * N_cp_sig],
-                              &amp_c1_buf[c * N_cp_sig],
-                              &amp_c2_buf[c * N_cp_sig],
-                              &amp_c3_buf[c * N_cp_sig],
-                              B_buf, pcr_scratch,
-                              N_cp_sig, CUBIC_SPLINE_LINEAR_SPACING);
-        CUDA_SYNC_THREADS;
-        wdm_fit_cubic_spline(t_cp_buf,
-                              &phase_y_buf[c * N_cp_sig],
-                              &phase_c1_buf[c * N_cp_sig],
-                              &phase_c2_buf[c * N_cp_sig],
-                              &phase_c3_buf[c * N_cp_sig],
-                              B_buf, pcr_scratch,
-                              N_cp_sig, CUBIC_SPLINE_LINEAR_SPACING);
-        CUDA_SYNC_THREADS;
-    }
+    // ---- 3) fit the per-source dphi_ref spline once -----------------------
     wdm_fit_cubic_spline(t_cp_buf, dphi_ref_y_buf,
                           dphi_ref_c1_buf, dphi_ref_c2_buf, dphi_ref_c3_buf,
                           B_buf, pcr_scratch,
                           N_cp_sig, CUBIC_SPLINE_LINEAR_SPACING);
     CUDA_SYNC_THREADS;
 
-    // ---- 4) slow-signal loop with on-the-fly spline eval + Tukey ---------
-    const cmplx I_c(0.0, 1.0);
-    const double n_taper = 0.5 * alpha_eff * (double) (N_sparse - 1);
+    // ---- 4) per-channel: extract + unwrap + fit (amp, phase) + evaluate ---
+    // Carve extract+unwrap scratch out of extract_scratch (>= 21*N_cp_sig B).
+    // ``flip`` doubles as the unwrap correction buffer (same convention as
+    // new_extract_amplitude_and_phase + new_unwrap_phase share inside
+    // get_tdi).
+    double *flip      = (double *) extract_scratch;
+    double *pjump     = &flip[N_cp_sig];
+    int    *count     = (int *)  &pjump[N_cp_sig];
+    bool   *fix_count = (bool *) &count[N_cp_sig];
+
+    const cmplx  I_c       = cmplx(0.0, 1.0);
+    const double n_taper   = 0.5 * alpha_eff * (double) (N_sparse - 1);
     const int    N_cp_last = N_cp_sig - 1;
+
     for (int c = 0; c < nchannels; ++c) {
+        // (a) extract |M_c| -> amp_y_buf, arg(M_c) - phi_ref -> phase_y_buf
+        source->new_extract_amplitude_and_phase(
+            count, fix_count, flip, pjump, N_cp_sig,
+            amp_y_buf, phase_y_buf,
+            &tdi_channels_cp_buf[c * N_cp_sig],
+            dphi_ref_y_buf);
+        CUDA_SYNC_THREADS;
+
+        // (b) unwrap phase_y_buf in place; flip is reused as the cumulative
+        //     correction buffer (size N_cp_sig).
+        source->new_unwrap_phase(flip, N_cp_sig, phase_y_buf);
+        CUDA_SYNC_THREADS;
+
+        // (c) fit amp + phase splines into the single-channel coefficient
+        //     buffers (B_buf / pcr_scratch reused across the fits).
+        wdm_fit_cubic_spline(t_cp_buf, amp_y_buf,
+                              amp_c1_buf, amp_c2_buf, amp_c3_buf,
+                              B_buf, pcr_scratch,
+                              N_cp_sig, CUBIC_SPLINE_LINEAR_SPACING);
+        CUDA_SYNC_THREADS;
+        wdm_fit_cubic_spline(t_cp_buf, phase_y_buf,
+                              phase_c1_buf, phase_c2_buf, phase_c3_buf,
+                              B_buf, pcr_scratch,
+                              N_cp_sig, CUBIC_SPLINE_LINEAR_SPACING);
+        CUDA_SYNC_THREADS;
+
+        // (d) evaluate amp, phase, dphi_ref on the N_sparse t-grid and
+        //     write the windowed slow signal for this channel into slow_buf.
         for (int i = THREAD_START; i < N_sparse; i += BLOCK_INCR) {
             const double tau = (double) i * dt_sparse;
             const double t   = chunk_t_start + tau;
 
             // Segment lookup (uniform t_cp): seg = floor((t - cp[0]) / dt_cp).
             int seg = (int) ((t - chunk_t_start) / dt_cp);
-            if (seg < 0)         seg = 0;
-            if (seg > N_cp_last - 1) seg = N_cp_last - 1;
+            if (seg < 0)              seg = 0;
+            if (seg > N_cp_last - 1)  seg = N_cp_last - 1;
             const double dx = t - t_cp_buf[seg];
 
-            const int seg_c = c * N_cp_sig + seg;
-            const int seg_0 = seg;
             const double amp =
-                amp_y_buf [seg_c]
-              + amp_c1_buf[seg_c] * dx
-              + amp_c2_buf[seg_c] * dx * dx
-              + amp_c3_buf[seg_c] * dx * dx * dx;
+                amp_y_buf [seg]
+              + amp_c1_buf[seg] * dx
+              + amp_c2_buf[seg] * dx * dx
+              + amp_c3_buf[seg] * dx * dx * dx;
             const double tdi_phase =
-                phase_y_buf [seg_c]
-              + phase_c1_buf[seg_c] * dx
-              + phase_c2_buf[seg_c] * dx * dx
-              + phase_c3_buf[seg_c] * dx * dx * dx;
+                phase_y_buf [seg]
+              + phase_c1_buf[seg] * dx
+              + phase_c2_buf[seg] * dx * dx
+              + phase_c3_buf[seg] * dx * dx * dx;
             const double dphi_ref =
-                dphi_ref_y_buf [seg_0]
-              + dphi_ref_c1_buf[seg_0] * dx
-              + dphi_ref_c2_buf[seg_0] * dx * dx
-              + dphi_ref_c3_buf[seg_0] * dx * dx * dx;
+                dphi_ref_y_buf [seg]
+              + dphi_ref_c1_buf[seg] * dx
+              + dphi_ref_c2_buf[seg] * dx * dx
+              + dphi_ref_c3_buf[seg] * dx * dx * dx;
 
-            // Slow phase. The chunk_t_start carrier offset folds in here
-            // because we splined the heterodyned-against-t_abs phi_ref:
-            //   phase_total = tdi_phase + phi_ref - 2*pi*f0_grid*tau
-            //              = tdi_phase + (dphi_ref + 2*pi*f0_grid*t) - 2*pi*f0_grid*tau
-            //              = tdi_phase + dphi_ref + 2*pi*f0_grid*chunk_t_start.
             const double phase_total = tdi_phase + dphi_ref + phi0_chunk;
             cmplx s = (cmplx)(amp) * gcmplx::exp(I_c * phase_total);
 
@@ -1981,8 +2007,10 @@ inline void fast_wdm_inner_heterodyne_spline(
             }
             slow_buf[c * N_sparse + i] = s;
         }
+        // Critical: barrier before the next channel reuses amp_y_buf,
+        // phase_y_buf, and the c1/c2/c3 stacks.
+        CUDA_SYNC_THREADS;
     }
-    CUDA_SYNC_THREADS;
 
     // ---- 5) FFT slow_buf in place, per channel ----------------------------
     for (int c = 0; c < nchannels; ++c) {
@@ -2352,6 +2380,64 @@ inline void gb_chunk_fd_to_wdm(
 
 
 // ============================================================================
+// Shared-memory layout shared by all three chunked-het kernels
+// (wdm_het_fill_global_kernel / wdm_het_get_ll_kernel /
+//  wdm_het_swap_ll_kernel).
+//
+// The direct-path and spline-path buffer sets are MUTUALLY EXCLUSIVE per
+// (chunk, binary) invocation -- the kernel picks one branch via
+// ``use_spline_cache`` -- so they share the same physical shared memory
+// via a union. The amp/phase coefficient stacks inside the spline struct
+// are single-channel (~6 KB saving): the spline path now fits + evaluates
+// one channel at a time inside fast_wdm_inner_heterodyne_spline, so a
+// single-channel buffer is reused across the c-loop instead of carrying
+// 3 channels' worth simultaneously.
+//
+// ``cmplx``'s default constructor is non-trivial, which would implicitly
+// delete the union's default constructor. We provide explicit no-op
+// constructors (``CUDA_DEVICE`` so they have the same linkage as the
+// kernels that allocate them). ``CUDA_SHARED`` memory is uninitialised at
+// runtime, so the no-op is correct -- we never observe a default-init'd
+// element.
+// ============================================================================
+struct WDMHetDirectBufs {
+    double t_sparse_buf  [FAST_WDM_N_SPARSE_MAX];
+    double tdi_amp_buf   [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+    double tdi_phase_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+    double phi_ref_buf   [FAST_WDM_N_SPARSE_MAX];
+};
+struct WDMHetSplineBufs {
+    double t_cp_buf            [FAST_WDM_N_CP_SIG_MAX];
+    double amp_y_buf           [FAST_WDM_N_CP_SIG_MAX];
+    double amp_c1_buf          [FAST_WDM_N_CP_SIG_MAX];
+    double amp_c2_buf          [FAST_WDM_N_CP_SIG_MAX];
+    double amp_c3_buf          [FAST_WDM_N_CP_SIG_MAX];
+    double phase_y_buf         [FAST_WDM_N_CP_SIG_MAX];
+    double phase_c1_buf        [FAST_WDM_N_CP_SIG_MAX];
+    double phase_c2_buf        [FAST_WDM_N_CP_SIG_MAX];
+    double phase_c3_buf        [FAST_WDM_N_CP_SIG_MAX];
+    double dphi_ref_y_buf      [FAST_WDM_N_CP_SIG_MAX];
+    double dphi_ref_c1_buf     [FAST_WDM_N_CP_SIG_MAX];
+    double dphi_ref_c2_buf     [FAST_WDM_N_CP_SIG_MAX];
+    double dphi_ref_c3_buf     [FAST_WDM_N_CP_SIG_MAX];
+    double B_buf               [FAST_WDM_N_CP_SIG_MAX];
+    double pcr_scratch         [8 * FAST_WDM_N_CP_SIG_MAX];
+    cmplx  tdi_channels_cp_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
+    char   extract_scratch_buf [21 * FAST_WDM_N_CP_SIG_MAX + 16];
+
+    CUDA_DEVICE WDMHetSplineBufs()  {}
+    CUDA_DEVICE ~WDMHetSplineBufs() {}
+};
+union WDMHetPathBufs {
+    WDMHetDirectBufs direct;
+    WDMHetSplineBufs spline;
+
+    CUDA_DEVICE WDMHetPathBufs()  {}
+    CUDA_DEVICE ~WDMHetPathBufs() {}
+};
+
+
+// ============================================================================
 // gb_wdm_het_fill_global_kernel  (Phase 2b -- chunked-heterodyne fill_global)
 // ============================================================================
 //
@@ -2419,29 +2505,15 @@ void wdm_het_fill_global_kernel(
     // maxima. tdi_channels_buf moved to heap (`ws_tdi_channels_all`) to
     // keep static shared <= 48 KB default budget on A100/V100 without
     // needing cudaFuncSetAttribute opt-in.
-    // Direct-path buffers (used when N_cp_sig <= 0).
-    CUDA_SHARED double t_sparse_buf  [FAST_WDM_N_SPARSE_MAX];
-    CUDA_SHARED double tdi_amp_buf   [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
-    CUDA_SHARED double tdi_phase_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
-    CUDA_SHARED double phi_ref_buf   [FAST_WDM_N_SPARSE_MAX];
-    // Source-signal spline-cache buffers (used when N_cp_sig > 0).
-    CUDA_SHARED double t_cp_buf            [FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double amp_y_buf           [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double amp_c1_buf          [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double amp_c2_buf          [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double amp_c3_buf          [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double phase_y_buf         [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double phase_c1_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double phase_c2_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double phase_c3_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double dphi_ref_y_buf      [FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double dphi_ref_c1_buf     [FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double dphi_ref_c2_buf     [FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double dphi_ref_c3_buf     [FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double B_buf               [FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double pcr_scratch         [8 * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED cmplx  tdi_channels_cp_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED char   get_tdi_scratch_cp_buf [21 * FAST_WDM_N_CP_SIG_MAX + 16];
+    //
+    // Direct-path and spline-path buffers are OVERLAID via a union: only
+    // one branch runs per (chunk, binary) (selected by use_spline_cache),
+    // so they are never simultaneously live. This collapses ~16 KB of
+    // duplicated shared-mem footprint per kernel. The spline-path amp /
+    // phase coefficient stacks are also single-channel (amp/phase are fit
+    // + evaluated one channel at a time inside fast_wdm_inner_heterodyne_spline),
+    // saving another ~6 KB vs. the old per-channel-stacks layout.
+    CUDA_SHARED WDMHetPathBufs path;
     CUDA_SHARED cmplx  slow_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
     const bool use_spline_cache = (N_cp_sig > 0 && N_cp_sig <= FAST_WDM_N_CP_SIG_MAX
                                    && N_cp_sig < N_sparse);
@@ -2537,13 +2609,17 @@ void wdm_het_fill_global_kernel(
                     chunk_t0, T_chunk,
                     N_sparse, log2_N_sparse, N_cp_sig,
                     n_rfft_chunk, nchannels, tukey_alpha,
-                    t_cp_buf,
-                    amp_y_buf, amp_c1_buf, amp_c2_buf, amp_c3_buf,
-                    phase_y_buf, phase_c1_buf, phase_c2_buf, phase_c3_buf,
-                    dphi_ref_y_buf, dphi_ref_c1_buf, dphi_ref_c2_buf, dphi_ref_c3_buf,
-                    B_buf, pcr_scratch,
-                    tdi_channels_cp_buf, slow_buf,
-                    get_tdi_scratch_cp_buf, (int) sizeof(get_tdi_scratch_cp_buf),
+                    path.spline.t_cp_buf,
+                    path.spline.amp_y_buf, path.spline.amp_c1_buf,
+                    path.spline.amp_c2_buf, path.spline.amp_c3_buf,
+                    path.spline.phase_y_buf, path.spline.phase_c1_buf,
+                    path.spline.phase_c2_buf, path.spline.phase_c3_buf,
+                    path.spline.dphi_ref_y_buf, path.spline.dphi_ref_c1_buf,
+                    path.spline.dphi_ref_c2_buf, path.spline.dphi_ref_c3_buf,
+                    path.spline.B_buf, path.spline.pcr_scratch,
+                    path.spline.tdi_channels_cp_buf, slow_buf,
+                    path.spline.extract_scratch_buf,
+                    (int) sizeof(path.spline.extract_scratch_buf),
                     orbit_cache_ptr
                 );
             } else {
@@ -2551,7 +2627,8 @@ void wdm_het_fill_global_kernel(
                     chunk_fd, &src, params, bin_i, src.f0_index,
                     chunk_t0, T_chunk,
                     N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
-                    t_sparse_buf, tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
+                    path.direct.t_sparse_buf, path.direct.tdi_amp_buf,
+                    path.direct.tdi_phase_buf, path.direct.phi_ref_buf,
                     tdi_channels_buf, slow_buf,
                     get_tdi_scratch, get_tdi_scratch_len_per_block,
                     orbit_cache_ptr
@@ -2673,29 +2750,15 @@ void wdm_het_get_ll_kernel(
     // Heterodyne shared workspace (per block / per chunk). The
     // tdi_channels_buf slab has been moved to heap to keep static shared
     // under the 48 KB default budget; see fill_global comments.
-    // Direct-path buffers (used when N_cp_sig <= 0).
-    CUDA_SHARED double t_sparse_buf  [FAST_WDM_N_SPARSE_MAX];
-    CUDA_SHARED double tdi_amp_buf   [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
-    CUDA_SHARED double tdi_phase_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
-    CUDA_SHARED double phi_ref_buf   [FAST_WDM_N_SPARSE_MAX];
-    // Source-signal spline-cache buffers (used when N_cp_sig > 0).
-    CUDA_SHARED double t_cp_buf            [FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double amp_y_buf           [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double amp_c1_buf          [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double amp_c2_buf          [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double amp_c3_buf          [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double phase_y_buf         [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double phase_c1_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double phase_c2_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double phase_c3_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double dphi_ref_y_buf      [FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double dphi_ref_c1_buf     [FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double dphi_ref_c2_buf     [FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double dphi_ref_c3_buf     [FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double B_buf               [FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double pcr_scratch         [8 * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED cmplx  tdi_channels_cp_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED char   get_tdi_scratch_cp_buf [21 * FAST_WDM_N_CP_SIG_MAX + 16];
+    //
+    // Direct-path and spline-path buffers are OVERLAID via a union: only
+    // one branch runs per (chunk, binary) (selected by use_spline_cache),
+    // so they are never simultaneously live. This collapses ~16 KB of
+    // duplicated shared-mem footprint. The spline-path amp / phase
+    // coefficient stacks are also single-channel (amp/phase fit + eval
+    // happens one channel at a time inside fast_wdm_inner_heterodyne_spline),
+    // saving another ~6 KB vs. the old per-channel-stacks layout.
+    CUDA_SHARED WDMHetPathBufs path;
     const bool use_spline_cache = (N_cp_sig > 0 && N_cp_sig <= FAST_WDM_N_CP_SIG_MAX
                                    && N_cp_sig < N_sparse);
     CUDA_SHARED cmplx  slow_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
@@ -2812,13 +2875,17 @@ void wdm_het_get_ll_kernel(
                         chunk_t0, T_chunk,
                         N_sparse, log2_N_sparse, N_cp_sig,
                         n_rfft_chunk, nchannels, tukey_alpha,
-                        t_cp_buf,
-                        amp_y_buf, amp_c1_buf, amp_c2_buf, amp_c3_buf,
-                        phase_y_buf, phase_c1_buf, phase_c2_buf, phase_c3_buf,
-                        dphi_ref_y_buf, dphi_ref_c1_buf, dphi_ref_c2_buf, dphi_ref_c3_buf,
-                        B_buf, pcr_scratch,
-                        tdi_channels_cp_buf, slow_buf,
-                        get_tdi_scratch_cp_buf, (int) sizeof(get_tdi_scratch_cp_buf),
+                        path.spline.t_cp_buf,
+                        path.spline.amp_y_buf, path.spline.amp_c1_buf,
+                        path.spline.amp_c2_buf, path.spline.amp_c3_buf,
+                        path.spline.phase_y_buf, path.spline.phase_c1_buf,
+                        path.spline.phase_c2_buf, path.spline.phase_c3_buf,
+                        path.spline.dphi_ref_y_buf, path.spline.dphi_ref_c1_buf,
+                        path.spline.dphi_ref_c2_buf, path.spline.dphi_ref_c3_buf,
+                        path.spline.B_buf, path.spline.pcr_scratch,
+                        path.spline.tdi_channels_cp_buf, slow_buf,
+                        path.spline.extract_scratch_buf,
+                        (int) sizeof(path.spline.extract_scratch_buf),
                         orbit_cache_ptr
                     );
                 } else {
@@ -2826,7 +2893,8 @@ void wdm_het_get_ll_kernel(
                         chunk_fd, &src, params, bin_i, src.f0_index,
                         chunk_t0, T_chunk,
                         N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
-                        t_sparse_buf, tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
+                        path.direct.t_sparse_buf, path.direct.tdi_amp_buf,
+                        path.direct.tdi_phase_buf, path.direct.phi_ref_buf,
                         tdi_channels_buf, slow_buf,
                         get_tdi_scratch, get_tdi_scratch_len_per_block,
                         orbit_cache_ptr
@@ -2971,30 +3039,14 @@ void wdm_het_swap_ll_kernel(
 {
     SourceT src(orbits, tdi_config, T, t_ref);
 
-    // Heterodyne shared workspace (tdi_channels_buf moved to heap).
-    // Direct-path buffers (used when N_cp_sig <= 0).
-    CUDA_SHARED double t_sparse_buf  [FAST_WDM_N_SPARSE_MAX];
-    CUDA_SHARED double tdi_amp_buf   [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
-    CUDA_SHARED double tdi_phase_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
-    CUDA_SHARED double phi_ref_buf   [FAST_WDM_N_SPARSE_MAX];
-    // Source-signal spline-cache buffers (used when N_cp_sig > 0).
-    CUDA_SHARED double t_cp_buf            [FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double amp_y_buf           [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double amp_c1_buf          [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double amp_c2_buf          [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double amp_c3_buf          [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double phase_y_buf         [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double phase_c1_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double phase_c2_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double phase_c3_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double dphi_ref_y_buf      [FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double dphi_ref_c1_buf     [FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double dphi_ref_c2_buf     [FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double dphi_ref_c3_buf     [FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double B_buf               [FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED double pcr_scratch         [8 * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED cmplx  tdi_channels_cp_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    CUDA_SHARED char   get_tdi_scratch_cp_buf [21 * FAST_WDM_N_CP_SIG_MAX + 16];
+    // Heterodyne shared workspace (tdi_channels_buf moved to heap). The
+    // direct-path and spline-path buffers are OVERLAID via a union -- only
+    // one branch runs per binary (add + remove templates both go through
+    // the same branch back-to-back inside the binary loop, never mixed
+    // direct/spline). Saves ~16 KB shared per kernel; spline amp/phase
+    // coeff stacks are single-channel (fit+eval per channel inside
+    // fast_wdm_inner_heterodyne_spline) for another ~6 KB.
+    CUDA_SHARED WDMHetPathBufs path;
     const bool use_spline_cache = (N_cp_sig > 0 && N_cp_sig <= FAST_WDM_N_CP_SIG_MAX
                                    && N_cp_sig < N_sparse);
     CUDA_SHARED cmplx  slow_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
@@ -3107,13 +3159,17 @@ void wdm_het_swap_ll_kernel(
                     chunk_t0, T_chunk,
                     N_sparse, log2_N_sparse, N_cp_sig,
                     n_rfft_chunk, nchannels, tukey_alpha,
-                    t_cp_buf,
-                    amp_y_buf, amp_c1_buf, amp_c2_buf, amp_c3_buf,
-                    phase_y_buf, phase_c1_buf, phase_c2_buf, phase_c3_buf,
-                    dphi_ref_y_buf, dphi_ref_c1_buf, dphi_ref_c2_buf, dphi_ref_c3_buf,
-                    B_buf, pcr_scratch,
-                    tdi_channels_cp_buf, slow_buf,
-                    get_tdi_scratch_cp_buf, (int) sizeof(get_tdi_scratch_cp_buf),
+                    path.spline.t_cp_buf,
+                    path.spline.amp_y_buf, path.spline.amp_c1_buf,
+                    path.spline.amp_c2_buf, path.spline.amp_c3_buf,
+                    path.spline.phase_y_buf, path.spline.phase_c1_buf,
+                    path.spline.phase_c2_buf, path.spline.phase_c3_buf,
+                    path.spline.dphi_ref_y_buf, path.spline.dphi_ref_c1_buf,
+                    path.spline.dphi_ref_c2_buf, path.spline.dphi_ref_c3_buf,
+                    path.spline.B_buf, path.spline.pcr_scratch,
+                    path.spline.tdi_channels_cp_buf, slow_buf,
+                    path.spline.extract_scratch_buf,
+                    (int) sizeof(path.spline.extract_scratch_buf),
                     orbit_cache_ptr
                 );
             } else {
@@ -3121,7 +3177,8 @@ void wdm_het_swap_ll_kernel(
                     chunk_fd_add, &src, params_add, bin_i, src.f0_index,
                     chunk_t0, T_chunk,
                     N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
-                    t_sparse_buf, tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
+                    path.direct.t_sparse_buf, path.direct.tdi_amp_buf,
+                    path.direct.tdi_phase_buf, path.direct.phi_ref_buf,
                     tdi_channels_buf, slow_buf,
                     get_tdi_scratch, get_tdi_scratch_len_per_block,
                     orbit_cache_ptr
@@ -3143,13 +3200,17 @@ void wdm_het_swap_ll_kernel(
                     chunk_t0, T_chunk,
                     N_sparse, log2_N_sparse, N_cp_sig,
                     n_rfft_chunk, nchannels, tukey_alpha,
-                    t_cp_buf,
-                    amp_y_buf, amp_c1_buf, amp_c2_buf, amp_c3_buf,
-                    phase_y_buf, phase_c1_buf, phase_c2_buf, phase_c3_buf,
-                    dphi_ref_y_buf, dphi_ref_c1_buf, dphi_ref_c2_buf, dphi_ref_c3_buf,
-                    B_buf, pcr_scratch,
-                    tdi_channels_cp_buf, slow_buf,
-                    get_tdi_scratch_cp_buf, (int) sizeof(get_tdi_scratch_cp_buf),
+                    path.spline.t_cp_buf,
+                    path.spline.amp_y_buf, path.spline.amp_c1_buf,
+                    path.spline.amp_c2_buf, path.spline.amp_c3_buf,
+                    path.spline.phase_y_buf, path.spline.phase_c1_buf,
+                    path.spline.phase_c2_buf, path.spline.phase_c3_buf,
+                    path.spline.dphi_ref_y_buf, path.spline.dphi_ref_c1_buf,
+                    path.spline.dphi_ref_c2_buf, path.spline.dphi_ref_c3_buf,
+                    path.spline.B_buf, path.spline.pcr_scratch,
+                    path.spline.tdi_channels_cp_buf, slow_buf,
+                    path.spline.extract_scratch_buf,
+                    (int) sizeof(path.spline.extract_scratch_buf),
                     orbit_cache_ptr
                 );
             } else {
@@ -3157,7 +3218,8 @@ void wdm_het_swap_ll_kernel(
                     chunk_fd_rem, &src, params_rem, bin_i, src.f0_index,
                     chunk_t0, T_chunk,
                     N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
-                    t_sparse_buf, tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
+                    path.direct.t_sparse_buf, path.direct.tdi_amp_buf,
+                    path.direct.tdi_phase_buf, path.direct.phi_ref_buf,
                     tdi_channels_buf, slow_buf,
                     get_tdi_scratch, get_tdi_scratch_len_per_block,
                     orbit_cache_ptr
@@ -5653,8 +5715,17 @@ void LISATDIonTheFly::get_tdi_Xf_single(cmplx *tdi_channel, double t, double *pa
         k_dot_x_rec = k.dot(x_rec); // receiver
         k_dot_x_em = k.dot(x_em); // emitter
 
-        pre_factor = 1. / (1. - k_dot_n);
-        
+        // Guard the LISA arm-response singularity: when the wave propagation
+        // direction k is parallel to the arm n, (1-k.n) -> 0 while xi_p, xi_c
+        // -> 0 simultaneously, producing 0 * Inf = NaN. Skip the contribution
+        // on the singular line (limit is well-defined and ~0 for sources not
+        // sitting exactly on the arm axis).
+        {
+            double _denom = 1. - k_dot_n;
+            if (fabs(_denom) < 1.0e-12) continue;
+            pre_factor = 1. / _denom;
+        }
+
         delay_rec = time_rec - k_dot_x_rec * C_inv;
         delay_em = time_em - k_dot_x_em * C_inv;
 
@@ -5766,7 +5837,12 @@ void LISATDIonTheFly::get_tdi_Xf_single_cached(
         k_dot_x_rec = k.dot(x_rec);
         k_dot_x_em  = k.dot(x_em);
 
-        pre_factor = 1.0 / (1.0 - k_dot_n);
+        // Guard the arm-response singularity (see get_tdi_Xf_single).
+        {
+            double _denom = 1.0 - k_dot_n;
+            if (fabs(_denom) < 1.0e-12) continue;
+            pre_factor = 1.0 / _denom;
+        }
         delay_rec  = time_rec - k_dot_x_rec * C_inv;
         delay_em   = time_em  - k_dot_x_em  * C_inv;
 
@@ -5903,6 +5979,87 @@ void LISATDIonTheFly::get_tdi_heterodyned_cached(
     for (int i = start; i < N; i += incr)
     {
         phi_ref_het[i] -= two_pi_f0 * t_arr[i];
+    }
+    CUDA_SYNC_THREADS;
+}
+
+
+// Raw heterodyned-TDI evaluators: fill ``tdi_channels_arr`` (nchannels * N
+// raw complex samples) and ``phi_ref_het`` (N points, with the carrier
+// already subtracted) -- but skip the per-channel amplitude/phase extract
+// and unwrap that get_tdi_heterodyned[_cached] perform. Used by the
+// chunked-het spline path so the caller can run extract+unwrap one channel
+// at a time into single-channel coefficient buffers. This is the
+// prerequisite for the ~6 KB / kernel shared-mem reduction in
+// fast_wdm_inner_heterodyne_spline.
+CUDA_DEVICE
+void LISATDIonTheFly::get_tdi_heterodyned_raw(
+    cmplx *tdi_channels_arr, double *phi_ref_het,
+    double *params, double *t_arr, int N, int bin_i, int nchannels,
+    double f0_grid)
+{
+    CUDA_SHARED int link_Space_craft_rec[NLINKS];
+    CUDA_SHARED int link_Space_craft_em[NLINKS];
+
+    fill_link_arrays(link_Space_craft_rec, link_Space_craft_em);
+    CUDA_SYNC_THREADS;
+    Vec k(0.0, 0.0, 0.0);
+    Vec u(0.0, 0.0, 0.0);
+    Vec v(0.0, 0.0, 0.0);
+    get_sky_vectors(&k, &u, &v, params);
+    get_tdi_Xf(tdi_channels_arr, params, t_arr, N, bin_i,
+                link_Space_craft_rec, link_Space_craft_em, k, u, v);
+    CUDA_SYNC_THREADS;
+
+#ifdef __CUDACC__
+    int start = threadIdx.x;
+    int incr  = blockDim.x;
+#else
+    int start = 0;
+    int incr  = 1;
+#endif
+    const double two_pi_f0 = 2.0 * M_PI * f0_grid;
+    for (int i = start; i < N; i += incr)
+    {
+        phi_ref_het[i] = get_phase_ref(t_arr[i], params, bin_i)
+                        - two_pi_f0 * t_arr[i];
+    }
+    CUDA_SYNC_THREADS;
+}
+
+
+CUDA_DEVICE
+void LISATDIonTheFly::get_tdi_heterodyned_raw_cached(
+    cmplx *tdi_channels_arr, double *phi_ref_het,
+    double *params, double *t_arr, int N, int bin_i, int nchannels,
+    double f0_grid, OrbitsSplineCache *cache)
+{
+    CUDA_SHARED int link_Space_craft_rec[NLINKS];
+    CUDA_SHARED int link_Space_craft_em[NLINKS];
+
+    fill_link_arrays(link_Space_craft_rec, link_Space_craft_em);
+    CUDA_SYNC_THREADS;
+    Vec k(0.0, 0.0, 0.0);
+    Vec u(0.0, 0.0, 0.0);
+    Vec v(0.0, 0.0, 0.0);
+    get_sky_vectors(&k, &u, &v, params);
+    get_tdi_Xf_cached(tdi_channels_arr, params, t_arr, N, bin_i,
+                       link_Space_craft_rec, link_Space_craft_em,
+                       k, u, v, cache);
+    CUDA_SYNC_THREADS;
+
+#ifdef __CUDACC__
+    int start = threadIdx.x;
+    int incr  = blockDim.x;
+#else
+    int start = 0;
+    int incr  = 1;
+#endif
+    const double two_pi_f0 = 2.0 * M_PI * f0_grid;
+    for (int i = start; i < N; i += incr)
+    {
+        phi_ref_het[i] = get_phase_ref(t_arr[i], params, bin_i)
+                        - two_pi_f0 * t_arr[i];
     }
     CUDA_SYNC_THREADS;
 }
@@ -7478,6 +7635,26 @@ void gbfd_build_one_source(GBTDIonTheFly *tof, void *shared_mem,
             const double th = tdi_phase[c * N + n] + phref - carrier;
             tdi_chan[c * N + n] =
                 gcmplx::polar(tdi_amp[c * N + n], th);  // +i sign
+        }
+    }
+    CUDA_SYNC_THREADS;
+
+    // ---- NaN scrub. Any non-finite sample left over from a singular
+    //      response geometry (e.g. the (1-k.n)->0 wave-axis-vs-arm
+    //      alignment for one TDI link at one sparse-time sample) would
+    //      otherwise be spread across the entire band by the in-place
+    //      FFT below, NaN-ing 4096 contiguous output bins. Zero those
+    //      samples so the FFT stays finite; we lose at most a handful of
+    //      O(N_sparse^-1) sparse samples at the singular locus.
+    for (int n = THREAD_START; n < N; n += BLOCK_INCR)
+    {
+        for (int c = 0; c < nchannels; ++c)
+        {
+            cmplx v = tdi_chan[c * N + n];
+            if (!isfinite(v.real()) || !isfinite(v.imag()))
+            {
+                tdi_chan[c * N + n] = cmplx(0.0, 0.0);
+            }
         }
     }
     CUDA_SYNC_THREADS;
