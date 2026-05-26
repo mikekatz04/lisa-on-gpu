@@ -11,6 +11,7 @@ from .utils.wdm_het import (
 )
 from fastlisaresponse.tdiconfig import TDIConfig
 from lisatools.detector import Orbits, EqualArmlengthOrbits
+from lisatools.domains import WDMSettings
 from copy import deepcopy
 from .response import ecliptic_to_icrs
 
@@ -48,20 +49,20 @@ class GBWDMComputations(FastLISAResponseParallelModule):
     _NPARAMS = 9
     _F0_PARAM_INDEX = 1   # GBTDIonTheFly: params[1] = f0
 
-    def __init__(self, Nf, Nt, dt, T, t_ref,
+    def __init__(self, wdm_settings, t_ref,
                  Nt_sub=256, n_pad=32, N_sparse=256,
                  tukey_alpha=USE_RECOMMENDED_TUKEY, use_tukey=True,
                  N_cp_sig=0, N_cp_orbit=0,
-                 t_obs_start=0.0,
                  orbits=None, tdi_config=None, force_backend=None,
                  d_d=0.0, tdi_type="XYZ"):
         """Args:
-            Nf, Nt: WDM grid dimensions of the global template buffer
-                that ``fill_global_wdm`` / ``get_ll_wdm`` operate on.
-            dt: TD sample step (seconds).
-            T, t_ref: full observation duration and the source-phase
-                reference time (both in seconds). Forwarded to the
-                kernel as ``T_full`` / ``t_ref_full``.
+            wdm_settings: :class:`lisatools.domains.WDMSettings` instance
+                exposing the WDM grid (``Nf``, ``Nt``, ``data_dt``,
+                ``Tobs``, ``t0``, ``layer_df``, ``layer_dt``) that the
+                global template buffer is built on. ``fill_global_wdm`` /
+                ``get_ll_wdm`` operate over this domain.
+            t_ref: source-phase reference time in seconds. Forwarded to
+                the kernel as ``t_ref_full``.
             Nt_sub: per-chunk WDM time pixels.
             n_pad: WDM pixels discarded at each chunk edge during the
                 stitch.
@@ -74,7 +75,6 @@ class GBWDMComputations(FastLISAResponseParallelModule):
                 (0 = direct path; >0 = cache).
             N_cp_orbit: orbit spline-cache density per chunk
                 (0 = global-mem lookups; >0 = cache).
-            t_obs_start: absolute time at which WDM pixel 0 lives.
             orbits, tdi_config, tdi_type: as on the parent classes.
             d_d: constant added to ``h_h - 2 d_h`` inside the returned
                 likelihood (default 0 = source-only return).
@@ -85,14 +85,21 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         """
         super().__init__(force_backend=force_backend)
 
-        # WDM grid + obs setup. Stored first so the orbits setter can
-        # configure on the full obs span before kernel-arg packing.
-        self.Nf       = int(Nf)
-        self.Nt       = int(Nt)
-        self.dt       = float(dt)
-        self.T        = float(T)
+        if not isinstance(wdm_settings, WDMSettings):
+            raise TypeError(
+                "wdm_settings must be a lisatools.domains.WDMSettings "
+                f"instance; got {type(wdm_settings).__name__}.")
+        self.wdm_settings = wdm_settings
+
+        # WDM grid + obs setup pulled from the WDMSettings instance.
+        # Stored first so the orbits setter can configure on the full
+        # obs span before kernel-arg packing.
+        self.Nf       = int(wdm_settings.Nf)
+        self.Nt       = int(wdm_settings.Nt)
+        self.dt       = float(wdm_settings.data_dt)
+        self.T        = float(wdm_settings.Tobs)
         self.t_ref    = float(t_ref)
-        self.t_obs_start = float(t_obs_start)
+        self.t_obs_start = float(wdm_settings.t0)
         self.Nt_sub   = int(Nt_sub)
         self.n_pad    = int(n_pad)
         self.N_sparse = int(N_sparse)
@@ -101,9 +108,11 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         self.N_cp_sig    = int(N_cp_sig)
         self.N_cp_orbit  = int(N_cp_orbit)
 
-        # Derived quantities the kernel consumes directly.
+        # Derived quantities the kernel consumes directly. ``layer_df``
+        # is read straight from the WDMSettings so the two definitions
+        # cannot drift.
         self.T_chunk      = self.Nf * self.Nt_sub * self.dt
-        self.layer_df     = 1.0 / (2.0 * self.Nf * self.dt)
+        self.layer_df     = float(wdm_settings.layer_df)
         self.n_rfft_chunk = self.Nf * self.Nt_sub // 2 + 1
         self.log2_N_sparse = int(np.log2(self.N_sparse))
         self.log2_Nt_sub   = int(np.log2(self.Nt_sub))
