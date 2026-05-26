@@ -11,7 +11,7 @@
 #endif
 
 // TODO: GET RID OF THIS ??!!!
-double C_SI = 299792458.;
+#define C_SI 299792458.;
 
 #ifdef __CUDACC__
 #define NUM_THREADS_HERE 64

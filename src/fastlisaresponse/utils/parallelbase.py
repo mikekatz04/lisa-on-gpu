@@ -18,4 +18,4 @@ class FastLISAResponseParallelModule(ParallelModuleBase):
         wheel needed); we list it after the GPU options so the default
         "first available" pick stays GPU when both are present.
         """
-        return ["cuda13x", "cuda12x", "cuda11x", "cpu", "jax"]
+        return ["flr_cuda13x", "flr_cuda12x", "flr_cuda11x", "flr_cpu", "flr_jax"]

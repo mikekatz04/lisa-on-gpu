@@ -147,7 +147,8 @@ class LISATDIonTheFly{
         void extract_amplitude_and_phase(double *flip, double *pjump, int Ns, double *As, double *Dphi, double *M, double *Mf, double *phiR);
         CUDA_DEVICE
         void new_extract_amplitude_and_phase(int *count, bool *fix_count, double *flip, double *pjump, int Ns, double *As, double *Dphi, cmplx *M, double *phiR);
-        int get_tdi_buffer_size(int N);
+        CUDA_CALLABLE_MEMBER
+	int get_tdi_buffer_size(int N);
         CUDA_DEVICE
         void unwrap_phase(int N, double *phase);
         CUDA_DEVICE
@@ -205,12 +206,14 @@ class GBTDIonTheFly : public LISATDIonTheFly{
         double ucb_fdot(double t, double *params);
         CUDA_DEVICE
         double ucb_f(double t, double *params);
-        int get_gb_buffer_size(int N);
+        CUDA_CALLABLE_MEMBER
+	int get_gb_buffer_size(int N);
         // Total bytes of dynamic shared memory needed by the heterodyne FD
         // kernel: params + tdi_channels_arr (complex, also FFT scratch) +
         // tdi_amp + tdi_phase + phi_ref + get_tdi scratch.  N here is the
         // sparse FFT length (must be a power of two).
-        int get_gb_fd_buffer_size(int N, int nchannels);
+        CUDA_CALLABLE_MEMBER
+	int get_gb_fd_buffer_size(int N, int nchannels);
         // double get_phase_ref(double t, double *params, int bin_i);
         // CUDA_DEVICE
         // void run_wave_tdi(
@@ -330,7 +333,8 @@ class SOBBHTDIonTheFly : public LISATDIonTheFly{
         double sobbh_f(double t, double *params);
         CUDA_DEVICE
         double sobbh_fdot(double t, double *params);
-        int get_sobbh_buffer_size(int N);
+        CUDA_CALLABLE_MEMBER
+	int get_sobbh_buffer_size(int N);
         CUDA_DEVICE
         double get_amp(double t, double *params, int bin_i);
         CUDA_DEVICE
@@ -369,6 +373,7 @@ class TDSplineTDIWaveform : public LISATDIonTheFly{
     //     double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double *phi_ref, 
     //     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels
     // );
+    CUDA_CALLABLE_MEMBER
     int get_td_spline_buffer_size(int N){return get_tdi_buffer_size(N);};
     CUDA_DEVICE
     void check_x();
@@ -409,6 +414,7 @@ class FDSplineTDIWaveform : public LISATDIonTheFly {
     //     double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double *phi_ref, 
     //     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels
     // );
+    CUDA_CALLABLE_MEMBER
     int get_fd_spline_buffer_size(int N){return get_tdi_buffer_size(N);};
     CUDA_DEVICE
     double get_phase_ref(double t, double *params, int bin_i);
