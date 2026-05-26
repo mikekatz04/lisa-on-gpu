@@ -1,43 +1,158 @@
 import numpy as np
 
 from .utils.parallelbase import FastLISAResponseParallelModule
+from .utils.wdm_het import (
+    USE_RECOMMENDED_TUKEY,
+    compute_chunk_geometry,
+    compute_layer_groups,
+    compute_swap_layer_groups,
+    compute_wdm_window,
+    resolve_tukey_alpha,
+)
 from fastlisaresponse.tdiconfig import TDIConfig
 from lisatools.detector import Orbits, EqualArmlengthOrbits
 from copy import deepcopy
-from lisatools.domains import WDMLookupTable
 from .response import ecliptic_to_icrs
 
-# Seconds per Julian year, used to convert `coarse_pts_per_year` into the
-# `coarse_dt` argument the spline-path C wraps consume.
-_SECONDS_PER_YEAR = 365.25 * 86400.0
 
 class GBWDMComputations(FastLISAResponseParallelModule):
-    def __init__(self, wdm_lookup_table, T, t_ref, orbits=None, tdi_config=None, force_backend=None, d_d=0.0, tdi_type="XYZ"):
+    """Source-side WDM-domain GB likelihood (chunked-heterodyne path).
 
+    Routes through the chunked-heterodyne kernel set
+    ``gb_wdm_het_{fill_global, get_ll, swap_ll}`` on the backend (C++
+    on CPU / CUDA, JAX on the ``jax`` backend). The constructor
+    pre-computes the chunk geometry, the Nt_sub-long WDM window, and
+    wraps orbits / TDI config so methods are a thin packing of
+    per-call kernel arguments.
+
+    Returns ``-0.5 * (d_d + h_h - 2 d_h)``. ``d_d`` defaults to 0; the
+    return is then the source-only piece, and the caller adds
+    ``-0.5 <d|d>`` for the full ``log p(d|h)``. There is **no**
+    separate ``source_only`` flag.
+
+    Subclassing for other narrow-band source classes (e.g. SOBBH) is
+    supported through the routing constants below: override
+    ``_WRAP_ATTR`` to pick a different ``*ComputationGroupWrap`` on the
+    backend, ``_METHOD_PREFIX`` to pick the kernel-name family
+    (``gb_wdm_het`` -> ``sobbh_wdm_het``), ``_NPARAMS`` to change the
+    per-source parameter count, and ``_F0_PARAM_INDEX`` to point the
+    layer-grouping logic at the carrier-frequency column of
+    ``params``.
+    """
+
+    # Routes ``fill_global_wdm`` / ``get_ll_wdm`` / ``swap_ll_wdm``
+    # through ``GBComputationGroupWrap.gb_wdm_het_*`` on the backend.
+    # Subclasses (e.g. :class:`SOBBHWDMComputations`) override these.
+    _WRAP_ATTR = "GBComputationGroupWrap"
+    _METHOD_PREFIX = "gb_wdm_het"
+    _NPARAMS = 9
+    _F0_PARAM_INDEX = 1   # GBTDIonTheFly: params[1] = f0
+
+    def __init__(self, Nf, Nt, dt, T, t_ref,
+                 Nt_sub=256, n_pad=32, N_sparse=256,
+                 tukey_alpha=USE_RECOMMENDED_TUKEY, use_tukey=True,
+                 N_cp_sig=0, N_cp_orbit=0,
+                 t_obs_start=0.0,
+                 orbits=None, tdi_config=None, force_backend=None,
+                 d_d=0.0, tdi_type="XYZ"):
+        """Args:
+            Nf, Nt: WDM grid dimensions of the global template buffer
+                that ``fill_global_wdm`` / ``get_ll_wdm`` operate on.
+            dt: TD sample step (seconds).
+            T, t_ref: full observation duration and the source-phase
+                reference time (both in seconds). Forwarded to the
+                kernel as ``T_full`` / ``t_ref_full``.
+            Nt_sub: per-chunk WDM time pixels.
+            n_pad: WDM pixels discarded at each chunk edge during the
+                stitch.
+            N_sparse: heterodyne FFT length per chunk; must be a power
+                of two <= ``FAST_WDM_N_SPARSE_MAX`` in the C kernel.
+            tukey_alpha, use_tukey: Tukey window selector. Default
+                ``USE_RECOMMENDED_TUKEY`` auto-picks per
+                ``recommended_tukey_alpha`` ("heterodyne" path).
+            N_cp_sig: source-signal spline-cache density per chunk
+                (0 = direct path; >0 = cache).
+            N_cp_orbit: orbit spline-cache density per chunk
+                (0 = global-mem lookups; >0 = cache).
+            t_obs_start: absolute time at which WDM pixel 0 lives.
+            orbits, tdi_config, tdi_type: as on the parent classes.
+            d_d: constant added to ``h_h - 2 d_h`` inside the returned
+                likelihood (default 0 = source-only return).
+            force_backend: chooses the dispatch backend at construction;
+                all subsequent methods read ``self.backend`` /
+                ``self.backend.xp``. Per the sprint-wide rule, no
+                method on this class takes a backend kwarg.
+        """
         super().__init__(force_backend=force_backend)
-        # setup orbits
-        self.orbits = orbits
-         # setup TDI info
-        self.tdi_config = tdi_config
-        # setup WDM c class
-        self.wdm_lookup_table = wdm_lookup_table
-        self.T = T
-        self.t_ref = t_ref
-        self.d_d = d_d
-        # Which kernel branch get_ll/get_swap_ll/fill_global drive:
-        #   "XYZ" -> full 3x3 cross-channel inverse covariance per pixel.
-        #   "AET" -> three orthogonal channels, diagonal noise per pixel.
-        #   "AE"  -> two orthogonal channels (T dropped), diagonal noise.
-        # The choice has to match the wdm_holder's noise buffer layout that
-        # ``get_pixel_noise_value{,_cross_channel}`` consumes inside the kernel.
+
+        # WDM grid + obs setup. Stored first so the orbits setter can
+        # configure on the full obs span before kernel-arg packing.
+        self.Nf       = int(Nf)
+        self.Nt       = int(Nt)
+        self.dt       = float(dt)
+        self.T        = float(T)
+        self.t_ref    = float(t_ref)
+        self.t_obs_start = float(t_obs_start)
+        self.Nt_sub   = int(Nt_sub)
+        self.n_pad    = int(n_pad)
+        self.N_sparse = int(N_sparse)
+        self.tukey_alpha = float(tukey_alpha)
+        self.use_tukey   = bool(use_tukey)
+        self.N_cp_sig    = int(N_cp_sig)
+        self.N_cp_orbit  = int(N_cp_orbit)
+
+        # Derived quantities the kernel consumes directly.
+        self.T_chunk      = self.Nf * self.Nt_sub * self.dt
+        self.layer_df     = 1.0 / (2.0 * self.Nf * self.dt)
+        self.n_rfft_chunk = self.Nf * self.Nt_sub // 2 + 1
+        self.log2_N_sparse = int(np.log2(self.N_sparse))
+        self.log2_Nt_sub   = int(np.log2(self.Nt_sub))
+        assert 2 ** self.log2_N_sparse == self.N_sparse, (
+            f"N_sparse={self.N_sparse} must be a power of two.")
+        assert 2 ** self.log2_Nt_sub == self.Nt_sub, (
+            f"Nt_sub={self.Nt_sub} must be a power of two.")
+
+        # ``d_d`` constant the source-side likelihood adds to
+        # ``h_h - 2 d_h``. Defaults to 0 -> source-only.
+        self.d_d = float(d_d)
+
         if tdi_type not in {"XYZ", "AET", "AE"}:
-            raise ValueError(f"tdi_type must be one of 'XYZ', 'AET', 'AE'; got {tdi_type!r}.")
+            raise ValueError(
+                f"tdi_type must be one of 'XYZ', 'AET', 'AE'; got {tdi_type!r}.")
         self.tdi_type = tdi_type
-        
+
+        # Chunk geometry + WDM phitilde -- precomputed once.
+        backend_short = self.backend.name.split("_")[-1]
+        geom = compute_chunk_geometry(self.Nt, self.Nt_sub, self.n_pad)
+        layer_dt = self.Nf * self.dt
+        starts_f = np.asarray(geom["starts"], dtype=float)
+        self.chunk_t_starts = (
+            self.t_obs_start + starts_f * layer_dt
+        ).copy()
+        self.chunk_keep_lo  = np.asarray(geom["keep_lo"],     dtype=np.int32)
+        self.chunk_keep_hi  = np.asarray(geom["keep_hi"],     dtype=np.int32)
+        self.chunk_n_global_offset = np.asarray(geom["n_global_lo"],
+                                                  dtype=np.int32)
+        self.wdm_window = compute_wdm_window(self.Nf, self.Nt_sub, self.dt,
+                                              backend=backend_short)
+        self.n_chunks = int(starts_f.size)
+
+        # Resolved Tukey alpha (one double passed to the kernel).
+        self.resolved_tukey_alpha = float(resolve_tukey_alpha(
+            self.tukey_alpha, self.use_tukey,
+            path="heterodyne", N_sparse=self.N_sparse,
+        ))
+
+        # Orbits / TDI config setters wrap the C++ / JAX objects on the
+        # chosen backend.
+        self.orbits = orbits
+        self.tdi_config = tdi_config
+        self.nchannels = self.tdi_config.nchannels
+
     @property
     def tdi_config(self) -> TDIConfig:
         return self._tdi_config
-    
+
     @tdi_config.setter
     def tdi_config(self, tdi_config: TDIConfig):
         if tdi_config is None:
@@ -49,24 +164,23 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         self._tdi_config = tdi_config
 
         self.cpp_tdi_config = self.backend.TDIConfigWrap(*self._tdi_config.pytdiconfig_args)
-       
+
     @property
     def xp(self) -> object:
         return self.backend.xp
-    
+
     @property
     def orbits(self) -> object:
         return self._orbits
 
     @orbits.setter
     def orbits(self, orbits: Orbits) -> None:
-        """Set response orbits."""
+        """Set response orbits and (re)build the backend orbits wrap."""
 
         if orbits is None:
             orbits = EqualArmlengthOrbits()
-        
+
         elif not isinstance(orbits, Orbits) and issubclass(orbits, Orbits):
-            # assumed default arguments if not initialized as input
             orbits = orbits()
 
         else:
@@ -75,116 +189,16 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         self._orbits = deepcopy(orbits)
 
         if not self._orbits.configured:
-            self._orbits.configure(linear_interp_setup=True)
+            # Configure on the full observation span at the kernel's dt
+            # so pycppdetector_args populate for the C++ / JAX wrap.
+            t_arr = np.arange(0.0, self.T + self.dt, self.dt) + self.t_obs_start
+            try:
+                self._orbits.configure(t_arr=t_arr, dt=self.dt,
+                                        linear_interp_setup=True)
+            except TypeError:
+                self._orbits.configure(linear_interp_setup=True)
 
         self.cpp_orbits = self.backend.OrbitsWrap(*self._orbits.pycppdetector_args)
-
-    @property
-    def wdm_lookup_table(self) -> object:
-        return self._wdm_lookup_table
-
-    @wdm_lookup_table.setter
-    def wdm_lookup_table(self, wdm_lookup_table: WDMLookupTable) -> None:
-        """Set wdm lookup table.
-
-        Three table layouts are supported, picked by
-        ``wdm_lookup_table.build_kind``:
-
-          * ``'per_n'``        → shape ``(Nt, num_fdot, num_f)`` (legacy)
-          * ``'n_ref_only'``   → shape ``(num_fdot, num_f)`` (Plan A, real)
-          * ``'n_ref_complex'``→ same shape as ``'n_ref_only'`` but stored
-                                as ONE complex table whose Re/Im equal the
-                                real path's (cos, sin) — 2x faster to
-                                build. Maps to ``LOOKUP_N_REF_ONLY`` on
-                                the C side; we just split table_cx into
-                                Re/Im before shipping it.
-
-        The kind is forwarded to the C++ ``WaveletLookupTable`` as the
-        ``kind`` int (matches the ``LookupKind`` enum in
-        ``TDIonTheFly.hh`` — 0 = PER_N, 1 = N_REF_ONLY).
-        """
-
-        self._wdm_lookup_table = wdm_lookup_table
-
-        Nt = wdm_lookup_table.settings.Nt
-        num_fdot = wdm_lookup_table.fdot_steps
-        num_f = wdm_lookup_table.f_steps
-        build_kind = getattr(wdm_lookup_table, "build_kind", "per_n")
-        if build_kind in ("n_ref_only", "n_ref_complex"):
-            expected_shape = (num_fdot, num_f)
-            kind_int = 1
-        elif build_kind == "per_n":
-            expected_shape = (Nt, num_fdot, num_f)
-            kind_int = 0
-        else:
-            raise ValueError(
-                f"Unknown WDMLookupTable.build_kind={build_kind!r}; "
-                "expected 'per_n', 'n_ref_only', or 'n_ref_complex'."
-            )
-
-        if build_kind == "n_ref_complex":
-            # Split the stored complex table into real cos / sin arrays for
-            # the C kernel. ``Re(table_cx) == table_cos`` and
-            # ``Im(table_cx) == table_sin`` of the real-path build (build
-            # applies the same heroics in both paths), so the C side
-            # consumes these identically.
-            assert wdm_lookup_table.table_cx.shape == expected_shape, (
-                f"table_cx shape {wdm_lookup_table.table_cx.shape} != "
-                f"{expected_shape} for build_kind={build_kind!r}"
-            )
-            _cos_src = self.xp.real(self.xp.asarray(wdm_lookup_table.table_cx))
-            _sin_src = self.xp.imag(self.xp.asarray(wdm_lookup_table.table_cx))
-        else:
-            assert wdm_lookup_table.table_cos.shape == expected_shape, (
-                f"table_cos shape {wdm_lookup_table.table_cos.shape} != "
-                f"{expected_shape} for build_kind={build_kind!r}"
-            )
-            assert wdm_lookup_table.table_sin.shape == expected_shape, (
-                f"table_sin shape {wdm_lookup_table.table_sin.shape} != "
-                f"{expected_shape} for build_kind={build_kind!r}"
-            )
-            _cos_src = self.xp.asarray(wdm_lookup_table.table_cos)
-            _sin_src = self.xp.asarray(wdm_lookup_table.table_sin)
-
-        # ``jax.numpy`` doesn't expose ``ascontiguousarray``; ``jnp.asarray``
-        # already returns a contiguous immutable buffer. For the numpy /
-        # cupy backends we keep the explicit contiguous coercion.
-        if hasattr(self.xp, "ascontiguousarray"):
-            self.c_nm_all = self.xp.ascontiguousarray(_cos_src)
-            self.s_nm_all = self.xp.ascontiguousarray(_sin_src)
-        else:
-            self.c_nm_all = _cos_src
-            self.s_nm_all = _sin_src
-
-        delta_f = wdm_lookup_table.f_vals_norm[1] - wdm_lookup_table.f_vals_norm[0]
-        try:
-            delta_fdot = wdm_lookup_table.fdot_vals[1] - wdm_lookup_table.fdot_vals[0]
-        except IndexError:
-            # this happens when there is no fdot
-            delta_fdot = 1.0
-
-        self.cpp_wdm_lookup_table = self.backend.WaveletLookupTableWrap(
-            self.c_nm_all,
-            self.s_nm_all,
-            wdm_lookup_table.f_steps,
-            wdm_lookup_table.fdot_steps,
-            delta_f,  # NOT .layer_df (that is the WDM basis info)
-            delta_fdot,
-            wdm_lookup_table.f_vals_norm.min().item(),
-            wdm_lookup_table.fdot_vals.min().item(),
-            wdm_lookup_table.settings.layer_df,
-            wdm_lookup_table.settings.layer_dt,
-            wdm_lookup_table.settings.Nf,  # calculates Nf_active inside
-            wdm_lookup_table.settings.Nt,  # calculates Nt_active inside
-            wdm_lookup_table.nchannels,
-            wdm_lookup_table.settings.ind_min_t,
-            wdm_lookup_table.settings.ind_max_t,
-            wdm_lookup_table.settings.ind_min_f,
-            wdm_lookup_table.settings.ind_max_f,
-            int(wdm_lookup_table.m_ref),
-            int(getattr(wdm_lookup_table, "n_ref", 0)),
-            kind_int,
-        )
 
     @classmethod
     def supported_backends(cls):
@@ -193,28 +207,114 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         # fastlisaresponse.jax via force_backend='jax'.
         return ["fastlisaresponse_" + _tmp for _tmp in cls.GPU_RECOMMENDED_WITH_JAX()]
 
-    def get_ll_wdm(self, params, wdm_holder, data_index=None, noise_index=None, convert_to_ra_dec: bool = True,
-                   use_spline: bool = False, coarse_pts_per_year: int = 256):
-        """Per-binary (d|h) and (h|h) accumulated as <h | h> := -2 (d|h) + (h|h) likelihood pieces.
+    # ------------------------------------------------------------------
+    # Backend dispatch helpers
+    # ------------------------------------------------------------------
 
-        Set ``use_spline=True`` to dispatch to ``gb_wdm_spline_get_ll`` which
-        replaces per-WDM-pixel fast_wdm_inner calls with cubic-spline
-        interpolation of get_tdi outputs on a coarse uniform time grid of
-        ``coarse_pts_per_year`` points per Julian year.
+    def _layer_groups(self, params_2d, group_band_layers, margin_layers,
+                       data_index=None, noise_index=None):
+        """Cluster binaries by carrier WDM layer for narrow-band dispatch."""
+        return compute_layer_groups(
+            np.asarray(params_2d), layer_df=self.layer_df,
+            f0_param_index=self._F0_PARAM_INDEX,
+            group_band_layers=int(group_band_layers),
+            margin_layers=int(margin_layers),
+            data_index_all=data_index, noise_index_all=noise_index,
+        )
+
+    def _swap_layer_groups(self, params_add_2d, params_remove_2d,
+                            group_band_layers, margin_layers,
+                            data_index=None, noise_index=None):
+        return compute_swap_layer_groups(
+            np.asarray(params_add_2d), np.asarray(params_remove_2d),
+            layer_df=self.layer_df,
+            f0_param_index=self._F0_PARAM_INDEX,
+            group_band_layers=int(group_band_layers),
+            margin_layers=int(margin_layers),
+            data_index_all=data_index, noise_index_all=noise_index,
+        )
+
+    def _comp_group(self):
+        """The ``*ComputationGroupWrap`` instance for this source class."""
+        return getattr(self.backend, self._WRAP_ATTR)()
+
+    def _kernel(self, name):
+        """Resolve ``self._METHOD_PREFIX + '_' + name`` on the comp group."""
+        return getattr(self._comp_group(), f"{self._METHOD_PREFIX}_{name}")
+
+    def _empty_groups(self, num_bin):
+        """Zero-length grouping arrays for the un-grouped C-kernel path."""
+        return dict(
+            binary_perm  = np.zeros(num_bin, dtype=np.int32),
+            group_starts = np.zeros(1,       dtype=np.int32),
+            group_ends   = np.zeros(1,       dtype=np.int32),
+            group_m_lo   = np.zeros(1,       dtype=np.int32),
+            group_m_hi   = np.zeros(1,       dtype=np.int32),
+            n_groups     = 0,
+        )
+
+    def _empty_swap_groups(self, num_bin):
+        g = self._empty_groups(num_bin)
+        g["pair_m_lo_b"] = np.zeros(num_bin, dtype=np.int32)
+        g["pair_m_hi_b"] = np.zeros(num_bin, dtype=np.int32)
+        return g
+
+    def _prep_indices(self, num_bin, num_data, num_noise,
+                       data_index, noise_index):
+        if data_index is None:
+            data_index = self.xp.zeros(num_bin, dtype=self.xp.int32)
+        else:
+            data_index = self.xp.asarray(data_index).astype(self.xp.int32)
+        if noise_index is None:
+            noise_index = self.xp.zeros(num_bin, dtype=self.xp.int32)
+        else:
+            noise_index = self.xp.asarray(noise_index).astype(self.xp.int32)
+        assert int(data_index.max()) < num_data
+        assert int(noise_index.max()) < num_noise
+        return data_index, noise_index
+
+    def get_ll_wdm(self, params, wdm_holder, data_index=None, noise_index=None,
+                   convert_to_ra_dec: bool = True,
+                   grid_dim: int = 0,
+                   use_layer_groups: bool = True,
+                   group_band_layers: int = 5,
+                   margin_layers: int = 0):
+        """Per-binary chunked-heterodyne ``<d|h>`` / ``<h|h>``.
+
+        Returns ``-0.5 * (d_d + h_h - 2 d_h)`` per binary. ``d_d``
+        defaults to 0 (set in ``__init__``), making the return the
+        source-only piece; pass ``d_d`` at construction time to fold
+        the global ``<d|d>`` in.
+
+        The raw per-binary inner products are stashed on
+        ``self.d_h_out`` / ``self.h_h_out`` for callers that need them
+        (e.g. analytic phase maximisation).
+
+        With ``use_layer_groups=True`` (default) binaries are clustered
+        by carrier WDM layer and each kernel launch reads
+        ``data`` / ``invC`` only over a narrow ``group_band_layers``-wide
+        m-band -- this is the canonical narrow-band GB inner product
+        (mm5 / mm2). The full-Nf path (``use_layer_groups=False``)
+        picks up spectral-tail contributions and is not the right
+        physical model for narrow-band GBs.
+
+        Args:
+            params: ``(num_bin, nparams)`` array (1D auto-promoted via
+                ``atleast_2d``). Last two columns are ``(lam, beta)``;
+                with ``convert_to_ra_dec`` (default) they are converted
+                to ICRS before dispatch.
+            wdm_holder: ``AnalysisContainerArray`` providing
+                ``linear_data_arr[0]`` (WDM data) and
+                ``linear_psd_arr[0]`` (invC) -- both flat.
+            data_index, noise_index: per-binary slab indices into
+                ``wdm_holder``. Default = all zeros.
+            grid_dim: CUDA launch grid size (use 0 for ``n_chunks``).
+            use_layer_groups, group_band_layers, margin_layers: narrow-band
+                grouping controls (see method docstring).
         """
-
         params_tmp = self.xp.asarray(self.xp.atleast_2d(params)).copy()
         num_bin = params_tmp.shape[0]
-
-        # The JAX backend's GBComputationGroupWrap can't mutate
-        # immutable jnp arrays; allocate numpy host buffers in that
-        # case and rebind ``d_h_out``/``h_h_out`` to jnp at the end.
-        if self.backend.name == "fastlisaresponse_jax":
-            self.d_h_out = np.zeros(num_bin)
-            self.h_h_out = np.zeros(num_bin)
-        else:
-            self.d_h_out = self.xp.zeros(num_bin)
-            self.h_h_out = self.xp.zeros(num_bin)
+        nparams = int(self._NPARAMS)
 
         if convert_to_ra_dec:
             lam = params_tmp[:, -2].copy()
@@ -223,111 +323,77 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             params_tmp[:, -2] = lam
             params_tmp[:, -1] = beta
 
+        # JAX backend's wrap mutates host (numpy) buffers since jnp
+        # arrays are immutable.
+        if self.backend.name == "fastlisaresponse_jax":
+            d_h_out = np.zeros(num_bin)
+            h_h_out = np.zeros(num_bin)
+        else:
+            d_h_out = self.xp.zeros(num_bin)
+            h_h_out = self.xp.zeros(num_bin)
+
         num_data = num_noise = len(wdm_holder)
-        
-        # TODO: move this part
-        # TODO: need to check for num_data, num_noise
-        self.cpp_wdm = self.backend.WDMDomainWrap(
-            wdm_holder.linear_data_arr[0],
-            wdm_holder.linear_psd_arr[0],
-            self.wdm_lookup_table.settings.layer_df, 
-            self.wdm_lookup_table.settings.layer_dt,
-            self.wdm_lookup_table.settings.Nf, # calculates Nf_active inside
-            self.wdm_lookup_table.settings.Nt, # calculates Nt_active inside
-            self.tdi_config.nchannels,
-            self.wdm_lookup_table.settings.ind_min_t,
-            self.wdm_lookup_table.settings.ind_max_t,
-            self.wdm_lookup_table.settings.ind_min_f,
-            self.wdm_lookup_table.settings.ind_max_f,
-            num_data, 
-            num_noise
-        )
-
-        if data_index is None:
-            data_index = self.xp.zeros(num_bin, dtype=self.xp.int32)
-        elif data_index.dtype == self.xp.int64:
-            _data_index = data_index.copy().astype(self.xp.int32)
-            del data_index
-            data_index = _data_index
-            
-        if noise_index is None:
-            noise_index = self.xp.zeros(num_bin, dtype=self.xp.int32)
-        elif noise_index.dtype == self.xp.int64:
-            _noise_index = noise_index.copy().astype(self.xp.int32)
-            del noise_index
-            noise_index = _noise_index
-
-        assert noise_index.dtype == self.xp.int32
-        
-        assert data_index.max() < num_data
-        assert noise_index.max() < num_noise
-        nparams = 9
+        data_index, noise_index = self._prep_indices(
+            num_bin, num_data, num_noise, data_index, noise_index)
 
         params_in = params_tmp.flatten().copy()
 
-        if use_spline:
-            coarse_dt = _SECONDS_PER_YEAR / float(coarse_pts_per_year)
-            self.backend.GBComputationGroupWrap().gb_wdm_spline_get_ll(
-                self.d_h_out,
-                self.h_h_out,
-                self.cpp_orbits,
-                self.cpp_tdi_config,
-                self.cpp_wdm_lookup_table,
-                self.cpp_wdm,
-                params_in,
-                data_index,
-                noise_index,
-                num_bin,
-                nparams,
-                self.T,
-                self.t_ref,
-                self.backend.TDITypeDict[self.tdi_type],
-                coarse_dt,
-            )
+        if use_layer_groups:
+            groups = self._layer_groups(
+                params_tmp, group_band_layers, margin_layers,
+                data_index=data_index, noise_index=noise_index)
         else:
-            deriv_delta_t = 500.0  # seconds
-            self.backend.GBComputationGroupWrap().gb_wdm_get_ll(
-                self.d_h_out,
-                self.h_h_out,
-                self.cpp_orbits,
-                self.cpp_tdi_config,
-                self.cpp_wdm_lookup_table,
-                self.cpp_wdm,
-                params_in,
-                data_index,
-                noise_index,
-                num_bin,
-                nparams,
-                self.T,
-                self.t_ref,
-                self.backend.TDITypeDict[self.tdi_type],
-                deriv_delta_t
-            )
+            groups = self._empty_groups(num_bin)
 
-        like_out = -1. / 2. * (self.d_d + self.h_h_out - 2 * self.d_h_out)
-        # TODO: phase maximize
-        return like_out
+        self._kernel("get_ll")(
+            d_h_out, h_h_out,
+            self.cpp_orbits, self.cpp_tdi_config,
+            params_in, data_index, noise_index,
+            self.chunk_t_starts,
+            self.chunk_keep_lo, self.chunk_keep_hi,
+            self.chunk_n_global_offset,
+            self.wdm_window,
+            wdm_holder.linear_data_arr[0],
+            wdm_holder.linear_psd_arr[0],
+            self.n_chunks, int(num_bin), int(nparams),
+            int(self.Nf), int(self.Nt), int(self.Nt_sub), int(self.log2_Nt_sub),
+            int(self.N_sparse), int(self.log2_N_sparse),
+            int(self.nchannels), int(self.n_rfft_chunk),
+            float(self.T_chunk), float(self.dt),
+            float(self.T), float(self.t_ref),
+            float(self.resolved_tukey_alpha), int(grid_dim),
+            int(self.N_cp_sig), int(self.N_cp_orbit),
+            np.asarray(groups["binary_perm"],  dtype=np.int32),
+            np.asarray(groups["group_starts"], dtype=np.int32),
+            np.asarray(groups["group_ends"],   dtype=np.int32),
+            np.asarray(groups["group_m_lo"],   dtype=np.int32),
+            np.asarray(groups["group_m_hi"],   dtype=np.int32),
+            int(groups["n_groups"]),
+        )
 
-    def get_swap_ll_wdm(self, params_add, params_remove, wdm_holder, data_index=None, noise_index=None, convert_to_ra_dec: bool = True,
-                        use_spline: bool = False, coarse_pts_per_year: int = 256):
-        """Swap-proposal likelihood pieces for an 'add' and a 'remove' template.
+        self.d_h_out = d_h_out
+        self.h_h_out = h_h_out
+        return -0.5 * (self.d_d + h_h_out - 2.0 * d_h_out)
+
+    def get_swap_ll_wdm(self, params_add, params_remove, wdm_holder,
+                        data_index=None, noise_index=None,
+                        convert_to_ra_dec: bool = True,
+                        grid_dim: int = 0,
+                        use_layer_groups: bool = True,
+                        group_band_layers: int = 5,
+                        margin_layers: int = 0):
+        """Swap-proposal 5-way accumulator via chunked-heterodyne.
 
         Mirrors :meth:`get_ll_wdm` but evaluates the five inner products
-        <d|h_add>, <d|h_remove>, <h_add|h_add>, <h_remove|h_remove>,
-        <h_add|h_remove> for each binary in parallel. Used by RJMCMC swap moves
-        where a single proposal replaces one source with another.
-
-        Set ``use_spline=True`` to dispatch to ``gb_wdm_spline_swap_ll``.
+        ``<d|h_add>``, ``<d|h_remove>``, ``<h_add|h_add>``,
+        ``<h_remove|h_remove>``, ``<h_add|h_remove>`` per binary.
 
         Returns
         -------
-        like_add : xp.ndarray
-            -0.5 * (d_d + <h_add|h_add> - 2 <d|h_add>)
-        like_remove : xp.ndarray
-            -0.5 * (d_d + <h_remove|h_remove> - 2 <d|h_remove>)
-        d_h_add, d_h_remove, add_add, remove_remove, add_remove : xp.ndarray
-            The raw inner products, useful for evaluating Hastings ratios that
-            include the cross term <h_add|h_remove>.
+        like_add, like_remove : ndarray
+            ``-0.5 * (d_d + <hh> - 2 <dh>)`` for add and remove.
+        d_h_add, d_h_remove, add_add, remove_remove, add_remove : ndarray
+            Raw inner products (e.g. for cross-term Hastings ratios).
         """
         params_add_tmp = self.xp.asarray(self.xp.atleast_2d(params_add)).copy()
         params_remove_tmp = self.xp.asarray(self.xp.atleast_2d(params_remove)).copy()
@@ -336,283 +402,120 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             f"{params_add_tmp.shape} vs {params_remove_tmp.shape}"
         )
         num_bin = params_add_tmp.shape[0]
-
-        # See note in get_ll_wdm: the JAX-backend computation group
-        # mutates host (numpy) buffers; jnp arrays would error out.
-        if self.backend.name == "fastlisaresponse_jax":
-            self.d_h_add_out = np.zeros(num_bin)
-            self.d_h_remove_out = np.zeros(num_bin)
-            self.add_add_out = np.zeros(num_bin)
-            self.remove_remove_out = np.zeros(num_bin)
-            self.add_remove_out = np.zeros(num_bin)
-        else:
-            self.d_h_add_out = self.xp.zeros(num_bin)
-            self.d_h_remove_out = self.xp.zeros(num_bin)
-            self.add_add_out = self.xp.zeros(num_bin)
-            self.remove_remove_out = self.xp.zeros(num_bin)
-            self.add_remove_out = self.xp.zeros(num_bin)
+        nparams = int(self._NPARAMS)
 
         if convert_to_ra_dec:
-            for params_tmp in (params_add_tmp, params_remove_tmp):
-                lam = params_tmp[:, -2].copy()
-                beta = params_tmp[:, -1].copy()
+            for p_tmp in (params_add_tmp, params_remove_tmp):
+                lam = p_tmp[:, -2].copy()
+                beta = p_tmp[:, -1].copy()
                 lam, beta = ecliptic_to_icrs(lam, beta)
-                params_tmp[:, -2] = lam
-                params_tmp[:, -1] = beta
+                p_tmp[:, -2] = lam
+                p_tmp[:, -1] = beta
+
+        if self.backend.name == "fastlisaresponse_jax":
+            d_h_a = np.zeros(num_bin); d_h_r = np.zeros(num_bin)
+            aa    = np.zeros(num_bin); rr    = np.zeros(num_bin)
+            ar    = np.zeros(num_bin)
+        else:
+            d_h_a = self.xp.zeros(num_bin); d_h_r = self.xp.zeros(num_bin)
+            aa    = self.xp.zeros(num_bin); rr    = self.xp.zeros(num_bin)
+            ar    = self.xp.zeros(num_bin)
 
         num_data = num_noise = len(wdm_holder)
+        data_index, noise_index = self._prep_indices(
+            num_bin, num_data, num_noise, data_index, noise_index)
 
-        # TODO: move this part
-        # TODO: need to check for num_data, num_noise
-        self.cpp_wdm = self.backend.WDMDomainWrap(
-            wdm_holder.linear_data_arr[0],
-            wdm_holder.linear_psd_arr[0],
-            self.wdm_lookup_table.settings.layer_df,
-            self.wdm_lookup_table.settings.layer_dt,
-            self.wdm_lookup_table.settings.Nf,  # calculates Nf_active inside
-            self.wdm_lookup_table.settings.Nt,  # calculates Nt_active inside
-            self.tdi_config.nchannels,
-            self.wdm_lookup_table.settings.ind_min_t,
-            self.wdm_lookup_table.settings.ind_max_t,
-            self.wdm_lookup_table.settings.ind_min_f,
-            self.wdm_lookup_table.settings.ind_max_f,
-            num_data,
-            num_noise,
-        )
-
-        if data_index is None:
-            data_index = self.xp.zeros(num_bin, dtype=self.xp.int32)
-        elif data_index.dtype == self.xp.int64:
-            _data_index = data_index.copy().astype(self.xp.int32)
-            del data_index
-            data_index = _data_index
-
-        if noise_index is None:
-            noise_index = self.xp.zeros(num_bin, dtype=self.xp.int32)
-        elif noise_index.dtype == self.xp.int64:
-            _noise_index = noise_index.copy().astype(self.xp.int32)
-            del noise_index
-            noise_index = _noise_index
-
-        assert noise_index.dtype == self.xp.int32
-
-        assert data_index.max() < num_data
-        assert noise_index.max() < num_noise
-        nparams = 9
-
-        params_add_in = params_add_tmp.flatten().copy()
+        params_add_in    = params_add_tmp.flatten().copy()
         params_remove_in = params_remove_tmp.flatten().copy()
 
-        if use_spline:
-            coarse_dt = _SECONDS_PER_YEAR / float(coarse_pts_per_year)
-            self.backend.GBComputationGroupWrap().gb_wdm_spline_swap_ll(
-                self.d_h_add_out,
-                self.d_h_remove_out,
-                self.add_add_out,
-                self.remove_remove_out,
-                self.add_remove_out,
-                self.cpp_orbits,
-                self.cpp_tdi_config,
-                self.cpp_wdm_lookup_table,
-                self.cpp_wdm,
-                params_add_in,
-                params_remove_in,
-                data_index,
-                noise_index,
-                num_bin,
-                nparams,
-                self.T,
-                self.t_ref,
-                self.backend.TDITypeDict[self.tdi_type],
-                coarse_dt,
-            )
+        if use_layer_groups:
+            groups = self._swap_layer_groups(
+                params_add_tmp, params_remove_tmp,
+                group_band_layers, margin_layers,
+                data_index=data_index, noise_index=noise_index)
         else:
-            deriv_delta_t = 500.0  # seconds
-            self.backend.GBComputationGroupWrap().gb_wdm_swap_ll(
-                self.d_h_add_out,
-                self.d_h_remove_out,
-                self.add_add_out,
-                self.remove_remove_out,
-                self.add_remove_out,
-                self.cpp_orbits,
-                self.cpp_tdi_config,
-                self.cpp_wdm_lookup_table,
-                self.cpp_wdm,
-                params_add_in,
-                params_remove_in,
-                data_index,
-                noise_index,
-                num_bin,
-                nparams,
-                self.T,
-                self.t_ref,
-                self.backend.TDITypeDict[self.tdi_type],
-                deriv_delta_t,
-            )
+            groups = self._empty_swap_groups(num_bin)
 
-        like_add = -1. / 2. * (self.d_d + self.add_add_out - 2 * self.d_h_add_out)
-        like_remove = -1. / 2. * (self.d_d + self.remove_remove_out - 2 * self.d_h_remove_out)
-        # TODO: phase maximize
-        return (
-            like_add,
-            like_remove,
-            self.d_h_add_out,
-            self.d_h_remove_out,
-            self.add_add_out,
-            self.remove_remove_out,
-            self.add_remove_out,
+        self._kernel("swap_ll")(
+            d_h_a, d_h_r, aa, rr, ar,
+            self.cpp_orbits, self.cpp_tdi_config,
+            params_add_in, params_remove_in,
+            data_index, noise_index,
+            self.chunk_t_starts,
+            self.chunk_keep_lo, self.chunk_keep_hi,
+            self.chunk_n_global_offset,
+            self.wdm_window,
+            wdm_holder.linear_data_arr[0],
+            wdm_holder.linear_psd_arr[0],
+            self.n_chunks, int(num_bin), int(nparams),
+            int(self.Nf), int(self.Nt), int(self.Nt_sub), int(self.log2_Nt_sub),
+            int(self.N_sparse), int(self.log2_N_sparse),
+            int(self.nchannels), int(self.n_rfft_chunk),
+            float(self.T_chunk), float(self.dt),
+            float(self.T), float(self.t_ref),
+            float(self.resolved_tukey_alpha), int(grid_dim),
+            int(self.N_cp_sig), int(self.N_cp_orbit),
+            np.asarray(groups["binary_perm"],  dtype=np.int32),
+            np.asarray(groups["group_starts"], dtype=np.int32),
+            np.asarray(groups["group_ends"],   dtype=np.int32),
+            np.asarray(groups["group_m_lo"],   dtype=np.int32),
+            np.asarray(groups["group_m_hi"],   dtype=np.int32),
+            int(groups["n_groups"]),
+            np.asarray(groups["pair_m_lo_b"],  dtype=np.int32),
+            np.asarray(groups["pair_m_hi_b"],  dtype=np.int32),
         )
 
+        self.d_h_add_out       = d_h_a
+        self.d_h_remove_out    = d_h_r
+        self.add_add_out       = aa
+        self.remove_remove_out = rr
+        self.add_remove_out    = ar
+
+        like_add    = -0.5 * (self.d_d + aa - 2.0 * d_h_a)
+        like_remove = -0.5 * (self.d_d + rr - 2.0 * d_h_r)
+        return like_add, like_remove, d_h_a, d_h_r, aa, rr, ar
+
     # ------------------------------------------------------------------
-    #  Chain-rule gradients of get_ll_wdm / get_swap_ll_wdm
+    # Chain-rule gradients of get_ll_wdm / get_swap_ll_wdm
     #
-    #  These mirror the corresponding likelihood methods above and call the
-    #  C++/CUDA gradient kernels in TDIonTheFly.cu, which compute, per binary
-    #  and per parameter k,
-    #
-    #      dL/dtheta_k = 4 * sum_{m,n,c} (w_data - w_h)_{m n c}
-    #                                  * (dw_h/dtheta_k)_{m n c} * N^{-1}_{m n c}
-    #
-    #  via per-pixel central differences on top of the existing fast_wdm_inner
-    #  -> get_wdm_in_channel_over_layers pipeline.  The numerical step size is
-    #  controlled by ``param_eps`` (one value per parameter); pass <= 0 to
-    #  freeze a parameter.
+    # Dispatch through ``self.backend.GBComputationGroupWrap()`` exactly
+    # like the likelihood methods above. On the JAX backend the
+    # gradient is built with ``jax.grad`` over the standalone JAX
+    # chunked-het kernel. On the C++ backends the corresponding
+    # ``gb_wdm_het_*_grad`` symbol is the canonical hook for a future
+    # C++ implementation; until it lands the backend wrap will raise.
     # ------------------------------------------------------------------
-
-    # default central-difference step sizes for the 9 GB parameters.
-    #
-    # The optimal step size for central FD on a function with effective
-    # angular frequency omega is roughly  eps_opt ~ (machine_eps)^{1/3} / omega
-    # which balances truncation O(eps^2 omega^2) against round-off
-    # O(machine_eps / (eps * omega)).  For GB parameters the relevant omega
-    # comes from the phase term  2 pi f0 t  evaluated at t ~ T_obs:
-    #
-    #    omega_f0  ~ 2 pi T_obs           ~ 2e8 rad/Hz at T_obs = 1 yr
-    #    omega_fdot ~ pi T_obs^2          ~ 3e15 rad / (Hz/s)
-    #    omega_fddot ~ (pi/3) T_obs^3     ~ 3e22 rad / (Hz/s^2)
-    #
-    # so an eps_relative ~ (1e-16)^{1/3} ~ 5e-6 in the phase derivative
-    # translates to absolute steps eps_k ~ 5e-6 / omega_k :
-    #
-    #    eps_f0    ~ 2e-14
-    #    eps_fdot  ~ 1e-21
-    #    eps_fddot ~ 1e-28
-    #
-    # For the angle parameters (phi0, iota, psi, lam, beta) the effective
-    # omega is O(1), so eps ~ 1e-6 is appropriate.  For amp the dependence
-    # is at most quadratic (in h_h) so truncation is essentially zero and
-    # eps just needs to keep round-off down.  We use a *relative* amp step
-    # (1e-3 of amp at evaluation time) handled by the caller -- the absolute
-    # default below assumes amp ~ 1e-22.
-    _DEFAULT_PARAM_EPS = (
-        1.0e-25,   # amp                       (absolute; ~ 1e-3 * amp)
-        2.0e-14,   # f0    (Hz)                ~ (eps_rel / 2*pi*T_obs)
-        1.0e-21,   # fdot  (Hz/s)
-        1.0e-28,   # fddot (Hz/s^2)
-        1.0e-6,    # phi0
-        1.0e-6,    # iota
-        1.0e-6,    # psi
-        1.0e-6,    # lam (or RA after convert)
-        1.0e-6,    # beta (or DEC after convert)
-    )
-
-    def _default_param_eps(self, nparams=9):
-        eps = self.xp.asarray(self._DEFAULT_PARAM_EPS[:nparams], dtype=self.xp.float64)
-        if eps.shape[0] != nparams:
-            # extend with last value if the user supplies extra params (e.g. third-body)
-            extra = self.xp.full(nparams - eps.shape[0], eps[-1].item(), dtype=self.xp.float64)
-            eps = self.xp.concatenate([eps, extra])
-        return eps
-
-    def _resolve_eps_and_scales(self, nparams, param_eps, param_scales, param_eps_relative):
-        """Compute eps_theta to pass to the C kernel and the scale vector for
-        post-multiplication of the returned gradient.
-
-        Convention
-        ----------
-        With ``param_scales = Delta_theta = (theta_max - theta_min)`` (or any
-        natural per-parameter width) and ``param_eps_relative = eps_rel`` we
-        work in the rescaled coordinate ``eta_k = theta_k / Delta_theta_k``:
-
-            eps_theta_k = eps_rel * Delta_theta_k   (FD step the kernel uses)
-            grad_eta_k  = Delta_theta_k * grad_theta_k    (returned gradient)
-
-        With ``param_scales is None`` the routine falls back to the raw
-        ``param_eps`` argument (or ``_DEFAULT_PARAM_EPS`` if that is also
-        None), and the returned gradient is ``dL/dtheta`` -- the legacy
-        behavior, unchanged.
-        """
-        if param_scales is not None:
-            scales = self.xp.asarray(param_scales, dtype=self.xp.float64)
-            assert scales.shape[0] == nparams, (
-                f"param_scales length {scales.shape[0]} != nparams {nparams}"
-            )
-            if param_eps is None:
-                eps_theta = scales * float(param_eps_relative)
-            else:
-                # caller wants a specific eps in original units; still scale the
-                # *output* gradient back to eta space at the end.
-                eps_theta = self.xp.asarray(param_eps, dtype=self.xp.float64)
-                assert eps_theta.shape[0] == nparams
-            return eps_theta, scales
-
-        # no scaling: legacy behavior
-        if param_eps is None:
-            eps_theta = self._default_param_eps(nparams)
-        else:
-            eps_theta = self.xp.asarray(param_eps, dtype=self.xp.float64)
-            assert eps_theta.shape[0] == nparams, (
-                f"param_eps length {eps_theta.shape[0]} != nparams {nparams}"
-            )
-        return eps_theta, None
 
     def get_ll_grad_wdm(self, params, wdm_holder,
-                        param_eps=None,
-                        param_scales=None,
-                        param_eps_relative=1.0e-6,
                         data_index=None, noise_index=None,
                         convert_to_ra_dec: bool = True,
-                        use_spline: bool = False, coarse_pts_per_year: int = 256):
+                        grid_dim: int = 0,
+                        use_layer_groups: bool = True,
+                        group_band_layers: int = 5,
+                        margin_layers: int = 0):
         """Chain-rule gradient of :meth:`get_ll_wdm`.
 
-        Parameters
-        ----------
-        params : array, (num_bin, nparams)
-            Galactic-binary parameters per binary.
-        wdm_holder : AnalysisContainerArray
-        param_eps : array, (nparams,), optional
-            Per-parameter central-difference step *in original units*.  Use
-            this for fine control over the kernel FD step.  If both
-            ``param_eps`` and ``param_scales`` are supplied, ``param_eps`` wins
-            for the FD step; ``param_scales`` still controls the output
-            gradient normalisation.  Default: ``_DEFAULT_PARAM_EPS`` (when
-            ``param_scales`` is also None).
-        param_scales : array, (nparams,), optional
-            Per-parameter natural width ``Delta_theta_k`` (e.g.
-            ``theta_max - theta_min``).  When supplied:
+        Dispatches to ``gb_wdm_het_get_ll_grad`` on the backend with
+        the same C++-style argument list as :meth:`get_ll_wdm`. The JAX
+        backend evaluates the gradient via autograd over the
+        chunked-het kernel; the C++ backends raise until the matching
+        kernel is implemented.
 
-              * the C-kernel FD step is set uniformly in the rescaled
-                coordinate eta_k = theta_k / Delta_theta_k via
-                eps_theta_k = param_eps_relative * Delta_theta_k;
-              * the returned gradient is in rescaled space,
-                ``dL/d(eta_k) = Delta_theta_k * dL/d(theta_k)``.
+        Args:
+            params: ``(num_bin, nparams)`` array.
+            wdm_holder: ``AnalysisContainerArray``.
+            data_index, noise_index, convert_to_ra_dec, grid_dim,
+            use_layer_groups, group_band_layers, margin_layers: see
+                :meth:`get_ll_wdm`.
 
-            This is the recommended path for samplers / Newton-CG / Fisher
-            mass-matrix work: the 9 gradient components become comparable in
-            magnitude, the FD step is a single number, and per-parameter
-            relative precision becomes meaningful.
-        param_eps_relative : float, default 1e-6
-            Uniform FD step in eta space; ignored when ``param_scales`` is
-            None.
-
-        Returns
-        -------
-        grad : (num_bin, nparams) xp.ndarray
-            ``grad[i, k] = dL/dtheta_k`` (default) or ``dL/d(eta_k)`` when
-            ``param_scales`` is supplied.
+        Returns:
+            ``(num_bin, nparams)`` array, ``grad[i, k] = dL/dtheta_k``.
         """
         params_tmp = self.xp.asarray(self.xp.atleast_2d(params)).copy()
-        num_bin, nparams = params_tmp.shape
+        num_bin = params_tmp.shape[0]
+        nparams = int(self._NPARAMS)
+        assert params_tmp.shape[1] == nparams, (
+            f"params has {params_tmp.shape[1]} columns, expected {nparams}")
 
         if convert_to_ra_dec:
             lam = params_tmp[:, -2].copy()
@@ -622,251 +525,202 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             params_tmp[:, -1] = beta
 
         num_data = num_noise = len(wdm_holder)
+        data_index, noise_index = self._prep_indices(
+            num_bin, num_data, num_noise, data_index, noise_index)
 
-        self.cpp_wdm = self.backend.WDMDomainWrap(
-            wdm_holder.linear_data_arr[0],
-            wdm_holder.linear_psd_arr[0],
-            self.wdm_lookup_table.settings.layer_df,
-            self.wdm_lookup_table.settings.layer_dt,
-            self.wdm_lookup_table.settings.Nf,
-            self.wdm_lookup_table.settings.Nt,
-            self.tdi_config.nchannels,
-            self.wdm_lookup_table.settings.ind_min_t,
-            self.wdm_lookup_table.settings.ind_max_t,
-            self.wdm_lookup_table.settings.ind_min_f,
-            self.wdm_lookup_table.settings.ind_max_f,
-            num_data,
-            num_noise,
-        )
-
-        if data_index is None:
-            data_index = self.xp.zeros(num_bin, dtype=self.xp.int32)
-        elif data_index.dtype == self.xp.int64:
-            data_index = data_index.astype(self.xp.int32)
-
-        if noise_index is None:
-            noise_index = self.xp.zeros(num_bin, dtype=self.xp.int32)
-        elif noise_index.dtype == self.xp.int64:
-            noise_index = noise_index.astype(self.xp.int32)
-
-        assert data_index.dtype == self.xp.int32
-        assert noise_index.dtype == self.xp.int32
-        assert data_index.max() < num_data
-        assert noise_index.max() < num_noise
-
-        eps_theta, scales = self._resolve_eps_and_scales(
-            nparams, param_eps, param_scales, param_eps_relative,
-        )
-
-        grad_out = self.xp.zeros(num_bin * nparams, dtype=self.xp.float64)
         params_in = params_tmp.flatten().copy()
 
-        if use_spline:
-            coarse_dt = _SECONDS_PER_YEAR / float(coarse_pts_per_year)
-            self.backend.GBComputationGroupWrap().gb_wdm_spline_get_ll_grad(
-                grad_out,
-                self.cpp_orbits,
-                self.cpp_tdi_config,
-                self.cpp_wdm_lookup_table,
-                self.cpp_wdm,
-                params_in,
-                data_index,
-                noise_index,
-                eps_theta,
-                num_bin,
-                nparams,
-                self.T,
-                self.t_ref,
-                self.backend.TDITypeDict[self.tdi_type],
-                coarse_dt,
-            )
+        if use_layer_groups:
+            groups = self._layer_groups(
+                params_tmp, group_band_layers, margin_layers,
+                data_index=data_index, noise_index=noise_index)
         else:
-            deriv_delta_t = 500.0
-            self.backend.GBComputationGroupWrap().gb_wdm_get_ll_grad(
-                grad_out,
-                self.cpp_orbits,
-                self.cpp_tdi_config,
-                self.cpp_wdm_lookup_table,
-                self.cpp_wdm,
-                params_in,
-                data_index,
-                noise_index,
-                eps_theta,
-                num_bin,
-                nparams,
-                self.T,
-                self.t_ref,
-                self.backend.TDITypeDict[self.tdi_type],
-                deriv_delta_t,
-            )
-        grad = grad_out.reshape(num_bin, nparams)
-        if scales is not None:
-            # convert dL/dtheta -> dL/d(eta) = Delta_theta * dL/dtheta
-            grad = grad * scales[None, :]
-        return grad
+            groups = self._empty_groups(num_bin)
+
+        if self.backend.name == "fastlisaresponse_jax":
+            grad_out = np.zeros(num_bin * nparams, dtype=np.float64)
+        else:
+            grad_out = self.xp.zeros(num_bin * nparams, dtype=self.xp.float64)
+
+        self._kernel("get_ll_grad")(
+            grad_out,
+            self.cpp_orbits, self.cpp_tdi_config,
+            params_in, data_index, noise_index,
+            self.chunk_t_starts,
+            self.chunk_keep_lo, self.chunk_keep_hi,
+            self.chunk_n_global_offset,
+            self.wdm_window,
+            wdm_holder.linear_data_arr[0],
+            wdm_holder.linear_psd_arr[0],
+            self.n_chunks, int(num_bin), int(nparams),
+            int(self.Nf), int(self.Nt), int(self.Nt_sub), int(self.log2_Nt_sub),
+            int(self.N_sparse), int(self.log2_N_sparse),
+            int(self.nchannels), int(self.n_rfft_chunk),
+            float(self.T_chunk), float(self.dt),
+            float(self.T), float(self.t_ref),
+            float(self.resolved_tukey_alpha), int(grid_dim),
+            int(self.N_cp_sig), int(self.N_cp_orbit),
+            np.asarray(groups["binary_perm"],  dtype=np.int32),
+            np.asarray(groups["group_starts"], dtype=np.int32),
+            np.asarray(groups["group_ends"],   dtype=np.int32),
+            np.asarray(groups["group_m_lo"],   dtype=np.int32),
+            np.asarray(groups["group_m_hi"],   dtype=np.int32),
+            int(groups["n_groups"]),
+        )
+
+        return self.xp.asarray(grad_out).reshape(num_bin, nparams)
 
     def get_swap_ll_grad_wdm(self, params_add, params_remove, wdm_holder,
-                             param_eps_add=None, param_eps_remove=None,
-                             param_scales_add=None, param_scales_remove=None,
-                             param_eps_relative=1.0e-6,
                              data_index=None, noise_index=None,
-                             convert_to_ra_dec: bool = True):
+                             convert_to_ra_dec: bool = True,
+                             grid_dim: int = 0,
+                             use_layer_groups: bool = True,
+                             group_band_layers: int = 5,
+                             margin_layers: int = 0):
         """Chain-rule gradient of :meth:`get_swap_ll_wdm`.
 
-        See :meth:`get_ll_grad_wdm` for the meaning of ``param_scales`` and
-        ``param_eps_relative``.  The swap variant accepts independent
-        ``param_scales_add`` / ``param_scales_remove`` so the add and remove
-        sides can be scaled by their own natural widths.
-
-        Returns
-        -------
-        grad_add, grad_remove : (num_bin, nparams) each
-            Partial derivatives of  ll_diff = L(after swap) - L(before swap)
-            with respect to ``theta_add`` and ``theta_remove`` respectively.
-            Returned in rescaled (eta) coordinates when the corresponding
-            ``param_scales_{add,remove}`` is provided.
+        Dispatches to ``gb_wdm_het_swap_ll_grad`` on the backend.
+        Returns ``(grad_add, grad_remove)``, each ``(num_bin, nparams)``.
         """
         params_add_tmp = self.xp.asarray(self.xp.atleast_2d(params_add)).copy()
         params_remove_tmp = self.xp.asarray(self.xp.atleast_2d(params_remove)).copy()
         assert params_add_tmp.shape == params_remove_tmp.shape, (
-            f"params_add {params_add_tmp.shape} != params_remove {params_remove_tmp.shape}"
+            f"params_add {params_add_tmp.shape} != "
+            f"params_remove {params_remove_tmp.shape}"
         )
-        num_bin, nparams = params_add_tmp.shape
+        num_bin = params_add_tmp.shape[0]
+        nparams = int(self._NPARAMS)
+        assert params_add_tmp.shape[1] == nparams, (
+            f"params has {params_add_tmp.shape[1]} columns, expected {nparams}")
 
         if convert_to_ra_dec:
-            for params_tmp in (params_add_tmp, params_remove_tmp):
-                lam = params_tmp[:, -2].copy()
-                beta = params_tmp[:, -1].copy()
+            for p_tmp in (params_add_tmp, params_remove_tmp):
+                lam = p_tmp[:, -2].copy()
+                beta = p_tmp[:, -1].copy()
                 lam, beta = ecliptic_to_icrs(lam, beta)
-                params_tmp[:, -2] = lam
-                params_tmp[:, -1] = beta
+                p_tmp[:, -2] = lam
+                p_tmp[:, -1] = beta
 
         num_data = num_noise = len(wdm_holder)
+        data_index, noise_index = self._prep_indices(
+            num_bin, num_data, num_noise, data_index, noise_index)
 
-        self.cpp_wdm = self.backend.WDMDomainWrap(
-            wdm_holder.linear_data_arr[0],
-            wdm_holder.linear_psd_arr[0],
-            self.wdm_lookup_table.settings.layer_df,
-            self.wdm_lookup_table.settings.layer_dt,
-            self.wdm_lookup_table.settings.Nf,
-            self.wdm_lookup_table.settings.Nt,
-            self.tdi_config.nchannels,
-            self.wdm_lookup_table.settings.ind_min_t,
-            self.wdm_lookup_table.settings.ind_max_t,
-            self.wdm_lookup_table.settings.ind_min_f,
-            self.wdm_lookup_table.settings.ind_max_f,
-            num_data,
-            num_noise,
-        )
-
-        if data_index is None:
-            data_index = self.xp.zeros(num_bin, dtype=self.xp.int32)
-        elif data_index.dtype == self.xp.int64:
-            data_index = data_index.astype(self.xp.int32)
-
-        if noise_index is None:
-            noise_index = self.xp.zeros(num_bin, dtype=self.xp.int32)
-        elif noise_index.dtype == self.xp.int64:
-            noise_index = noise_index.astype(self.xp.int32)
-
-        assert data_index.dtype == self.xp.int32
-        assert noise_index.dtype == self.xp.int32
-        assert data_index.max() < num_data
-        assert noise_index.max() < num_noise
-
-        eps_theta_add, scales_add = self._resolve_eps_and_scales(
-            nparams, param_eps_add, param_scales_add, param_eps_relative,
-        )
-        eps_theta_remove, scales_remove = self._resolve_eps_and_scales(
-            nparams, param_eps_remove, param_scales_remove, param_eps_relative,
-        )
-
-        grad_add_out = self.xp.zeros(num_bin * nparams, dtype=self.xp.float64)
-        grad_remove_out = self.xp.zeros(num_bin * nparams, dtype=self.xp.float64)
-        params_add_in = params_add_tmp.flatten().copy()
+        params_add_in    = params_add_tmp.flatten().copy()
         params_remove_in = params_remove_tmp.flatten().copy()
 
-        deriv_delta_t = 500.0
-        self.backend.GBComputationGroupWrap().gb_wdm_swap_ll_grad(
-            grad_add_out,
-            grad_remove_out,
-            self.cpp_orbits,
-            self.cpp_tdi_config,
-            self.cpp_wdm_lookup_table,
-            self.cpp_wdm,
-            params_add_in,
-            params_remove_in,
-            data_index,
-            noise_index,
-            eps_theta_add,
-            eps_theta_remove,
-            num_bin,
-            nparams,
-            self.T,
-            self.t_ref,
-            self.backend.TDITypeDict[self.tdi_type],
-            deriv_delta_t,
+        if use_layer_groups:
+            groups = self._swap_layer_groups(
+                params_add_tmp, params_remove_tmp,
+                group_band_layers, margin_layers,
+                data_index=data_index, noise_index=noise_index)
+        else:
+            groups = self._empty_swap_groups(num_bin)
+
+        if self.backend.name == "fastlisaresponse_jax":
+            grad_add_out    = np.zeros(num_bin * nparams, dtype=np.float64)
+            grad_remove_out = np.zeros(num_bin * nparams, dtype=np.float64)
+        else:
+            grad_add_out    = self.xp.zeros(num_bin * nparams,
+                                            dtype=self.xp.float64)
+            grad_remove_out = self.xp.zeros(num_bin * nparams,
+                                            dtype=self.xp.float64)
+
+        self._kernel("swap_ll_grad")(
+            grad_add_out, grad_remove_out,
+            self.cpp_orbits, self.cpp_tdi_config,
+            params_add_in, params_remove_in,
+            data_index, noise_index,
+            self.chunk_t_starts,
+            self.chunk_keep_lo, self.chunk_keep_hi,
+            self.chunk_n_global_offset,
+            self.wdm_window,
+            wdm_holder.linear_data_arr[0],
+            wdm_holder.linear_psd_arr[0],
+            self.n_chunks, int(num_bin), int(nparams),
+            int(self.Nf), int(self.Nt), int(self.Nt_sub), int(self.log2_Nt_sub),
+            int(self.N_sparse), int(self.log2_N_sparse),
+            int(self.nchannels), int(self.n_rfft_chunk),
+            float(self.T_chunk), float(self.dt),
+            float(self.T), float(self.t_ref),
+            float(self.resolved_tukey_alpha), int(grid_dim),
+            int(self.N_cp_sig), int(self.N_cp_orbit),
+            np.asarray(groups["binary_perm"],  dtype=np.int32),
+            np.asarray(groups["group_starts"], dtype=np.int32),
+            np.asarray(groups["group_ends"],   dtype=np.int32),
+            np.asarray(groups["group_m_lo"],   dtype=np.int32),
+            np.asarray(groups["group_m_hi"],   dtype=np.int32),
+            int(groups["n_groups"]),
+            np.asarray(groups["pair_m_lo_b"],  dtype=np.int32),
+            np.asarray(groups["pair_m_hi_b"],  dtype=np.int32),
         )
-        grad_add = grad_add_out.reshape(num_bin, nparams)
-        grad_remove = grad_remove_out.reshape(num_bin, nparams)
-        if scales_add is not None:
-            grad_add = grad_add * scales_add[None, :]
-        if scales_remove is not None:
-            grad_remove = grad_remove * scales_remove[None, :]
+
+        grad_add    = self.xp.asarray(grad_add_out).reshape(num_bin, nparams)
+        grad_remove = self.xp.asarray(grad_remove_out).reshape(num_bin, nparams)
         return grad_add, grad_remove
 
-    def fill_global_wdm(self, templates, params, wdm_holder, convert_to_ra_dec: bool = True, data_index=None, factors=None,
-                        use_spline: bool = False, coarse_pts_per_year: int = 256):
-        """Scatter per-source WDM contributions into a global template buffer.
+    def fill_global_wdm(self, params, templates,
+                        convert_to_ra_dec: bool = True,
+                        data_index=None, factors=None,
+                        grid_dim: int = 0):
+        """Scatter per-source chunked-heterodyne WDM templates into a global buffer.
 
-        Set ``use_spline=True`` to dispatch to ``gb_wdm_spline_fill_global``,
-        which replaces fast_wdm_inner with cubic-spline interpolation of the
-        get_tdi outputs on a coarse uniform time grid of
-        ``coarse_pts_per_year`` points per Julian year.
+        Argument order matches the other ``*_wdm`` methods on this
+        class: ``params`` (1D or 2D ndarray; lists auto-promoted via
+        ``atleast_2d`` internally) is the first positional argument,
+        followed by the output ``templates`` buffer.
 
-        With ``force_backend='jax'`` the ``templates`` buffer must be a
-        *numpy* array (not jnp). JAX arrays are immutable; the JAX
-        kernel internally uses a functional ``segment_sum`` and writes
-        the result back into the numpy buffer via standard host-side
-        assignment. The caller's ``templates`` reference is mutated in
-        place, matching the C++ contract.
+        ``templates`` may be supplied as ``(nchannels, Nf, Nt)``,
+        ``(num_templates, nchannels, Nf, Nt)``, or already flattened to
+        ``(num_templates * nchannels * Nf * Nt,)``. With
+        ``force_backend='jax'`` it must be a *numpy* array (not jnp),
+        since JAX arrays are immutable -- the kernel writes back into
+        the numpy buffer to honour the C++ in-place contract.
+
+        Args:
+            params: ``(num_bin, nparams)`` array (1D auto-promoted).
+            templates: output buffer (see shapes above). Pre-zero
+                before calling -- the kernel accumulates.
+            convert_to_ra_dec: ecliptic-to-ICRS conversion for the last
+                two parameter columns.
+            data_index: per-binary slab index into ``templates``.
+                Default = all zeros (single shared template slab).
+            factors: per-binary multiplicative factor at the
+                accumulation step. Default ``+1``; pass ``-1`` to remove.
+            grid_dim: CUDA launch grid size (use 0 to default to
+                ``n_chunks``).
         """
         if self.backend.name == "fastlisaresponse_jax":
-            # Accept numpy on the JAX path -- jnp arrays are immutable
-            # so the in-place buffer contract would silently break.
             assert isinstance(templates, np.ndarray), (
                 "On the JAX backend, ``templates`` must be a numpy "
-                "ndarray (not jnp.ndarray). The kernel mutates it "
-                "in place to match the C++ contract."
-            )
+                "ndarray (not jnp.ndarray). The kernel writes back to "
+                "it in place to match the C++ contract.")
         else:
             assert isinstance(templates, self.xp.ndarray)
 
         if templates.ndim == 1:
-            num_templates = int(templates.shape[-1] / (self.wdm_lookup_table.nchannels * self.wdm_lookup_table.settings.Nf_active * self.wdm_lookup_table.settings.Nt_active))
-            assert num_templates * self.wdm_lookup_table.nchannels * self.wdm_lookup_table.settings.Nf_active * self.wdm_lookup_table.settings.Nt_active == templates.shape[-1]
-            nchannels = self.wdm_lookup_table.nchannels
-            _Nf_active = self.wdm_lookup_table.settings.Nf_active
-            _Nt_active = self.wdm_lookup_table.settings.Nt_active
-
-        elif templates.ndim == 2:
-            raise ValueError("Template must be 3D (nchannels, Nf_active, Nt_active), 4D (num_templates, nchannels, Nf_active, Nt_active), or flattended to 1D.")
+            per_template = self.nchannels * self.Nf * self.Nt
+            num_templates = int(templates.shape[-1] // per_template)
+            assert num_templates * per_template == templates.shape[-1], (
+                f"templates flat size {templates.shape[-1]} not divisible "
+                f"by nchannels*Nf*Nt = {per_template}")
         elif templates.ndim == 3:
+            nch, _Nf, _Nt = templates.shape
+            assert (nch, _Nf, _Nt) == (self.nchannels, self.Nf, self.Nt)
             num_templates = 1
-            nchannels, _Nf_active, _Nt_active = templates.shape
-
         elif templates.ndim == 4:
-            num_templates, nchannels, _Nf_active, _Nt_active = templates.shape
-            
-        assert (
-            nchannels == self.wdm_lookup_table.nchannels
-            and _Nf_active == self.wdm_lookup_table.Nf_active
-            and _Nt_active == self.wdm_lookup_table.Nt_active
-        )
-        # templates = templates.flatten()
-       
+            num_templates, nch, _Nf, _Nt = templates.shape
+            assert (nch, _Nf, _Nt) == (self.nchannels, self.Nf, self.Nt)
+        else:
+            raise ValueError(
+                "templates must be 3D (nchannels, Nf, Nt), 4D "
+                "(num_templates, nchannels, Nf, Nt), or flat 1D.")
+
         params_tmp = self.xp.atleast_2d(self.xp.asarray(params)).copy()
-        
+        num_bin = params_tmp.shape[0]
+        nparams = int(self._NPARAMS)
+        assert params_tmp.shape[1] == nparams, (
+            f"params has {params_tmp.shape[1]} columns, expected {nparams}")
+
         if convert_to_ra_dec:
             lam = params_tmp[:, -2].copy()
             beta = params_tmp[:, -1].copy()
@@ -874,84 +728,72 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             params_tmp[:, -2] = lam
             params_tmp[:, -1] = beta
 
-        num_bin = params_tmp.shape[0]
         params_in = params_tmp.flatten().copy()
-
-        # TODO: move this part
-        # TODO: need to check for num_data, num_noise
-        self.cpp_wdm = self.backend.WDMDomainWrap(
-            wdm_holder.linear_data_arr[0],
-            wdm_holder.linear_psd_arr[0],
-            self.wdm_lookup_table.settings.layer_df, 
-            self.wdm_lookup_table.settings.layer_dt,
-            self.wdm_lookup_table.settings.Nf, # calculates Nf_active inside
-            self.wdm_lookup_table.settings.Nt, # calculates Nt_active inside
-            self.tdi_config.nchannels,
-            self.wdm_lookup_table.settings.ind_min_t,
-            self.wdm_lookup_table.settings.ind_max_t,
-            self.wdm_lookup_table.settings.ind_min_f,
-            self.wdm_lookup_table.settings.ind_max_f,
-            num_templates, # data not needed here
-            num_templates  # noise not needed here
-        )
 
         if data_index is None:
             data_index = self.xp.zeros(num_bin, dtype=self.xp.int32)
-        elif data_index.dtype == self.xp.int64:
-            _data_index = data_index.copy().astype(self.xp.int32)
-            del data_index
-            data_index = _data_index
+        else:
+            data_index = self.xp.asarray(data_index).astype(self.xp.int32)
+        assert int(data_index.max()) < num_templates
 
-        # Per-source multiplicative factor applied at the accumulation step
-        # (template[m,n] += factor * w_mn). Default +1 (add); pass -1 to
-        # remove a source. Mirrors gbgpu.generate_global_template's factors.
+        # factor +1 (add) / -1 (remove). Mirrors
+        # gbgpu.generate_global_template's factors API.
         if factors is None:
             factors = self.xp.ones(num_bin, dtype=self.xp.float64)
         else:
-            factors = self.xp.ascontiguousarray(self.xp.asarray(factors, dtype=self.xp.float64))
+            factors = self.xp.ascontiguousarray(
+                self.xp.asarray(factors, dtype=self.xp.float64))
             assert factors.shape == (num_bin,), (
-                f"factors must have shape ({num_bin},), got {factors.shape}"
-            )
+                f"factors must have shape ({num_bin},), got {factors.shape}")
 
-        assert data_index.max() < num_templates
-        nparams = 9
+        self._kernel("fill_global")(
+            templates,
+            self.cpp_orbits, self.cpp_tdi_config,
+            params_in, factors,
+            self.chunk_t_starts,
+            self.chunk_keep_lo, self.chunk_keep_hi,
+            self.chunk_n_global_offset,
+            self.wdm_window,
+            self.n_chunks, int(num_bin), int(nparams),
+            int(self.Nf), int(self.Nt), int(self.Nt_sub), int(self.log2_Nt_sub),
+            int(self.N_sparse), int(self.log2_N_sparse),
+            int(self.nchannels), int(self.n_rfft_chunk),
+            float(self.T_chunk), float(self.dt),
+            float(self.T), float(self.t_ref),
+            float(self.resolved_tukey_alpha), int(grid_dim),
+            int(self.N_cp_sig), int(self.N_cp_orbit),
+        )
 
-        if use_spline:
-            coarse_dt = _SECONDS_PER_YEAR / float(coarse_pts_per_year)
-            self.backend.GBComputationGroupWrap().gb_wdm_spline_fill_global(
-                templates,
-                self.cpp_orbits,
-                self.cpp_tdi_config,
-                self.cpp_wdm_lookup_table,
-                self.cpp_wdm,
-                params_in,
-                data_index,
-                factors,
-                num_bin,
-                nparams,
-                self.T,
-                self.t_ref,
-                self.backend.TDITypeDict[self.tdi_type],
-                coarse_dt,
-            )
-        else:
-            deriv_delta_t = 500.0  # seconds
-            self.backend.GBComputationGroupWrap().gb_wdm_fill_global(
-                templates,
-                self.cpp_orbits,
-                self.cpp_tdi_config,
-                self.cpp_wdm_lookup_table,
-                self.cpp_wdm,
-                params_in,
-                data_index,
-                factors,
-                num_bin,
-                nparams,
-                self.T,
-                self.t_ref,
-                self.backend.TDITypeDict[self.tdi_type],
-                deriv_delta_t
-            )
+
+class SOBBHWDMComputations(GBWDMComputations):
+    """Stellar-origin BBH analog of :class:`GBWDMComputations`.
+
+    Same chunked-heterodyne pipeline as the GB version, only the
+    routing constants differ:
+
+    * Backend wrap class:
+      ``SOBBHComputationGroupWrap`` instead of ``GBComputationGroupWrap``.
+    * Kernel-name family:
+      ``sobbh_wdm_het_{fill_global, get_ll, swap_ll, ...}``.
+    * Per-source parameter count: ``11`` (vs 9 for GB).
+    * Carrier-frequency column for layer-grouping: ``params[:, 5] = f_low``.
+
+    Source intrinsic amp/phase are computed by the C++ side's
+    ``SOBBHTDIonTheFly`` pointer (and by :class:`JaxSOBBHSource` on the
+    JAX backend), so the only difference at the Python layer is which
+    backend wrap class is invoked and how the parameter vector is
+    interpreted -- everything else (chunk geometry, WDM window,
+    layer-grouping, narrow-band dispatch, gradient hooks, fill_global)
+    is inherited unchanged.
+
+    Param order (matches ``SOBBHTDIonTheFly``):
+        ``(m1, m2, s1, s2, distance, f_low, phi_c, inc, psi, lam, beta)``.
+    """
+
+    _WRAP_ATTR = "SOBBHComputationGroupWrap"
+    _METHOD_PREFIX = "sobbh_wdm_het"
+    _NPARAMS = 11
+    _F0_PARAM_INDEX = 5   # SOBBHTDIonTheFly: params[5] = f_low
 
 
 class GBFDComputations(FastLISAResponseParallelModule):

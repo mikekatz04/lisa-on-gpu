@@ -35,10 +35,11 @@ from __future__ import annotations
 
 from .wavelet_lookup import WaveletLookupTableWrapJAX
 from .wdm_domain import WDMDomainWrapJAX
-from .computation_group import GBComputationGroupWrapJAX
+from .computation_group import GBComputationGroupWrapJAX, SOBBHComputationGroupWrapJAX
 
 __all__ = [
     "WaveletLookupTableWrapJAX",
     "WDMDomainWrapJAX",
     "GBComputationGroupWrapJAX",
+    "SOBBHComputationGroupWrapJAX",
 ]

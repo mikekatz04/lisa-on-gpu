@@ -41,3 +41,25 @@ backends (GPU C++ / CPU C++ / JAX), follow this hierarchy:
 
 **Workflow for a new feature.** GPU C++ → CPU C++ via `#ifdef` → JAX
 with JAX-native idioms → cross-backend inner-product validation.
+
+
+## No backend strings as function kwargs (sprint-wide rule)
+
+Backend selection MUST happen at instantiation, not in method
+signatures. Subclass :class:`FastLISAResponseParallelModule` (or
+equivalent ParallelModuleBase descendant) with ``force_backend=...``;
+all methods dispatch via ``self.backend`` / ``self.backend.xp`` /
+``self.backend.name``.
+
+- **Allowed:** ``GBWDMHeterodyne(force_backend="cpu")``,
+  ``GBFDComputations(force_backend="jax")``.
+- **Forbidden in method signatures:** ``backend="jax"``,
+  ``backend="cpp"``, ``use_cpp=True``, ``use_jax=True``.
+- Method names MAY carry a backend suffix (e.g. ``get_ll_grad_jax``)
+  when the implementation is intrinsically tied to that backend, but
+  the caller picks which method to call -- not a runtime kwarg.
+
+One instance = one backend keeps ``xp`` arrays, kernels, and dispatch
+consistent. Cross-backend usage (e.g. evaluating gradients on a CPU
+instance via a separate JAX setup) belongs to a separate instance,
+not a shared method-level flag.

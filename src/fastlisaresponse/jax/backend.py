@@ -68,6 +68,7 @@ def _jax_methods_loader() -> FastLISAResponseBackendMethods:
     from .wrappers import GBTDIonTheFlyWrapJAX, SOBBHTDIonTheFlyWrapJAX
     from .wdm import (
         GBComputationGroupWrapJAX,
+        SOBBHComputationGroupWrapJAX,
         WaveletLookupTableWrapJAX,
         WDMDomainWrapJAX,
     )
@@ -106,6 +107,7 @@ def _jax_methods_loader() -> FastLISAResponseBackendMethods:
         FDDomainWrap=_unimplemented_slot("FDDomainWrap"),
         WaveletLookupTableWrap=WaveletLookupTableWrapJAX,
         GBComputationGroupWrap=GBComputationGroupWrapJAX,
+        SOBBHComputationGroupWrap=SOBBHComputationGroupWrapJAX,
         TDITypeDict=TDI_TYPE_DICT,
         xp=jnp,
     )

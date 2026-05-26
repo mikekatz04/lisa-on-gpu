@@ -1524,8 +1524,34 @@ CUDA_SYNC_THREADS;
 // memory for nchannels=3: ~40 KB per block (2 KB t_sparse + 6 KB
 // tdi_amp + 6 KB tdi_phase + 2 KB phi_ref + 12 KB tdi_channels + 12 KB
 // slow). Stays well under the 48-100 KB CUDA shared-memory budget.
+//
+// On CPU the CUDA_SHARED macro stubs to nothing (per
+// GPUBackendTools/gbt_global.h), so these arrays land on the
+// stack/heap with no shared-mem budget constraint. That lets the
+// CPU build use a much larger N_sparse for the "1 chunk for the
+// whole obs" experiment (N_sparse must scale with T_chunk so the
+// sparse slow-signal control points still resolve year-scale GB
+// Doppler); the GPU build keeps the original 256 cap to respect
+// the shared-mem budget. JAX is independent.
+#ifdef __CUDACC__
 #define FAST_WDM_N_SPARSE_MAX  256
+#else
+#define FAST_WDM_N_SPARSE_MAX  4096
+#endif
 #define FAST_WDM_NCHANNELS_MAX 3
+
+// Max Nt_sub for the per-chunk WDM iFFT scratch (``layer_scratch``).
+// On GPU this scratch lives in CUDA_SHARED memory (replacing the
+// previous global-mem workspace ``ws_layer_scratch_all``) -- avoids
+// the ~400-cycle global-mem latency on every iFFT element access.
+// On CPU it becomes a stack array; 4096-cmplx = 65 KB, fine on the
+// default 8 MB stack. Sizes match FAST_WDM_N_SPARSE_MAX since
+// Nt_sub <= N_sparse in all current configs.
+#ifdef __CUDACC__
+#define FAST_WDM_NT_SUB_MAX  256
+#else
+#define FAST_WDM_NT_SUB_MAX  4096
+#endif
 
 // Source-signal spline cache (within-(chunk, binary) optimization).
 // Selected at RUNTIME per kernel call via the ``N_cp_sig`` parameter:
@@ -1542,7 +1568,18 @@ CUDA_SYNC_THREADS;
 // Per the density study at the half-day-wavelet baseline,
 // N_cp_sig=48 -> mm < 4e-11 (GB) / 4e-9 (SOBBH) vs lisatools.
 // See CHUNKED_HET_DESIGN_NOTES.md.
-#define FAST_WDM_N_CP_SIG_MAX 64
+//
+// GPU keeps the validated 48-point cap to keep CUDA_SHARED tight. CPU
+// bumps to 2048 so 1-chunk-per-obs configs (where T_chunk grows from
+// ~28 d to ~1 yr) can keep the same ~6-hour control-point spacing
+// the 13-chunk run had. Gated by ``#ifdef __CUDACC__`` -- on CPU,
+// CUDA_SHARED stubs to nothing so the larger cap costs only
+// stack/heap.
+#ifdef __CUDACC__
+#define FAST_WDM_N_CP_SIG_MAX 48
+#else
+#define FAST_WDM_N_CP_SIG_MAX 2048
+#endif
 
 // ---------------------------------------------------------------------------
 // Threading model notes for upcoming gb_wdm_het_* kernels
@@ -2212,7 +2249,9 @@ inline void gb_chunk_fd_to_wdm(
     int n_rfft_chunk,        // = Nf*Nt_sub/2 + 1
     double data_dt,
     int nchannels,
-    cmplx *layer_scratch     // (Nt_sub,) per-block iFFT scratch
+    cmplx *layer_scratch,    // (Nt_sub,) per-block iFFT scratch
+    int m_lo,                // outer loop lower bound (inclusive)
+    int m_hi                 // outer loop upper bound (exclusive)
 )
 {
     const int N_chunk_td = Nf * Nt_sub;
@@ -2234,10 +2273,18 @@ inline void gb_chunk_fd_to_wdm(
     //
     // NOTE: this implementation processes nchannels x (Nf+1) layers in a
     // serial outer loop. Each iteration reuses layer_scratch.
+    //
+    // m_lo / m_hi (inclusive / exclusive) restrict the outer m-loop to a
+    // narrow band -- a ~Nf / band-width speedup when use_layer_groups is
+    // active. Pass ``m_lo=0, m_hi=Nf+1`` for the full-Nf (legacy) path.
+    // Layers outside [m_lo, m_hi) stay at the caller's pre-zero -- that
+    // matches the inner-product / accumulator m-band the layer-groups
+    // path already iterates, and matches the mm5/mm2 narrow-band
+    // physical model for GBs (see ``gb_chunked_prior_draws.py``).
 
     for (int c = 0; c < nchannels; ++c) {
         const cmplx *fd_c = &chunk_fd[c * n_rfft_chunk];
-        for (int m = 0; m <= Nf; ++m) {
+        for (int m = m_lo; m < m_hi; ++m) {
 
             // --- 1) build windowed FD slice (length Nt_sub) -----------------
             for (int k_idx = THREAD_START; k_idx < Nt_sub; k_idx += BLOCK_INCR) {
@@ -2414,12 +2461,19 @@ void wdm_het_fill_global_kernel(
     CUDA_SHARED OrbitsSplineCache orbit_cache_storage;
     const bool use_orbit_cache = (N_cp_orbit > 0 && N_cp_orbit <= FAST_WDM_N_CP_ORBIT_MAX);
 
+    // Per-block CUDA_SHARED layer iFFT scratch -- avoids the per-element
+    // global-mem latency that the previous heap-resident
+    // ``ws_layer_scratch_all`` slice incurred. On CPU CUDA_SHARED stubs
+    // to nothing so this lands on the stack; sized at
+    // FAST_WDM_NT_SUB_MAX (256 GPU / 4096 CPU).
+    CUDA_SHARED cmplx layer_scratch[FAST_WDM_NT_SUB_MAX];
+
     // OUTER: chunks (one block per chunk). The fill_global per-binary
     // contention is per (chunk, m, n_local) -> different global pixel
     // per binary, so no atomic needed on the template_fill write.
     for (int j = BLOCK_START; j < n_chunks; j += GRID_INCR) {
         cmplx  *chunk_fd       = &ws_chunk_fd_all[(size_t) j * nchannels * n_rfft_chunk];
-        cmplx  *layer_scratch  = &ws_layer_scratch_all[(size_t) j * Nt_sub];
+        // layer_scratch lives in CUDA_SHARED (declared at kernel top).
         double *w_chunk        = &ws_chunk_wdm_all[(size_t) j * nchannels * Nf * Nt_sub];
         cmplx  *tdi_channels_buf = &ws_tdi_channels_all[(size_t) j * nchannels * N_sparse];
         void   *get_tdi_scratch = (char *) get_tdi_scratch_all
@@ -2446,9 +2500,24 @@ void wdm_het_fill_global_kernel(
         }
 
         // INNER: binaries
+        const double layer_df = 1.0 / (2.0 * (double) Nf * dt);
         for (int bin_i = 0; bin_i < num_bin; ++bin_i) {
             double *params = &params_all[(size_t) bin_i * nparams];
             const double factor = factors_all[bin_i];
+
+            // Per-source narrow band -- matches the GROUP_BAND_LAYERS=5
+            // convention used by get_ll / swap_ll: ``[m_floor - 3,
+            // m_floor + 3)`` (asymmetric in the mm5 sense; see sprint
+            // root CLAUDE.md). Layers outside stay at the caller's
+            // pre-zero of template_fill (and at zero in w_chunk).
+            // This is the physical narrow-band GB template model --
+            // edge effects beyond the band are spectral leakage we
+            // already validate via mm5 ~1e-9.
+            const int m_floor_src = (int) (params[1] / layer_df);
+            int bin_m_lo = m_floor_src - 3;
+            int bin_m_hi = m_floor_src + 3;
+            if (bin_m_lo < 0)   bin_m_lo = 0;
+            if (bin_m_hi > Nf)  bin_m_hi = Nf;
 
             // Zero per-chunk workspaces. (fast_wdm_inner_heterodyne writes
             // only N_sparse bins of chunk_fd, so the rest must be zero;
@@ -2490,19 +2559,23 @@ void wdm_het_fill_global_kernel(
             }
             CUDA_SYNC_THREADS;
 
-            // 2) chunk FD -> chunk WDM
+            // 2) chunk FD -> chunk WDM. Restrict to the per-source
+            // narrow band [bin_m_lo, bin_m_hi) computed above.
             gb_chunk_fd_to_wdm(
                 w_chunk, chunk_fd, wdm_window,
                 Nf, Nt_sub, log2_Nt_sub, n_rfft_chunk, dt, nchannels,
-                layer_scratch
+                layer_scratch,
+                /*m_lo=*/bin_m_lo, /*m_hi=*/bin_m_hi
             );
             CUDA_SYNC_THREADS;
 
-            // 3) stitch into template_fill
+            // 3) stitch into template_fill. Only m in [bin_m_lo, bin_m_hi)
+            //    has nonzero w_chunk for this source; layers outside
+            //    that band are at zero from the pre-zero of w_chunk.
             //    template_fill[c, m, n_global_lo + (n - keep_lo)] +=
             //        factor * w_chunk[c, m, n]   for n in [keep_lo, keep_hi)
             for (int c = 0; c < nchannels; ++c) {
-                for (int m = 0; m < Nf; ++m) {
+                for (int m = bin_m_lo; m < bin_m_hi; ++m) {
                     for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
                          n_loc += BLOCK_INCR) {
                         const int n_glob = n_global_lo + (n_loc - keep_lo);
@@ -2642,39 +2715,33 @@ void wdm_het_get_ll_kernel(
     CUDA_SHARED OrbitsSplineCache orbit_cache_storage;
     const bool use_orbit_cache = (N_cp_orbit > 0 && N_cp_orbit <= FAST_WDM_N_CP_ORBIT_MAX);
 
+    // Per-block CUDA_SHARED layer iFFT scratch -- avoids the per-element
+    // global-mem latency that the previous heap-resident
+    // ``ws_layer_scratch_all`` slice incurred. On CPU CUDA_SHARED stubs
+    // to nothing so this lands on the stack; sized at
+    // FAST_WDM_NT_SUB_MAX (256 GPU / 4096 CPU).
+    CUDA_SHARED cmplx layer_scratch[FAST_WDM_NT_SUB_MAX];
+
     // Per-thread partial accumulators (one slot per thread; reduced at end).
     // Sized at a generous upper bound; THREAD_START / BLOCK_INCR controls
     // the active extent.
     CUDA_SHARED double partial_dh[FAST_WDM_N_SPARSE_MAX];   // reuse N_sparse cap
     CUDA_SHARED double partial_hh[FAST_WDM_N_SPARSE_MAX];
 
-    // Per-thread local cache for data + invC. Populated once per (chunk,
-    // group) and reused across all binaries in the group -- replaces
-    // num_bin global reads of the same (c, m, n_loc) tuples with a single
-    // populate-pass + per-binary local reads.
-    //
-    // On GPU: sized for nchannels(3) * m_band(<= 8) * n_per_thread(<= 4)
-    // = up to 96 entries per thread. Compiler may keep small caches in
-    // registers and spill larger ones into CUDA local memory (L1-cached);
-    // either way it's much cheaper than per-binary global reads.
-    //
-    // On CPU: NUM_THREADS_HERE = 1 so a single thread owns the entire
-    // group (~3 * 8 * 256 = 6144 entries for Nt_sub=256) -- this is too
-    // big for stack-allocated local arrays, so we set the cap to 1 and
-    // the kernel falls back to the direct-read path. Same code path on
-    // both platforms.
-#ifdef __CUDACC__
-    constexpr int WDM_KEEP_PER_THREAD_MAX = 96;
-#else
-    constexpr int WDM_KEEP_PER_THREAD_MAX = 1;
-#endif
-    double thr_data_cache[WDM_KEEP_PER_THREAD_MAX];
-    double thr_invC_cache[WDM_KEEP_PER_THREAD_MAX];
+    // Per-thread data/invC cache REMOVED -- the dynamic slot indexing
+    // prevented NVCC from keeping the arrays in registers (they spilled
+    // to CUDA local memory, DRAM-backed with L1 caching), making the
+    // cache equivalent in latency to direct global reads. On CPU the
+    // cache had ``WDM_KEEP_PER_THREAD_MAX = 1`` and the code already
+    // took the direct-read branch. The narrow-band per-block working
+    // set fits comfortably in L1/L2, so direct reads here are fast
+    // automatically via the hardware cache. See profile + design
+    // discussion in the sprint root.
 
     // OUTER: chunks (one block per chunk).
     for (int j = BLOCK_START; j < n_chunks; j += GRID_INCR) {
         cmplx  *chunk_fd      = &ws_chunk_fd_all[(size_t) j * nchannels * n_rfft_chunk];
-        cmplx  *layer_scratch = &ws_layer_scratch_all[(size_t) j * Nt_sub];
+        // layer_scratch lives in CUDA_SHARED (declared at kernel top).
         double *w_chunk       = &ws_chunk_wdm_all[(size_t) j * nchannels * Nf * Nt_sub];
         cmplx  *tdi_channels_buf = &ws_tdi_channels_all[(size_t) j * nchannels * N_sparse];
         void   *get_tdi_scratch = (char *) get_tdi_scratch_all
@@ -2719,33 +2786,8 @@ void wdm_het_get_ll_kernel(
                 m_hi = Nf;
             }
 
-            // Populate per-thread data/invC cache once per group. The
-            // iteration order (c outer, m middle, n_loc inner with
-            // BLOCK_INCR stride) must EXACTLY mirror the accumulator loop
-            // below so the slot index stays in sync.
-            int thr_slot_count = 0;
-#ifdef __CUDACC__
-            {
-                int slot = 0;
-                for (int c = 0; c < nchannels; ++c) {
-                    for (int m = m_lo; m < m_hi; ++m) {
-                        for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
-                             n_loc += BLOCK_INCR) {
-                            if (slot < WDM_KEEP_PER_THREAD_MAX) {
-                                const int n_glob = n_global_lo + (n_loc - keep_lo);
-                                const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
-                                thr_data_cache[slot] = data_d[g_dt];
-                                thr_invC_cache[slot] = invC  [g_dt];
-                            }
-                            ++slot;
-                        }
-                    }
-                }
-                thr_slot_count = slot;
-            }
-#endif
-            const bool use_thr_cache = (thr_slot_count > 0
-                                        && thr_slot_count <= WDM_KEEP_PER_THREAD_MAX);
+            // (Per-thread populate-pass removed; direct global reads in
+            // the accumulator below pick up L1/L2 caching automatically.)
 
             // INNER: binaries in this group (or all binaries when un-grouped).
             for (int bin_iter = bin_iter_lo; bin_iter < bin_iter_hi; ++bin_iter) {
@@ -2792,40 +2834,35 @@ void wdm_het_get_ll_kernel(
                 }
                 CUDA_SYNC_THREADS;
 
-                // 2) chunk FD -> chunk WDM
+                // 2) chunk FD -> chunk WDM. Restrict the WDM transform's
+                // outer m-loop to the group's [m_lo, m_hi) band -- the
+                // narrow-band GB inner product only reads those layers
+                // (see accumulator below), so iterating elsewhere is
+                // pure overhead. Layers outside stay at the pre-zero.
                 gb_chunk_fd_to_wdm(
                     w_chunk, chunk_fd, wdm_window,
                     Nf, Nt_sub, log2_Nt_sub, n_rfft_chunk, dt, nchannels,
-                    layer_scratch
+                    layer_scratch,
+                    /*m_lo=*/m_lo, /*m_hi=*/m_hi
                 );
                 CUDA_SYNC_THREADS;
 
                 // 3) per-pixel accumulation, m restricted to the group band.
-                //    Loop over (c, m, n_local) in [m_lo, m_hi) x keep.
-                //    Iteration order must match the cache populate above so
-                //    `slot` stays in sync.
-                {
-                    int slot = 0;
-                    for (int c = 0; c < nchannels; ++c) {
-                        for (int m = m_lo; m < m_hi; ++m) {
-                            for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
-                                 n_loc += BLOCK_INCR) {
-                                const size_t g_w  = ((size_t) c * Nf + m) * Nt_sub + n_loc;
-                                const double w   = w_chunk[g_w];
-                                double d, inv;
-                                if (use_thr_cache) {
-                                    d   = thr_data_cache[slot];
-                                    inv = thr_invC_cache[slot];
-                                } else {
-                                    const int n_glob = n_global_lo + (n_loc - keep_lo);
-                                    const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
-                                    d   = data_d[g_dt];
-                                    inv = invC  [g_dt];
-                                }
-                                partial_dh[THREAD_START] += d * w * inv;
-                                partial_hh[THREAD_START] += w * w * inv;
-                                ++slot;
-                            }
+                //    Direct global reads of data_d / invC -- L1/L2 caches
+                //    catch reuse across the bin_iter loop automatically;
+                //    no explicit per-thread cache needed.
+                for (int c = 0; c < nchannels; ++c) {
+                    for (int m = m_lo; m < m_hi; ++m) {
+                        for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
+                             n_loc += BLOCK_INCR) {
+                            const size_t g_w  = ((size_t) c * Nf + m) * Nt_sub + n_loc;
+                            const int    n_glob = n_global_lo + (n_loc - keep_lo);
+                            const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
+                            const double w   = w_chunk[g_w];
+                            const double d   = data_d[g_dt];
+                            const double inv = invC  [g_dt];
+                            partial_dh[THREAD_START] += d * w * inv;
+                            partial_hh[THREAD_START] += w * w * inv;
                         }
                     }
                 }
@@ -2970,19 +3007,9 @@ void wdm_het_swap_ll_kernel(
     // Per-thread local cache for data + invC. Same convention as get_ll
     // -- populated once per (chunk, group) on GPU; disabled on CPU (cap
     // = 1) so the kernel falls back to direct reads on single-thread CPU.
-    // swap_ll's m-band per group can be up to ~10 (5 add + 5 remove when
-    // the two carriers don't overlap) -- 2x the typical get_ll band --
-    // so we size the swap cache larger. With nchannels=3, m_band=12 (10
-    // + 2*margin), n_per_thread = ceil(Nt_sub / NUM_THREADS) <= 4, the
-    // worst-case per-thread footprint is 144 entries; cap of 192 leaves
-    // margin and falls back to direct reads if exceeded.
-#ifdef __CUDACC__
-    constexpr int WDM_KEEP_PER_THREAD_MAX_SWAP = 192;
-#else
-    constexpr int WDM_KEEP_PER_THREAD_MAX_SWAP = 1;
-#endif
-    double thr_data_cache[WDM_KEEP_PER_THREAD_MAX_SWAP];
-    double thr_invC_cache[WDM_KEEP_PER_THREAD_MAX_SWAP];
+    // Per-thread data/invC cache REMOVED here too (see get_ll kernel for
+    // the rationale). Direct global reads pick up automatic L1/L2 caching
+    // and avoid the spill-to-local-mem footgun.
 
     // Orbit spline cache (populated once per chunk; reused across binaries).
     CUDA_SHARED double orbit_t_cp_buf  [FAST_WDM_N_CP_ORBIT_MAX];
@@ -2999,10 +3026,17 @@ void wdm_het_swap_ll_kernel(
     CUDA_SHARED OrbitsSplineCache orbit_cache_storage;
     const bool use_orbit_cache = (N_cp_orbit > 0 && N_cp_orbit <= FAST_WDM_N_CP_ORBIT_MAX);
 
+    // Per-block CUDA_SHARED layer iFFT scratch -- avoids the per-element
+    // global-mem latency that the previous heap-resident
+    // ``ws_layer_scratch_all`` slice incurred. On CPU CUDA_SHARED stubs
+    // to nothing so this lands on the stack; sized at
+    // FAST_WDM_NT_SUB_MAX (256 GPU / 4096 CPU).
+    CUDA_SHARED cmplx layer_scratch[FAST_WDM_NT_SUB_MAX];
+
     for (int j = BLOCK_START; j < n_chunks; j += GRID_INCR) {
         cmplx  *chunk_fd_add  = &ws_chunk_fd_add_all [(size_t) j * nchannels * n_rfft_chunk];
         cmplx  *chunk_fd_rem  = &ws_chunk_fd_rem_all [(size_t) j * nchannels * n_rfft_chunk];
-        cmplx  *layer_scratch = &ws_layer_scratch_all[(size_t) j * Nt_sub];
+        // layer_scratch lives in CUDA_SHARED (declared at kernel top).
         double *w_chunk_add   = &ws_chunk_wdm_add_all[(size_t) j * nchannels * Nf * Nt_sub];
         double *w_chunk_rem   = &ws_chunk_wdm_rem_all[(size_t) j * nchannels * Nf * Nt_sub];
         cmplx  *tdi_channels_buf = &ws_tdi_channels_all[(size_t) j * nchannels * N_sparse];
@@ -3043,30 +3077,7 @@ void wdm_het_swap_ll_kernel(
                 m_hi = Nf;
             }
 
-            // Populate per-thread data/invC cache once per group.
-            int thr_slot_count = 0;
-#ifdef __CUDACC__
-            {
-                int slot = 0;
-                for (int c = 0; c < nchannels; ++c) {
-                    for (int m = m_lo; m < m_hi; ++m) {
-                        for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
-                             n_loc += BLOCK_INCR) {
-                            if (slot < WDM_KEEP_PER_THREAD_MAX_SWAP) {
-                                const int n_glob = n_global_lo + (n_loc - keep_lo);
-                                const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
-                                thr_data_cache[slot] = data_d[g_dt];
-                                thr_invC_cache[slot] = invC  [g_dt];
-                            }
-                            ++slot;
-                        }
-                    }
-                }
-                thr_slot_count = slot;
-            }
-#endif
-            const bool use_thr_cache = (thr_slot_count > 0
-                                        && thr_slot_count <= WDM_KEEP_PER_THREAD_MAX_SWAP);
+            // (Per-thread cache populate removed; direct reads below.)
 
         for (int bin_iter = bin_iter_lo; bin_iter < bin_iter_hi; ++bin_iter) {
             const int bin_i = (n_groups > 0) ? binary_perm[bin_iter] : bin_iter;
@@ -3120,7 +3131,8 @@ void wdm_het_swap_ll_kernel(
             gb_chunk_fd_to_wdm(
                 w_chunk_add, chunk_fd_add, wdm_window,
                 Nf, Nt_sub, log2_Nt_sub, n_rfft_chunk, dt, nchannels,
-                layer_scratch
+                layer_scratch,
+                /*m_lo=*/m_lo, /*m_hi=*/m_hi
             );
             CUDA_SYNC_THREADS;
 
@@ -3155,38 +3167,29 @@ void wdm_het_swap_ll_kernel(
             gb_chunk_fd_to_wdm(
                 w_chunk_rem, chunk_fd_rem, wdm_window,
                 Nf, Nt_sub, log2_Nt_sub, n_rfft_chunk, dt, nchannels,
-                layer_scratch
+                layer_scratch,
+                /*m_lo=*/m_lo, /*m_hi=*/m_hi
             );
             CUDA_SYNC_THREADS;
 
-            // Accumulate the 5 quantities -- iteration order matches the
-            // populate loop above so `slot` stays in sync.
-            {
-                int slot = 0;
-                for (int c = 0; c < nchannels; ++c) {
-                    for (int m = m_lo; m < m_hi; ++m) {
-                        for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
-                             n_loc += BLOCK_INCR) {
-                            const size_t g_w  = ((size_t) c * Nf + m) * Nt_sub + n_loc;
-                            const double wa  = w_chunk_add[g_w];
-                            const double wr  = w_chunk_rem[g_w];
-                            double d, inv;
-                            if (use_thr_cache) {
-                                d   = thr_data_cache[slot];
-                                inv = thr_invC_cache[slot];
-                            } else {
-                                const int n_glob = n_global_lo + (n_loc - keep_lo);
-                                const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
-                                d   = data_d[g_dt];
-                                inv = invC  [g_dt];
-                            }
-                            partial_dh_add[THREAD_START] += d * wa * inv;
-                            partial_dh_rem[THREAD_START] += d * wr * inv;
-                            partial_aa    [THREAD_START] += wa * wa * inv;
-                            partial_rr    [THREAD_START] += wr * wr * inv;
-                            partial_ar    [THREAD_START] += wa * wr * inv;
-                            ++slot;
-                        }
+            // Accumulate the 5 quantities -- direct global reads of
+            // data_d / invC (L1/L2 catch reuse across bin_iter).
+            for (int c = 0; c < nchannels; ++c) {
+                for (int m = m_lo; m < m_hi; ++m) {
+                    for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
+                         n_loc += BLOCK_INCR) {
+                        const size_t g_w  = ((size_t) c * Nf + m) * Nt_sub + n_loc;
+                        const int    n_glob = n_global_lo + (n_loc - keep_lo);
+                        const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
+                        const double wa  = w_chunk_add[g_w];
+                        const double wr  = w_chunk_rem[g_w];
+                        const double d   = data_d[g_dt];
+                        const double inv = invC  [g_dt];
+                        partial_dh_add[THREAD_START] += d * wa * inv;
+                        partial_dh_rem[THREAD_START] += d * wr * inv;
+                        partial_aa    [THREAD_START] += wa * wa * inv;
+                        partial_rr    [THREAD_START] += wr * wr * inv;
+                        partial_ar    [THREAD_START] += wa * wr * inv;
                     }
                 }
             }
@@ -3212,60 +3215,24 @@ void wdm_het_swap_ll_kernel(
                 const int m_hi_b   = (m_hi_b_in > Nf) ? Nf : m_hi_b_in;
                 const bool need_pass2 = (m_lo_b_c != m_lo) || (m_hi_b != m_hi);
                 if (need_pass2 && m_lo_b_c < m_hi_b) {
-                    // Re-populate cache with source 2's band data/invC
-                    // (per-thread local memory; no sync needed).
-                    int thr_slot_count2 = 0;
-#ifdef __CUDACC__
-                    {
-                        int slot = 0;
-                        for (int c = 0; c < nchannels; ++c) {
-                            for (int m = m_lo_b_c; m < m_hi_b; ++m) {
-                                for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
-                                     n_loc += BLOCK_INCR) {
-                                    if (slot < WDM_KEEP_PER_THREAD_MAX_SWAP) {
-                                        const int n_glob = n_global_lo + (n_loc - keep_lo);
-                                        const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
-                                        thr_data_cache[slot] = data_d[g_dt];
-                                        thr_invC_cache[slot] = invC  [g_dt];
-                                    }
-                                    ++slot;
-                                }
-                            }
-                        }
-                        thr_slot_count2 = slot;
-                    }
-#endif
-                    const bool use_thr_cache2 = (thr_slot_count2 > 0
-                        && thr_slot_count2 <= WDM_KEEP_PER_THREAD_MAX_SWAP);
-
-                    // Accumulate d_h_rem and rem_rem for m's outside
-                    // [m_lo, m_hi). slot iterates the SAME order as the
-                    // populate above so the cache index stays in sync.
-                    int slot = 0;
+                    // Pass-2 accumulator: direct global reads (cache removed).
+                    // Adds d_h_rem and rem_rem contributions from m-layers
+                    // outside source 1's band, skipping the overlap with
+                    // pass 1 to avoid double-counting.
                     for (int c = 0; c < nchannels; ++c) {
                         for (int m = m_lo_b_c; m < m_hi_b; ++m) {
                             const bool in_pass1 = (m >= m_lo) && (m < m_hi);
+                            if (in_pass1) continue;
                             for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
                                  n_loc += BLOCK_INCR) {
-                                if (in_pass1) {
-                                    ++slot;
-                                    continue;
-                                }
                                 const size_t g_w = ((size_t) c * Nf + m) * Nt_sub + n_loc;
+                                const int    n_glob = n_global_lo + (n_loc - keep_lo);
+                                const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
                                 const double wr  = w_chunk_rem[g_w];
-                                double d, inv;
-                                if (use_thr_cache2) {
-                                    d   = thr_data_cache[slot];
-                                    inv = thr_invC_cache[slot];
-                                } else {
-                                    const int n_glob = n_global_lo + (n_loc - keep_lo);
-                                    const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
-                                    d   = data_d[g_dt];
-                                    inv = invC  [g_dt];
-                                }
+                                const double d   = data_d[g_dt];
+                                const double inv = invC  [g_dt];
                                 partial_dh_rem[THREAD_START] += d * wr * inv;
                                 partial_rr    [THREAD_START] += wr * wr * inv;
-                                ++slot;
                             }
                         }
                     }

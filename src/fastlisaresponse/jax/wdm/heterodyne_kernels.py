@@ -331,10 +331,44 @@ def gb_wdm_het_swap_ll_grad_jax(
     )
 
 
+def gb_wdm_het_hessian_jax(
+    params_batch: jnp.ndarray,                      # (num_bin, nparams)
+    data_d: jnp.ndarray, invC: jnp.ndarray,
+    chunk_t_starts: jnp.ndarray,
+    chunk_keep_lo: jnp.ndarray, chunk_keep_hi: jnp.ndarray,
+    chunk_n_global_lo: jnp.ndarray,
+    source: JaxAmpPhaseSource, orbits: OrbitsWrapJAX, tdi_config: TDIConfigWrapJAX,
+    wdm_window: jnp.ndarray,
+    Nf: int, Nt: int, Nt_sub: int, N_sparse: int,
+    dt: float, T_chunk: float,
+    tukey_alpha: float = ALPHA_AUTO,
+) -> jnp.ndarray:
+    """JAX-autograd per-binary Hessian of L_i = <d|h_i> - 0.5 <h_i|h_i>
+    w.r.t. ``params_batch[i, :]``.
+
+    Returns ``(num_bin, nparams, nparams)`` -- the per-binary Hessian
+    block. Cross-binary entries are zero by construction (L_i depends
+    only on params_batch[i, :]), so we ``vmap(hessian(per_binary_loss))``
+    rather than ``hessian(sum_loss)`` to avoid materialising the
+    block-diagonal full Hessian.
+    """
+    def per_binary_loss(p_single):
+        d_h, h_h = gb_wdm_het_get_ll_jax(
+            p_single[None, :], data_d, invC,
+            chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_lo,
+            source, orbits, tdi_config, wdm_window,
+            Nf=Nf, Nt=Nt, Nt_sub=Nt_sub, N_sparse=N_sparse,
+            dt=dt, T_chunk=T_chunk, tukey_alpha=tukey_alpha,
+        )
+        return (d_h[0] - 0.5 * h_h[0])
+    return jax.vmap(jax.hessian(per_binary_loss))(params_batch)
+
+
 __all__ = [
     "gb_wdm_het_fill_global_jax",
     "gb_wdm_het_get_ll_jax",
     "gb_wdm_het_swap_ll_jax",
     "gb_wdm_het_get_ll_grad_jax",
     "gb_wdm_het_swap_ll_grad_jax",
+    "gb_wdm_het_hessian_jax",
 ]
