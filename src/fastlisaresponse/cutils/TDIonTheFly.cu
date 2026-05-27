@@ -1858,10 +1858,11 @@ inline void fast_wdm_inner_heterodyne_spline(
     double *amp_c3_buf,             // (N_cp_sig,)
     double *phase_y_buf,            // (N_cp_sig,)          single channel, reused
     double *phase_c1_buf, double *phase_c2_buf, double *phase_c3_buf,
-    double *dphi_ref_y_buf,         // (N_cp_sig,)          per-source (1 channel)
+    double *dphi_ref_y_buf,         // (N_cp_sig,)  carrier-subtracted; spline target
     double *dphi_ref_c1_buf, double *dphi_ref_c2_buf, double *dphi_ref_c3_buf,
     double *B_buf,                  // (N_cp_sig,) tridiagonal RHS scratch
     double *pcr_scratch,            // (8 * N_cp_sig,) GPU-only scratch
+    double *phi_ref_un_het_buf,     // (N_cp_sig,) un-het phi_ref for extract
     cmplx  *tdi_channels_cp_buf,    // (nchannels * N_cp_sig) -- raw TDI scratch
     cmplx  *slow_buf,               // (nchannels * N_sparse) -- FFT in/out
     void   *extract_scratch,        // >= 21*N_cp_sig bytes
@@ -1879,6 +1880,7 @@ inline void fast_wdm_inner_heterodyne_spline(
     const int    half_Nsp   = N_sparse / 2;
     const double scale_X    = 0.5 * dt_sparse;
     const double phi0_chunk = 2.0 * M_PI * f0_grid * chunk_t_start;
+    const double two_pi_f0  = 2.0 * M_PI * f0_grid;
 
     double alpha_eff = tukey_alpha;
     if (alpha_eff == FAST_WDM_TUKEY_ALPHA_AUTO) {
@@ -1893,26 +1895,35 @@ inline void fast_wdm_inner_heterodyne_spline(
     }
     CUDA_SYNC_THREADS;
 
-    // ---- 2) raw heterodyned TDI evaluation at cp times --------------------
-    // Fills tdi_channels_cp_buf[nchannels * N_cp_sig] with raw complex TDI
-    // samples and dphi_ref_y_buf[N_cp_sig] with the heterodyne-subtracted
-    // phi_ref. The per-channel amp/phase extract+unwrap is deferred to the
-    // c-loop below so we only need single-channel coefficient storage.
+    // ---- 2) raw TDI evaluation at cp times --------------------------------
+    // Fills tdi_channels_cp_buf[nchannels * N_cp_sig] (raw complex TDI)
+    // and phi_ref_un_het_buf[N_cp_sig] (un-heterodyned phi_ref). The
+    // per-channel amp/phase extract+unwrap is deferred to the c-loop below
+    // so we only need single-channel coefficient storage.
     (void) extract_scratch_len;
     if (orbit_cache != nullptr) {
-        source->get_tdi_heterodyned_raw_cached(
-            tdi_channels_cp_buf, dphi_ref_y_buf,
+        source->get_tdi_raw_cached(
+            tdi_channels_cp_buf, phi_ref_un_het_buf,
             params, t_cp_buf, N_cp_sig, bin_i, nchannels,
-            f0_grid, orbit_cache);
+            orbit_cache);
     } else {
-        source->get_tdi_heterodyned_raw(
-            tdi_channels_cp_buf, dphi_ref_y_buf,
-            params, t_cp_buf, N_cp_sig, bin_i, nchannels,
-            f0_grid);
+        source->get_tdi_raw(
+            tdi_channels_cp_buf, phi_ref_un_het_buf,
+            params, t_cp_buf, N_cp_sig, bin_i, nchannels);
     }
     CUDA_SYNC_THREADS;
 
-    // ---- 3) fit the per-source dphi_ref spline once -----------------------
+    // ---- 3) heterodyne-subtract phi_ref into dphi_ref_y_buf, then fit ----
+    // dphi_ref_y_buf[i] = phi_ref(t_cp[i]) - 2*pi*f0_grid*t_cp[i].
+    // phi_ref_un_het_buf stays intact for use by the per-channel extract
+    // below. The dphi_ref spline (fit here, evaluated in step 4d) is the
+    // OLD get_tdi_heterodyned convention -- preserves bitwise math match
+    // against the direct path.
+    for (int i = THREAD_START; i < N_cp_sig; i += BLOCK_INCR) {
+        dphi_ref_y_buf[i] = phi_ref_un_het_buf[i] - two_pi_f0 * t_cp_buf[i];
+    }
+    CUDA_SYNC_THREADS;
+
     wdm_fit_cubic_spline(t_cp_buf, dphi_ref_y_buf,
                           dphi_ref_c1_buf, dphi_ref_c2_buf, dphi_ref_c3_buf,
                           B_buf, pcr_scratch,
@@ -1934,12 +1945,17 @@ inline void fast_wdm_inner_heterodyne_spline(
     const int    N_cp_last = N_cp_sig - 1;
 
     for (int c = 0; c < nchannels; ++c) {
-        // (a) extract |M_c| -> amp_y_buf, arg(M_c) - phi_ref -> phase_y_buf
+        // (a) extract |M_c| -> amp_y_buf, arg(M_c) - phi_ref -> phase_y_buf.
+        //     phiR MUST be un-heterodyned (see get_tdi_raw doc): the
+        //     remainder(phiR, 2*pi) inside extract is not invariant under
+        //     shifts by 2*pi*f0*t, and any per-sample drift it would
+        //     introduce does NOT cancel against the downstream dphi_ref
+        //     spline eval.
         source->new_extract_amplitude_and_phase(
             count, fix_count, flip, pjump, N_cp_sig,
             amp_y_buf, phase_y_buf,
             &tdi_channels_cp_buf[c * N_cp_sig],
-            dphi_ref_y_buf);
+            phi_ref_un_het_buf);
         CUDA_SYNC_THREADS;
 
         // (b) unwrap phase_y_buf in place; flip is reused as the cumulative
@@ -2422,6 +2438,12 @@ struct WDMHetSplineBufs {
     double dphi_ref_c3_buf     [FAST_WDM_N_CP_SIG_MAX];
     double B_buf               [FAST_WDM_N_CP_SIG_MAX];
     double pcr_scratch         [8 * FAST_WDM_N_CP_SIG_MAX];
+    // Un-het phi_ref scratch -- filled by get_tdi_raw[_cached] and read by
+    // per-channel new_extract_amplitude_and_phase (which needs the
+    // un-heterodyned phi_ref to keep its remainder(., 2*pi) unwrap
+    // decisions consistent with the OLD get_tdi convention). dphi_ref_y_buf
+    // holds the carrier-subtracted version that feeds the dphi_ref spline.
+    double phi_ref_un_het_buf  [FAST_WDM_N_CP_SIG_MAX];
     cmplx  tdi_channels_cp_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
     char   extract_scratch_buf [21 * FAST_WDM_N_CP_SIG_MAX + 16];
 
@@ -2617,6 +2639,7 @@ void wdm_het_fill_global_kernel(
                     path.spline.dphi_ref_y_buf, path.spline.dphi_ref_c1_buf,
                     path.spline.dphi_ref_c2_buf, path.spline.dphi_ref_c3_buf,
                     path.spline.B_buf, path.spline.pcr_scratch,
+                    path.spline.phi_ref_un_het_buf,
                     path.spline.tdi_channels_cp_buf, slow_buf,
                     path.spline.extract_scratch_buf,
                     (int) sizeof(path.spline.extract_scratch_buf),
@@ -2883,6 +2906,7 @@ void wdm_het_get_ll_kernel(
                         path.spline.dphi_ref_y_buf, path.spline.dphi_ref_c1_buf,
                         path.spline.dphi_ref_c2_buf, path.spline.dphi_ref_c3_buf,
                         path.spline.B_buf, path.spline.pcr_scratch,
+                        path.spline.phi_ref_un_het_buf,
                         path.spline.tdi_channels_cp_buf, slow_buf,
                         path.spline.extract_scratch_buf,
                         (int) sizeof(path.spline.extract_scratch_buf),
@@ -3167,6 +3191,7 @@ void wdm_het_swap_ll_kernel(
                     path.spline.dphi_ref_y_buf, path.spline.dphi_ref_c1_buf,
                     path.spline.dphi_ref_c2_buf, path.spline.dphi_ref_c3_buf,
                     path.spline.B_buf, path.spline.pcr_scratch,
+                    path.spline.phi_ref_un_het_buf,
                     path.spline.tdi_channels_cp_buf, slow_buf,
                     path.spline.extract_scratch_buf,
                     (int) sizeof(path.spline.extract_scratch_buf),
@@ -3208,6 +3233,7 @@ void wdm_het_swap_ll_kernel(
                     path.spline.dphi_ref_y_buf, path.spline.dphi_ref_c1_buf,
                     path.spline.dphi_ref_c2_buf, path.spline.dphi_ref_c3_buf,
                     path.spline.B_buf, path.spline.pcr_scratch,
+                    path.spline.phi_ref_un_het_buf,
                     path.spline.tdi_channels_cp_buf, slow_buf,
                     path.spline.extract_scratch_buf,
                     (int) sizeof(path.spline.extract_scratch_buf),
@@ -5984,19 +6010,32 @@ void LISATDIonTheFly::get_tdi_heterodyned_cached(
 }
 
 
-// Raw heterodyned-TDI evaluators: fill ``tdi_channels_arr`` (nchannels * N
-// raw complex samples) and ``phi_ref_het`` (N points, with the carrier
-// already subtracted) -- but skip the per-channel amplitude/phase extract
-// and unwrap that get_tdi_heterodyned[_cached] perform. Used by the
-// chunked-het spline path so the caller can run extract+unwrap one channel
-// at a time into single-channel coefficient buffers. This is the
-// prerequisite for the ~6 KB / kernel shared-mem reduction in
-// fast_wdm_inner_heterodyne_spline.
+// Raw TDI evaluators: fill ``tdi_channels_arr`` (nchannels * N raw complex
+// samples) and ``phi_ref`` (N points, UN-HETERODYNED -- i.e. just
+// ``get_phase_ref(t_i)`` straight from the source, NO carrier
+// subtraction). Skip the per-channel amplitude/phase extract + unwrap that
+// get_tdi[_cached] performs.
+//
+// IMPORTANT -- why we emit un-het phi_ref here rather than phi_ref_het:
+// the downstream ``new_extract_amplitude_and_phase`` consumes phiR via
+// ``remainder(phiR, 2*pi)``, which is NOT invariant under shifts by
+// 2*pi*f0_grid*t (the carrier offset is not a multiple of 2*pi). If we
+// pre-subtracted the carrier here, every per-channel extract would see a
+// shifted phiR and produce a Dphi that differs from the OLD direct-path
+// get_tdi convention by a per-sample non-2*pi amount. That residual would
+// NOT cancel against the downstream ``+ dphi_ref + phi0_chunk`` term --
+// it would offset the slow-signal phase, shoving the FFTed energy off the
+// snapped chunk-FD bin. Caller is responsible for the carrier subtraction
+// when forming dphi_ref for the spline fit (see
+// fast_wdm_inner_heterodyne_spline).
+//
+// Used by the chunked-het spline path so the caller can extract + unwrap
+// one channel at a time into single-channel coefficient buffers
+// (~6 KB / kernel shared-mem reduction).
 CUDA_DEVICE
-void LISATDIonTheFly::get_tdi_heterodyned_raw(
-    cmplx *tdi_channels_arr, double *phi_ref_het,
-    double *params, double *t_arr, int N, int bin_i, int nchannels,
-    double f0_grid)
+void LISATDIonTheFly::get_tdi_raw(
+    cmplx *tdi_channels_arr, double *phi_ref,
+    double *params, double *t_arr, int N, int bin_i, int nchannels)
 {
     CUDA_SHARED int link_Space_craft_rec[NLINKS];
     CUDA_SHARED int link_Space_craft_em[NLINKS];
@@ -6018,21 +6057,19 @@ void LISATDIonTheFly::get_tdi_heterodyned_raw(
     int start = 0;
     int incr  = 1;
 #endif
-    const double two_pi_f0 = 2.0 * M_PI * f0_grid;
     for (int i = start; i < N; i += incr)
     {
-        phi_ref_het[i] = get_phase_ref(t_arr[i], params, bin_i)
-                        - two_pi_f0 * t_arr[i];
+        phi_ref[i] = get_phase_ref(t_arr[i], params, bin_i);
     }
     CUDA_SYNC_THREADS;
 }
 
 
 CUDA_DEVICE
-void LISATDIonTheFly::get_tdi_heterodyned_raw_cached(
-    cmplx *tdi_channels_arr, double *phi_ref_het,
+void LISATDIonTheFly::get_tdi_raw_cached(
+    cmplx *tdi_channels_arr, double *phi_ref,
     double *params, double *t_arr, int N, int bin_i, int nchannels,
-    double f0_grid, OrbitsSplineCache *cache)
+    OrbitsSplineCache *cache)
 {
     CUDA_SHARED int link_Space_craft_rec[NLINKS];
     CUDA_SHARED int link_Space_craft_em[NLINKS];
@@ -6055,11 +6092,9 @@ void LISATDIonTheFly::get_tdi_heterodyned_raw_cached(
     int start = 0;
     int incr  = 1;
 #endif
-    const double two_pi_f0 = 2.0 * M_PI * f0_grid;
     for (int i = start; i < N; i += incr)
     {
-        phi_ref_het[i] = get_phase_ref(t_arr[i], params, bin_i)
-                        - two_pi_f0 * t_arr[i];
+        phi_ref[i] = get_phase_ref(t_arr[i], params, bin_i);
     }
     CUDA_SYNC_THREADS;
 }
@@ -6535,12 +6570,15 @@ void LISATDIonTheFly::new_extract_amplitude_and_phase(int *count, bool *fix_coun
     cumsum(count, Ns);
     CUDA_SYNC_THREADS;
 
-    // 
-    for (int i = start; i < Ns - 1; i += 1)
+    // Cooperative stride (was ``i += 1`` -- a bug that made every thread
+    // re-do the whole length [start, Ns-1) and race on the same shared
+    // addresses; harmless on CPU where incr == 1 but huge wasted work on
+    // GPU and a memory-consistency risk).
+    for (int i = start; i < Ns - 1; i += incr)
     {
         flip[i] = pow(-1., count[i]);
         pjump[i] = count[i] * M_PI;
-    }    
+    }
     CUDA_SYNC_THREADS;
 
     if (THREAD_ZERO)

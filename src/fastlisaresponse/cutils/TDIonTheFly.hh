@@ -132,16 +132,30 @@ class LISATDIonTheFly{
         CUDA_DEVICE
         void get_tdi_heterodyned_cached(void *buffer, int buffer_length, cmplx *tdi_channels_arr, double *tdi_amp, double *tdi_phase, double *phi_ref_het, double *params, double *t_arr, int N, int bin_i, int nchannels, double f0_grid, OrbitsSplineCache *cache);
 
-        // Raw variants of get_tdi_heterodyned[_cached]: fill tdi_channels_arr
-        // (nchannels * N raw complex samples) and phi_ref_het (N), but skip
-        // the per-channel amplitude/phase extract + unwrap. Used by the
-        // chunked-het spline path so the caller can perform extract+unwrap
-        // one channel at a time into a single-channel coefficient buffer,
-        // shrinking the static-shared footprint by ~6 KB per kernel.
+        // Raw variants of get_tdi[_cached]: fill tdi_channels_arr
+        // (nchannels * N raw complex samples) and phi_ref (N, UN-heterodyned
+        // -- get_phase_ref(t_i) straight from the source, NO carrier
+        // subtraction), but skip the per-channel amplitude/phase extract
+        // + unwrap.
+        //
+        // The carrier subtraction MUST happen on the caller side, AFTER
+        // any extract that wants the OLD get_tdi convention. The inner
+        // ``new_extract_amplitude_and_phase`` consumes phiR via
+        // ``remainder(phiR, 2*pi)``, which is NOT invariant under shifts
+        // by 2*pi*f0*t (the carrier offset isn't a multiple of 2*pi), so
+        // passing a heterodyne-subtracted phi_ref here would change the
+        // unwrapping decision and the resulting Dphi by a per-sample
+        // amount that does NOT cancel against the downstream
+        // ``dphi_ref + phi0_chunk`` term -- it would offset the
+        // slow-signal phase off the chunk-FFT grid.
+        //
+        // Used by the chunked-het spline path so the caller can perform
+        // extract + unwrap one channel at a time into single-channel
+        // coefficient buffers (~6 KB / kernel shared-mem reduction).
         CUDA_DEVICE
-        void get_tdi_heterodyned_raw(cmplx *tdi_channels_arr, double *phi_ref_het, double *params, double *t_arr, int N, int bin_i, int nchannels, double f0_grid);
+        void get_tdi_raw(cmplx *tdi_channels_arr, double *phi_ref, double *params, double *t_arr, int N, int bin_i, int nchannels);
         CUDA_DEVICE
-        void get_tdi_heterodyned_raw_cached(cmplx *tdi_channels_arr, double *phi_ref_het, double *params, double *t_arr, int N, int bin_i, int nchannels, double f0_grid, OrbitsSplineCache *cache);
+        void get_tdi_raw_cached(cmplx *tdi_channels_arr, double *phi_ref, double *params, double *t_arr, int N, int bin_i, int nchannels, OrbitsSplineCache *cache);
         // CUDA_DEVICE
         // void get_amp_and_phase(double t_ssb, double *t, double *amp, double *phase, double *params, int N, int bin_i);
         // CUDA_DEVICE
