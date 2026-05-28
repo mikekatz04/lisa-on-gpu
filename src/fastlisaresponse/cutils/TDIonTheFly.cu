@@ -20,22 +20,39 @@
 #endif
 
 // ---------------------------------------------------------------------------
-// GPU-only diagnostic printing for the chunked-het kernels.
+// Diagnostic printing for the chunked-het kernels (CPU + GPU).
 //
 // Set WDM_HET_DEBUG_PRINT to 1 to enable printf instrumentation at strategic
 // points inside ``fast_wdm_inner_heterodyne``, ``fast_wdm_inner_heterodyne_spline``,
-// and ``wdm_het_fill_global_kernel``. Prints fire ONLY on the device build
-// (``__CUDACC__``) and ONLY for one thread/block/binary so the output is
-// bounded. The CPU build is unaffected. Used to chase GPU-vs-CPU
-// divergence in fill_global output -- see WDM_HET_DPRINT_DIRECT/SPLINE/KERNEL
-// markers in printf output for grep-friendly tagging.
+// and ``wdm_het_fill_global_kernel``. Output is bounded to one
+// (lead-block, lead-thread, chunk=0, binary=0) call so CPU vs GPU logs
+// diff cleanly. The chunk-index gate is threaded into the inner functions
+// via the ``wdm_dprint_chunk_idx`` parameter -- on GPU each block owns one
+// chunk so blockIdx.x is the discriminator; on CPU a single thread sweeps
+// the chunk loop and the kernel passes ``j`` directly.
+//
+// Markers in output:
+//   [WDM_HET_DPRINT_KERNEL fill_global ...] -- kernel entry
+//   [WDM_HET_DPRINT_DIRECT post-get_tdi ...] -- direct path stages
+//   [WDM_HET_DPRINT_SPLINE post-get_tdi_raw ...] -- spline path stages
+// Grep on these tags to compare across backends.
 // ---------------------------------------------------------------------------
 #ifndef WDM_HET_DEBUG_PRINT
 #define WDM_HET_DEBUG_PRINT 1
 #endif
 
-#if WDM_HET_DEBUG_PRINT && defined(__CUDACC__)
+#if WDM_HET_DEBUG_PRINT
+#ifdef __CUDACC__
+// One specific block (block 0), one specific thread (thread 0) prints.
 #define WDM_HET_DEBUG_LEAD (blockIdx.x == 0 && threadIdx.x == 0)
+#else
+// CPU is single-block, single-thread by construction (NUM_THREADS_HERE=1,
+// GRID_INCR=1), so the kernel function body runs once per launch and any
+// statement inside is a "lead" execution. Per-chunk and per-binary gating
+// happens at the call site instead via ``wdm_dprint_chunk_idx == 0`` and
+// ``bin_i == 0``.
+#define WDM_HET_DEBUG_LEAD (1)
+#endif
 #else
 #define WDM_HET_DEBUG_LEAD (0)
 #endif
@@ -1890,7 +1907,8 @@ inline void fast_wdm_inner_heterodyne_spline(
                                     //   layout: flip[N_cp] | pjump[N_cp]
                                     //         | count[N_cp] | fix_count[N_cp]
     int     extract_scratch_len,
-    OrbitsSplineCache *orbit_cache)  // nullptr -> direct orbit lookups
+    OrbitsSplineCache *orbit_cache, // nullptr -> direct orbit lookups
+    int     wdm_dprint_chunk_idx)   // debug-print chunk gate (== j from caller)
 {
     const double dt_sparse  = T_chunk / (double) N_sparse;
     const double dt_cp      = T_chunk / (double) (N_cp_sig - 1);
@@ -1934,8 +1952,8 @@ inline void fast_wdm_inner_heterodyne_spline(
     }
     CUDA_SYNC_THREADS;
 
-#if WDM_HET_DEBUG_PRINT && defined(__CUDACC__)
-    if (bin_i == 0 && WDM_HET_DEBUG_LEAD) {
+#if WDM_HET_DEBUG_PRINT
+    if (bin_i == 0 && wdm_dprint_chunk_idx == 0 && WDM_HET_DEBUG_LEAD) {
         printf("[WDM_HET_DPRINT_SPLINE post-get_tdi_raw] bin_i=%d N_cp_sig=%d "
                "N_sparse=%d nchannels=%d f0=%.12e f0_grid=%.12e k_f0=%d "
                "orbit_cache=%p\n",
@@ -2072,8 +2090,8 @@ inline void fast_wdm_inner_heterodyne_spline(
         CUDA_SYNC_THREADS;
     }
 
-#if WDM_HET_DEBUG_PRINT && defined(__CUDACC__)
-    if (bin_i == 0 && WDM_HET_DEBUG_LEAD) {
+#if WDM_HET_DEBUG_PRINT
+    if (bin_i == 0 && wdm_dprint_chunk_idx == 0 && WDM_HET_DEBUG_LEAD) {
         printf("[WDM_HET_DPRINT_SPLINE pre-fft] slow_buf[c=0, 0,1,2]= "
                "(%.6e,%.6e) (%.6e,%.6e) (%.6e,%.6e)\n",
                slow_buf[0].real(), slow_buf[0].imag(),
@@ -2090,8 +2108,8 @@ inline void fast_wdm_inner_heterodyne_spline(
         CUDA_SYNC_THREADS;
     }
 
-#if WDM_HET_DEBUG_PRINT && defined(__CUDACC__)
-    if (bin_i == 0 && WDM_HET_DEBUG_LEAD) {
+#if WDM_HET_DEBUG_PRINT
+    if (bin_i == 0 && wdm_dprint_chunk_idx == 0 && WDM_HET_DEBUG_LEAD) {
         printf("[WDM_HET_DPRINT_SPLINE post-fft] slow_buf[c=0, 0,1,2]= "
                "(%.6e,%.6e) (%.6e,%.6e) (%.6e,%.6e)\n",
                slow_buf[0].real(), slow_buf[0].imag(),
@@ -2115,8 +2133,8 @@ inline void fast_wdm_inner_heterodyne_spline(
     }
     CUDA_SYNC_THREADS;
 
-#if WDM_HET_DEBUG_PRINT && defined(__CUDACC__)
-    if (bin_i == 0 && WDM_HET_DEBUG_LEAD) {
+#if WDM_HET_DEBUG_PRINT
+    if (bin_i == 0 && wdm_dprint_chunk_idx == 0 && WDM_HET_DEBUG_LEAD) {
         const int k_lo = (k_f0 - 1 >= 0) ? (k_f0 - 1) : 0;
         const int k_hi = (k_f0 + 1 < n_rfft_chunk) ? (k_f0 + 1) : (n_rfft_chunk - 1);
         printf("[WDM_HET_DPRINT_SPLINE post-place] chunk_fd_out[c=0, k_f0%s1, k_f0, k_f0+1]= "
@@ -2157,8 +2175,8 @@ inline void fast_wdm_inner_heterodyne(
     cmplx  *slow_buf,               // (nchannels * N_sparse), reused as FFT input/output
     void   *get_tdi_scratch,        // get_tdi internal scratch
     int     get_tdi_scratch_len,
-    OrbitsSplineCache *orbit_cache  // nullptr -> direct orbit lookups
-)
+    OrbitsSplineCache *orbit_cache, // nullptr -> direct orbit lookups
+    int     wdm_dprint_chunk_idx)   // debug-print chunk gate (== j from caller)
 {
     const double dt_sparse  = T_chunk / (double) N_sparse;
     const double f0         = params[carrier_index];
@@ -2197,8 +2215,8 @@ inline void fast_wdm_inner_heterodyne(
     }
     CUDA_SYNC_THREADS;
 
-#if WDM_HET_DEBUG_PRINT && defined(__CUDACC__)
-    if (bin_i == 0 && WDM_HET_DEBUG_LEAD) {
+#if WDM_HET_DEBUG_PRINT
+    if (bin_i == 0 && wdm_dprint_chunk_idx == 0 && WDM_HET_DEBUG_LEAD) {
         printf("[WDM_HET_DPRINT_DIRECT post-get_tdi] bin_i=%d N_sparse=%d "
                "nchannels=%d f0=%.12e f0_grid=%.12e k_f0=%d "
                "orbit_cache=%p\n",
@@ -2258,8 +2276,8 @@ inline void fast_wdm_inner_heterodyne(
     }
     CUDA_SYNC_THREADS;
 
-#if WDM_HET_DEBUG_PRINT && defined(__CUDACC__)
-    if (bin_i == 0 && WDM_HET_DEBUG_LEAD) {
+#if WDM_HET_DEBUG_PRINT
+    if (bin_i == 0 && wdm_dprint_chunk_idx == 0 && WDM_HET_DEBUG_LEAD) {
         printf("[WDM_HET_DPRINT_DIRECT pre-fft] slow_buf[c=0, 0,1,2]= "
                "(%.6e,%.6e) (%.6e,%.6e) (%.6e,%.6e)\n",
                slow_buf[0].real(), slow_buf[0].imag(),
@@ -2276,8 +2294,8 @@ inline void fast_wdm_inner_heterodyne(
         CUDA_SYNC_THREADS;
     }
 
-#if WDM_HET_DEBUG_PRINT && defined(__CUDACC__)
-    if (bin_i == 0 && WDM_HET_DEBUG_LEAD) {
+#if WDM_HET_DEBUG_PRINT
+    if (bin_i == 0 && wdm_dprint_chunk_idx == 0 && WDM_HET_DEBUG_LEAD) {
         printf("[WDM_HET_DPRINT_DIRECT post-fft] slow_buf[c=0, 0,1,2]= "
                "(%.6e,%.6e) (%.6e,%.6e) (%.6e,%.6e)\n",
                slow_buf[0].real(), slow_buf[0].imag(),
@@ -2304,8 +2322,8 @@ inline void fast_wdm_inner_heterodyne(
     }
     CUDA_SYNC_THREADS;
 
-#if WDM_HET_DEBUG_PRINT && defined(__CUDACC__)
-    if (bin_i == 0 && WDM_HET_DEBUG_LEAD) {
+#if WDM_HET_DEBUG_PRINT
+    if (bin_i == 0 && wdm_dprint_chunk_idx == 0 && WDM_HET_DEBUG_LEAD) {
         // Print the 3 bins around the snapped carrier (k_f0-1, k_f0, k_f0+1).
         const int k_lo = (k_f0 - 1 >= 0) ? (k_f0 - 1) : 0;
         const int k_hi = (k_f0 + 1 < n_rfft_chunk) ? (k_f0 + 1) : (n_rfft_chunk - 1);
@@ -2372,7 +2390,8 @@ inline void fast_wdm_inner_heterodyne_kernel(
             t_sparse_buf, tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
             tdi_channels_buf, slow_buf,
             get_tdi_scratch, get_tdi_scratch_len_per_block,
-            /*orbit_cache=*/nullptr
+            /*orbit_cache=*/nullptr,
+            /*wdm_dprint_chunk_idx=*/j
         );
         CUDA_SYNC_THREADS;
     }
@@ -2709,12 +2728,19 @@ void wdm_het_fill_global_kernel(
     // FAST_WDM_NT_SUB_MAX (256 GPU / 4096 CPU).
     CUDA_SHARED cmplx layer_scratch[FAST_WDM_NT_SUB_MAX];
 
-#if WDM_HET_DEBUG_PRINT && defined(__CUDACC__)
+#if WDM_HET_DEBUG_PRINT
     if (WDM_HET_DEBUG_LEAD) {
+#ifdef __CUDACC__
         printf("[WDM_HET_DPRINT_KERNEL fill_global] gridDim=%d blockDim=%d "
                "n_chunks=%d num_bin=%d nparams=%d nchannels=%d\n",
                (int) gridDim.x, (int) blockDim.x,
                n_chunks, num_bin, nparams, nchannels);
+#else
+        // CPU has no grid/block context; equivalent launch is <<<1, 1>>>.
+        printf("[WDM_HET_DPRINT_KERNEL fill_global] gridDim=1 blockDim=1 "
+               "n_chunks=%d num_bin=%d nparams=%d nchannels=%d\n",
+               n_chunks, num_bin, nparams, nchannels);
+#endif
         printf("[WDM_HET_DPRINT_KERNEL fill_global] Nf=%d Nt=%d Nt_sub=%d "
                "N_sparse=%d n_rfft_chunk=%d N_cp_sig=%d N_cp_orbit=%d "
                "use_spline_cache=%d use_orbit_cache=%d tukey_alpha=%.3e\n",
@@ -2838,7 +2864,7 @@ void wdm_het_fill_global_kernel(
                     spline->tdi_channels_cp_buf, slow_buf,
                     spline->extract_scratch_buf,
                     (int) sizeof(spline->extract_scratch_buf),
-                    orbit_cache_ptr
+                    orbit_cache_ptr, /* wdm_dprint_chunk_idx */ j
                 );
             } else {
                 fast_wdm_inner_heterodyne(
@@ -2849,7 +2875,7 @@ void wdm_het_fill_global_kernel(
                     direct->tdi_phase_buf, direct->phi_ref_buf,
                     tdi_channels_buf, slow_buf,
                     get_tdi_scratch, get_tdi_scratch_len_per_block,
-                    orbit_cache_ptr
+                    orbit_cache_ptr, /* wdm_dprint_chunk_idx */ j
                 );
             }
             CUDA_SYNC_THREADS;
@@ -3107,7 +3133,7 @@ void wdm_het_get_ll_kernel(
                         spline->tdi_channels_cp_buf, slow_buf,
                         spline->extract_scratch_buf,
                         (int) sizeof(spline->extract_scratch_buf),
-                        orbit_cache_ptr
+                        orbit_cache_ptr, /* wdm_dprint_chunk_idx */ j
                     );
                 } else {
                     fast_wdm_inner_heterodyne(
@@ -3118,7 +3144,7 @@ void wdm_het_get_ll_kernel(
                         direct->tdi_phase_buf, direct->phi_ref_buf,
                         tdi_channels_buf, slow_buf,
                         get_tdi_scratch, get_tdi_scratch_len_per_block,
-                        orbit_cache_ptr
+                        orbit_cache_ptr, /* wdm_dprint_chunk_idx */ j
                     );
                 }
                 CUDA_SYNC_THREADS;
@@ -3394,7 +3420,7 @@ void wdm_het_swap_ll_kernel(
                     spline->tdi_channels_cp_buf, slow_buf,
                     spline->extract_scratch_buf,
                     (int) sizeof(spline->extract_scratch_buf),
-                    orbit_cache_ptr
+                    orbit_cache_ptr, /* wdm_dprint_chunk_idx */ j
                 );
             } else {
                 fast_wdm_inner_heterodyne(
@@ -3405,7 +3431,7 @@ void wdm_het_swap_ll_kernel(
                     direct->tdi_phase_buf, direct->phi_ref_buf,
                     tdi_channels_buf, slow_buf,
                     get_tdi_scratch, get_tdi_scratch_len_per_block,
-                    orbit_cache_ptr
+                    orbit_cache_ptr, /* wdm_dprint_chunk_idx */ j
                 );
             }
             CUDA_SYNC_THREADS;
@@ -3436,7 +3462,7 @@ void wdm_het_swap_ll_kernel(
                     spline->tdi_channels_cp_buf, slow_buf,
                     spline->extract_scratch_buf,
                     (int) sizeof(spline->extract_scratch_buf),
-                    orbit_cache_ptr
+                    orbit_cache_ptr, /* wdm_dprint_chunk_idx */ j
                 );
             } else {
                 fast_wdm_inner_heterodyne(
@@ -3447,7 +3473,7 @@ void wdm_het_swap_ll_kernel(
                     direct->tdi_phase_buf, direct->phi_ref_buf,
                     tdi_channels_buf, slow_buf,
                     get_tdi_scratch, get_tdi_scratch_len_per_block,
-                    orbit_cache_ptr
+                    orbit_cache_ptr, /* wdm_dprint_chunk_idx */ j
                 );
             }
             CUDA_SYNC_THREADS;
