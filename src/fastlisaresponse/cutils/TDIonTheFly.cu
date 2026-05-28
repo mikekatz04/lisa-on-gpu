@@ -19,6 +19,27 @@
 #define NUM_THREADS_HERE 1
 #endif
 
+// ---------------------------------------------------------------------------
+// GPU-only diagnostic printing for the chunked-het kernels.
+//
+// Set WDM_HET_DEBUG_PRINT to 1 to enable printf instrumentation at strategic
+// points inside ``fast_wdm_inner_heterodyne``, ``fast_wdm_inner_heterodyne_spline``,
+// and ``wdm_het_fill_global_kernel``. Prints fire ONLY on the device build
+// (``__CUDACC__``) and ONLY for one thread/block/binary so the output is
+// bounded. The CPU build is unaffected. Used to chase GPU-vs-CPU
+// divergence in fill_global output -- see WDM_HET_DPRINT_DIRECT/SPLINE/KERNEL
+// markers in printf output for grep-friendly tagging.
+// ---------------------------------------------------------------------------
+#ifndef WDM_HET_DEBUG_PRINT
+#define WDM_HET_DEBUG_PRINT 1
+#endif
+
+#if WDM_HET_DEBUG_PRINT && defined(__CUDACC__)
+#define WDM_HET_DEBUG_LEAD (blockIdx.x == 0 && threadIdx.x == 0)
+#else
+#define WDM_HET_DEBUG_LEAD (0)
+#endif
+
 CUDA_DEVICE
 LISATDIonTheFly::~LISATDIonTheFly()
 {
@@ -1913,6 +1934,29 @@ inline void fast_wdm_inner_heterodyne_spline(
     }
     CUDA_SYNC_THREADS;
 
+#if WDM_HET_DEBUG_PRINT && defined(__CUDACC__)
+    if (bin_i == 0 && WDM_HET_DEBUG_LEAD) {
+        printf("[WDM_HET_DPRINT_SPLINE post-get_tdi_raw] bin_i=%d N_cp_sig=%d "
+               "N_sparse=%d nchannels=%d f0=%.12e f0_grid=%.12e k_f0=%d "
+               "orbit_cache=%p\n",
+               bin_i, N_cp_sig, N_sparse, nchannels, f0, f0_grid, k_f0,
+               (void *) orbit_cache);
+        printf("[WDM_HET_DPRINT_SPLINE post-get_tdi_raw] t_cp[0,1,2]="
+               "%.12e %.12e %.12e\n",
+               t_cp_buf[0], t_cp_buf[1], t_cp_buf[2]);
+        printf("[WDM_HET_DPRINT_SPLINE post-get_tdi_raw] phi_ref_un_het[0,1,2]="
+               "%.12e %.12e %.12e\n",
+               phi_ref_un_het_buf[0], phi_ref_un_het_buf[1],
+               phi_ref_un_het_buf[2]);
+        printf("[WDM_HET_DPRINT_SPLINE post-get_tdi_raw] tdi_channels_cp[c=0, 0,1,2]= "
+               "(%.6e,%.6e) (%.6e,%.6e) (%.6e,%.6e)\n",
+               tdi_channels_cp_buf[0].real(), tdi_channels_cp_buf[0].imag(),
+               tdi_channels_cp_buf[1].real(), tdi_channels_cp_buf[1].imag(),
+               tdi_channels_cp_buf[2].real(), tdi_channels_cp_buf[2].imag());
+    }
+    CUDA_SYNC_THREADS;
+#endif
+
     // ---- 3) heterodyne-subtract phi_ref into dphi_ref_y_buf, then fit ----
     // dphi_ref_y_buf[i] = phi_ref(t_cp[i]) - 2*pi*f0_grid*t_cp[i].
     // phi_ref_un_het_buf stays intact for use by the per-channel extract
@@ -2028,12 +2072,34 @@ inline void fast_wdm_inner_heterodyne_spline(
         CUDA_SYNC_THREADS;
     }
 
+#if WDM_HET_DEBUG_PRINT && defined(__CUDACC__)
+    if (bin_i == 0 && WDM_HET_DEBUG_LEAD) {
+        printf("[WDM_HET_DPRINT_SPLINE pre-fft] slow_buf[c=0, 0,1,2]= "
+               "(%.6e,%.6e) (%.6e,%.6e) (%.6e,%.6e)\n",
+               slow_buf[0].real(), slow_buf[0].imag(),
+               slow_buf[1].real(), slow_buf[1].imag(),
+               slow_buf[2].real(), slow_buf[2].imag());
+    }
+    CUDA_SYNC_THREADS;
+#endif
+
     // ---- 5) FFT slow_buf in place, per channel ----------------------------
     for (int c = 0; c < nchannels; ++c) {
         wdm_spline_radix2_fft(&slow_buf[c * N_sparse],
                               N_sparse, log2_N_sparse, /*inverse=*/false);
         CUDA_SYNC_THREADS;
     }
+
+#if WDM_HET_DEBUG_PRINT && defined(__CUDACC__)
+    if (bin_i == 0 && WDM_HET_DEBUG_LEAD) {
+        printf("[WDM_HET_DPRINT_SPLINE post-fft] slow_buf[c=0, 0,1,2]= "
+               "(%.6e,%.6e) (%.6e,%.6e) (%.6e,%.6e)\n",
+               slow_buf[0].real(), slow_buf[0].imag(),
+               slow_buf[1].real(), slow_buf[1].imag(),
+               slow_buf[2].real(), slow_buf[2].imag());
+    }
+    CUDA_SYNC_THREADS;
+#endif
 
     // ---- 6) Place into chunk_fd_out (identical to direct path) -----------
     for (int c = 0; c < nchannels; ++c) {
@@ -2048,6 +2114,20 @@ inline void fast_wdm_inner_heterodyne_spline(
         }
     }
     CUDA_SYNC_THREADS;
+
+#if WDM_HET_DEBUG_PRINT && defined(__CUDACC__)
+    if (bin_i == 0 && WDM_HET_DEBUG_LEAD) {
+        const int k_lo = (k_f0 - 1 >= 0) ? (k_f0 - 1) : 0;
+        const int k_hi = (k_f0 + 1 < n_rfft_chunk) ? (k_f0 + 1) : (n_rfft_chunk - 1);
+        printf("[WDM_HET_DPRINT_SPLINE post-place] chunk_fd_out[c=0, k_f0%s1, k_f0, k_f0+1]= "
+               "(%.6e,%.6e) (%.6e,%.6e) (%.6e,%.6e)\n",
+               (k_f0 - 1 >= 0 ? "-" : "0:"),
+               chunk_fd_out[k_lo].real(), chunk_fd_out[k_lo].imag(),
+               chunk_fd_out[k_f0].real(), chunk_fd_out[k_f0].imag(),
+               chunk_fd_out[k_hi].real(), chunk_fd_out[k_hi].imag());
+    }
+    CUDA_SYNC_THREADS;
+#endif
 }
 
 
@@ -2117,6 +2197,32 @@ inline void fast_wdm_inner_heterodyne(
     }
     CUDA_SYNC_THREADS;
 
+#if WDM_HET_DEBUG_PRINT && defined(__CUDACC__)
+    if (bin_i == 0 && WDM_HET_DEBUG_LEAD) {
+        printf("[WDM_HET_DPRINT_DIRECT post-get_tdi] bin_i=%d N_sparse=%d "
+               "nchannels=%d f0=%.12e f0_grid=%.12e k_f0=%d "
+               "orbit_cache=%p\n",
+               bin_i, N_sparse, nchannels, f0, f0_grid, k_f0,
+               (void *) orbit_cache);
+        printf("[WDM_HET_DPRINT_DIRECT post-get_tdi] t_sparse[0,1,2]="
+               "%.12e %.12e %.12e\n",
+               t_sparse_buf[0], t_sparse_buf[1], t_sparse_buf[2]);
+        printf("[WDM_HET_DPRINT_DIRECT post-get_tdi] phi_ref[0,1,2]="
+               "%.12e %.12e %.12e\n",
+               phi_ref_buf[0], phi_ref_buf[1], phi_ref_buf[2]);
+        printf("[WDM_HET_DPRINT_DIRECT post-get_tdi] tdi_amp[c=0, 0,1,2]="
+               "%.12e %.12e %.12e\n",
+               tdi_amp_buf[0], tdi_amp_buf[1], tdi_amp_buf[2]);
+        printf("[WDM_HET_DPRINT_DIRECT post-get_tdi] tdi_phase[c=0, 0,1,2]="
+               "%.12e %.12e %.12e\n",
+               tdi_phase_buf[0], tdi_phase_buf[1], tdi_phase_buf[2]);
+        printf("[WDM_HET_DPRINT_DIRECT post-get_tdi] tdi_channels[c=0, 0]="
+               "(%.6e, %.6e)\n",
+               tdi_channels_buf[0].real(), tdi_channels_buf[0].imag());
+    }
+    CUDA_SYNC_THREADS;
+#endif
+
     // ---- 3) slow signal + optional Tukey window ---------------------------
     const cmplx I_c(0.0, 1.0);
     // Tukey denominator: alpha*(N-1)/2, matching scipy.signal.windows.tukey
@@ -2152,12 +2258,34 @@ inline void fast_wdm_inner_heterodyne(
     }
     CUDA_SYNC_THREADS;
 
+#if WDM_HET_DEBUG_PRINT && defined(__CUDACC__)
+    if (bin_i == 0 && WDM_HET_DEBUG_LEAD) {
+        printf("[WDM_HET_DPRINT_DIRECT pre-fft] slow_buf[c=0, 0,1,2]= "
+               "(%.6e,%.6e) (%.6e,%.6e) (%.6e,%.6e)\n",
+               slow_buf[0].real(), slow_buf[0].imag(),
+               slow_buf[1].real(), slow_buf[1].imag(),
+               slow_buf[2].real(), slow_buf[2].imag());
+    }
+    CUDA_SYNC_THREADS;
+#endif
+
     // ---- 4) FFT slow_buf in place, per channel ----------------------------
     for (int c = 0; c < nchannels; ++c) {
         wdm_spline_radix2_fft(&slow_buf[c * N_sparse],
                               N_sparse, log2_N_sparse, /*inverse=*/false);
         CUDA_SYNC_THREADS;
     }
+
+#if WDM_HET_DEBUG_PRINT && defined(__CUDACC__)
+    if (bin_i == 0 && WDM_HET_DEBUG_LEAD) {
+        printf("[WDM_HET_DPRINT_DIRECT post-fft] slow_buf[c=0, 0,1,2]= "
+               "(%.6e,%.6e) (%.6e,%.6e) (%.6e,%.6e)\n",
+               slow_buf[0].real(), slow_buf[0].imag(),
+               slow_buf[1].real(), slow_buf[1].imag(),
+               slow_buf[2].real(), slow_buf[2].imag());
+    }
+    CUDA_SYNC_THREADS;
+#endif
 
     // ---- 5) Scale and place into chunk_fd_out at [k_f0 + fftfreq] --------
     // fftfreq(N) gives FFT bin indices [0, 1, ..., N/2-1, -N/2, ..., -1].
@@ -2175,6 +2303,21 @@ inline void fast_wdm_inner_heterodyne(
         }
     }
     CUDA_SYNC_THREADS;
+
+#if WDM_HET_DEBUG_PRINT && defined(__CUDACC__)
+    if (bin_i == 0 && WDM_HET_DEBUG_LEAD) {
+        // Print the 3 bins around the snapped carrier (k_f0-1, k_f0, k_f0+1).
+        const int k_lo = (k_f0 - 1 >= 0) ? (k_f0 - 1) : 0;
+        const int k_hi = (k_f0 + 1 < n_rfft_chunk) ? (k_f0 + 1) : (n_rfft_chunk - 1);
+        printf("[WDM_HET_DPRINT_DIRECT post-place] chunk_fd_out[c=0, k_f0%s1, k_f0, k_f0+1]= "
+               "(%.6e,%.6e) (%.6e,%.6e) (%.6e,%.6e)\n",
+               (k_f0 - 1 >= 0 ? "-" : "0:"),
+               chunk_fd_out[k_lo].real(), chunk_fd_out[k_lo].imag(),
+               chunk_fd_out[k_f0].real(), chunk_fd_out[k_f0].imag(),
+               chunk_fd_out[k_hi].real(), chunk_fd_out[k_hi].imag());
+    }
+    CUDA_SYNC_THREADS;
+#endif
 }
 
 
@@ -2565,6 +2708,54 @@ void wdm_het_fill_global_kernel(
     // to nothing so this lands on the stack; sized at
     // FAST_WDM_NT_SUB_MAX (256 GPU / 4096 CPU).
     CUDA_SHARED cmplx layer_scratch[FAST_WDM_NT_SUB_MAX];
+
+#if WDM_HET_DEBUG_PRINT && defined(__CUDACC__)
+    if (WDM_HET_DEBUG_LEAD) {
+        printf("[WDM_HET_DPRINT_KERNEL fill_global] gridDim=%d blockDim=%d "
+               "n_chunks=%d num_bin=%d nparams=%d nchannels=%d\n",
+               (int) gridDim.x, (int) blockDim.x,
+               n_chunks, num_bin, nparams, nchannels);
+        printf("[WDM_HET_DPRINT_KERNEL fill_global] Nf=%d Nt=%d Nt_sub=%d "
+               "N_sparse=%d n_rfft_chunk=%d N_cp_sig=%d N_cp_orbit=%d "
+               "use_spline_cache=%d use_orbit_cache=%d tukey_alpha=%.3e\n",
+               Nf, Nt, Nt_sub, N_sparse, n_rfft_chunk,
+               N_cp_sig, N_cp_orbit,
+               (int) use_spline_cache, (int) use_orbit_cache, tukey_alpha);
+        printf("[WDM_HET_DPRINT_KERNEL fill_global] T_chunk=%.6e dt=%.6e "
+               "T=%.6e t_ref=%.6e chunk_t_starts[0]=%.6e keep_lo[0]=%d "
+               "keep_hi[0]=%d n_global_offset[0]=%d\n",
+               T_chunk, dt, T, t_ref,
+               chunk_t_starts[0], chunk_keep_lo[0], chunk_keep_hi[0],
+               chunk_n_global_offset[0]);
+        printf("[WDM_HET_DPRINT_KERNEL fill_global] arena=%p direct=%p "
+               "spline=%p slow_buf=%p layer_scratch=%p\n",
+               (void *) path_arena, (void *) direct,
+               (void *) spline, (void *) slow_buf, (void *) layer_scratch);
+        printf("[WDM_HET_DPRINT_KERNEL fill_global] sizeof(Direct)=%lu "
+               "sizeof(Spline)=%lu WDM_HET_PATH_BYTES=%lu\n",
+               (unsigned long) sizeof(WDMHetDirectBufs),
+               (unsigned long) sizeof(WDMHetSplineBufs),
+               (unsigned long) WDM_HET_PATH_BYTES);
+        // Direct member offsets (in the same arena bytes when use_spline_cache==0):
+        printf("[WDM_HET_DPRINT_KERNEL fill_global] direct: "
+               "&t_sparse=%p &tdi_amp=%p &tdi_phase=%p &phi_ref=%p\n",
+               (void *) &direct->t_sparse_buf[0],
+               (void *) &direct->tdi_amp_buf[0],
+               (void *) &direct->tdi_phase_buf[0],
+               (void *) &direct->phi_ref_buf[0]);
+        // Spline member offsets (used when use_spline_cache==1):
+        printf("[WDM_HET_DPRINT_KERNEL fill_global] spline: "
+               "&t_cp=%p &amp_y=%p &dphi_ref_y=%p &phi_ref_un_het=%p "
+               "&tdi_channels_cp=%p &extract_scratch=%p\n",
+               (void *) &spline->t_cp_buf[0],
+               (void *) &spline->amp_y_buf[0],
+               (void *) &spline->dphi_ref_y_buf[0],
+               (void *) &spline->phi_ref_un_het_buf[0],
+               (void *) &spline->tdi_channels_cp_buf[0],
+               (void *) &spline->extract_scratch_buf[0]);
+    }
+    CUDA_SYNC_THREADS;
+#endif
 
     // OUTER: chunks (one block per chunk). The fill_global per-binary
     // contention is per (chunk, m, n_local) -> different global pixel
