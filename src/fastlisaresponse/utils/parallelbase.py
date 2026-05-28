@@ -17,5 +17,10 @@ class FastLISAResponseParallelModule(ParallelModuleBase):
         The JAX backend is a host-side pure-Python path (no compiled
         wheel needed); we list it after the GPU options so the default
         "first available" pick stays GPU when both are present.
+
+        Returns bare platform tags (``cuda13x`` / ``cpu`` / ...); the
+        consuming :meth:`supported_backends` prepends the
+        ``fastlisaresponse_`` namespace to match the names registered
+        in ``Globals().backends_manager``.
         """
-        return ["flr_cuda13x", "flr_cuda12x", "flr_cuda11x", "flr_cpu", "flr_jax"]
+        return ["cuda13x", "cuda12x", "cuda11x", "cpu", "jax"]

@@ -2396,25 +2396,26 @@ inline void gb_chunk_fd_to_wdm(
 
 
 // ============================================================================
-// Shared-memory layout shared by all three chunked-het kernels
+// Shared-memory layout for the three chunked-het kernels
 // (wdm_het_fill_global_kernel / wdm_het_get_ll_kernel /
 //  wdm_het_swap_ll_kernel).
 //
 // The direct-path and spline-path buffer sets are MUTUALLY EXCLUSIVE per
-// (chunk, binary) invocation -- the kernel picks one branch via
-// ``use_spline_cache`` -- so they share the same physical shared memory
-// via a union. The amp/phase coefficient stacks inside the spline struct
-// are single-channel (~6 KB saving): the spline path now fits + evaluates
-// one channel at a time inside fast_wdm_inner_heterodyne_spline, so a
-// single-channel buffer is reused across the c-loop instead of carrying
-// 3 channels' worth simultaneously.
+// (chunk, binary) invocation -- ``use_spline_cache`` picks exactly one --
+// so they share the same physical shared memory. The amp/phase
+// coefficient stacks inside the spline struct are single-channel (the
+// spline path fits + evaluates one channel at a time inside
+// fast_wdm_inner_heterodyne_spline), reusing a single-channel buffer
+// across the c-loop instead of carrying 3 channels' worth simultaneously.
 //
-// ``cmplx``'s default constructor is non-trivial, which would implicitly
-// delete the union's default constructor. We provide explicit no-op
-// constructors (``CUDA_DEVICE`` so they have the same linkage as the
-// kernels that allocate them). ``CUDA_SHARED`` memory is uninitialised at
-// runtime, so the no-op is correct -- we never observe a default-init'd
-// element.
+// We overlay the two struct types onto a single raw ``__shared__ char``
+// arena and use ``reinterpret_cast`` to view it as the right type per
+// branch -- rather than a C++ ``union`` -- because the cmplx field in
+// WDMHetSplineBufs has a user-defined constructor, which historically
+// makes NVCC mis-handle ``__shared__ union`` of those types. ``__shared__``
+// memory is uninitialised at runtime (no constructors run), so the
+// reinterpret_cast view is well-defined: every kernel branch is the
+// FIRST writer to its own subset of bytes.
 // ============================================================================
 struct WDMHetDirectBufs {
     double t_sparse_buf  [FAST_WDM_N_SPARSE_MAX];
@@ -2446,17 +2447,18 @@ struct WDMHetSplineBufs {
     double phi_ref_un_het_buf  [FAST_WDM_N_CP_SIG_MAX];
     cmplx  tdi_channels_cp_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
     char   extract_scratch_buf [21 * FAST_WDM_N_CP_SIG_MAX + 16];
-
-    CUDA_DEVICE WDMHetSplineBufs()  {}
-    CUDA_DEVICE ~WDMHetSplineBufs() {}
 };
-union WDMHetPathBufs {
-    WDMHetDirectBufs direct;
-    WDMHetSplineBufs spline;
 
-    CUDA_DEVICE WDMHetPathBufs()  {}
-    CUDA_DEVICE ~WDMHetPathBufs() {}
-};
+// Compile-time size + alignment for the arena overlay.
+//
+// Why 16: cmplx is two doubles (16 B) and the strictest alignment of any
+// member across both structs is doubles' 8 -- 16 keeps us safely aligned
+// for cmplx loads/stores and gives nice 128-bit boundaries for the FFT
+// inner loops. CUDA allocates __shared__ to its declared alignment.
+#define WDM_HET_PATH_BYTES \
+    ((sizeof(WDMHetDirectBufs) > sizeof(WDMHetSplineBufs)) \
+     ? sizeof(WDMHetDirectBufs) : sizeof(WDMHetSplineBufs))
+#define WDM_HET_PATH_ALIGN 16
 
 
 // ============================================================================
@@ -2535,7 +2537,9 @@ void wdm_het_fill_global_kernel(
     // phase coefficient stacks are also single-channel (amp/phase are fit
     // + evaluated one channel at a time inside fast_wdm_inner_heterodyne_spline),
     // saving another ~6 KB vs. the old per-channel-stacks layout.
-    CUDA_SHARED WDMHetPathBufs path;
+    CUDA_SHARED alignas(WDM_HET_PATH_ALIGN) char path_arena[WDM_HET_PATH_BYTES];
+    WDMHetDirectBufs *direct = reinterpret_cast<WDMHetDirectBufs *>(path_arena);
+    WDMHetSplineBufs *spline = reinterpret_cast<WDMHetSplineBufs *>(path_arena);
     CUDA_SHARED cmplx  slow_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
     const bool use_spline_cache = (N_cp_sig > 0 && N_cp_sig <= FAST_WDM_N_CP_SIG_MAX
                                    && N_cp_sig < N_sparse);
@@ -2631,18 +2635,18 @@ void wdm_het_fill_global_kernel(
                     chunk_t0, T_chunk,
                     N_sparse, log2_N_sparse, N_cp_sig,
                     n_rfft_chunk, nchannels, tukey_alpha,
-                    path.spline.t_cp_buf,
-                    path.spline.amp_y_buf, path.spline.amp_c1_buf,
-                    path.spline.amp_c2_buf, path.spline.amp_c3_buf,
-                    path.spline.phase_y_buf, path.spline.phase_c1_buf,
-                    path.spline.phase_c2_buf, path.spline.phase_c3_buf,
-                    path.spline.dphi_ref_y_buf, path.spline.dphi_ref_c1_buf,
-                    path.spline.dphi_ref_c2_buf, path.spline.dphi_ref_c3_buf,
-                    path.spline.B_buf, path.spline.pcr_scratch,
-                    path.spline.phi_ref_un_het_buf,
-                    path.spline.tdi_channels_cp_buf, slow_buf,
-                    path.spline.extract_scratch_buf,
-                    (int) sizeof(path.spline.extract_scratch_buf),
+                    spline->t_cp_buf,
+                    spline->amp_y_buf, spline->amp_c1_buf,
+                    spline->amp_c2_buf, spline->amp_c3_buf,
+                    spline->phase_y_buf, spline->phase_c1_buf,
+                    spline->phase_c2_buf, spline->phase_c3_buf,
+                    spline->dphi_ref_y_buf, spline->dphi_ref_c1_buf,
+                    spline->dphi_ref_c2_buf, spline->dphi_ref_c3_buf,
+                    spline->B_buf, spline->pcr_scratch,
+                    spline->phi_ref_un_het_buf,
+                    spline->tdi_channels_cp_buf, slow_buf,
+                    spline->extract_scratch_buf,
+                    (int) sizeof(spline->extract_scratch_buf),
                     orbit_cache_ptr
                 );
             } else {
@@ -2650,8 +2654,8 @@ void wdm_het_fill_global_kernel(
                     chunk_fd, &src, params, bin_i, src.f0_index,
                     chunk_t0, T_chunk,
                     N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
-                    path.direct.t_sparse_buf, path.direct.tdi_amp_buf,
-                    path.direct.tdi_phase_buf, path.direct.phi_ref_buf,
+                    direct->t_sparse_buf, direct->tdi_amp_buf,
+                    direct->tdi_phase_buf, direct->phi_ref_buf,
                     tdi_channels_buf, slow_buf,
                     get_tdi_scratch, get_tdi_scratch_len_per_block,
                     orbit_cache_ptr
@@ -2781,7 +2785,9 @@ void wdm_het_get_ll_kernel(
     // coefficient stacks are also single-channel (amp/phase fit + eval
     // happens one channel at a time inside fast_wdm_inner_heterodyne_spline),
     // saving another ~6 KB vs. the old per-channel-stacks layout.
-    CUDA_SHARED WDMHetPathBufs path;
+    CUDA_SHARED alignas(WDM_HET_PATH_ALIGN) char path_arena[WDM_HET_PATH_BYTES];
+    WDMHetDirectBufs *direct = reinterpret_cast<WDMHetDirectBufs *>(path_arena);
+    WDMHetSplineBufs *spline = reinterpret_cast<WDMHetSplineBufs *>(path_arena);
     const bool use_spline_cache = (N_cp_sig > 0 && N_cp_sig <= FAST_WDM_N_CP_SIG_MAX
                                    && N_cp_sig < N_sparse);
     CUDA_SHARED cmplx  slow_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
@@ -2898,18 +2904,18 @@ void wdm_het_get_ll_kernel(
                         chunk_t0, T_chunk,
                         N_sparse, log2_N_sparse, N_cp_sig,
                         n_rfft_chunk, nchannels, tukey_alpha,
-                        path.spline.t_cp_buf,
-                        path.spline.amp_y_buf, path.spline.amp_c1_buf,
-                        path.spline.amp_c2_buf, path.spline.amp_c3_buf,
-                        path.spline.phase_y_buf, path.spline.phase_c1_buf,
-                        path.spline.phase_c2_buf, path.spline.phase_c3_buf,
-                        path.spline.dphi_ref_y_buf, path.spline.dphi_ref_c1_buf,
-                        path.spline.dphi_ref_c2_buf, path.spline.dphi_ref_c3_buf,
-                        path.spline.B_buf, path.spline.pcr_scratch,
-                        path.spline.phi_ref_un_het_buf,
-                        path.spline.tdi_channels_cp_buf, slow_buf,
-                        path.spline.extract_scratch_buf,
-                        (int) sizeof(path.spline.extract_scratch_buf),
+                        spline->t_cp_buf,
+                        spline->amp_y_buf, spline->amp_c1_buf,
+                        spline->amp_c2_buf, spline->amp_c3_buf,
+                        spline->phase_y_buf, spline->phase_c1_buf,
+                        spline->phase_c2_buf, spline->phase_c3_buf,
+                        spline->dphi_ref_y_buf, spline->dphi_ref_c1_buf,
+                        spline->dphi_ref_c2_buf, spline->dphi_ref_c3_buf,
+                        spline->B_buf, spline->pcr_scratch,
+                        spline->phi_ref_un_het_buf,
+                        spline->tdi_channels_cp_buf, slow_buf,
+                        spline->extract_scratch_buf,
+                        (int) sizeof(spline->extract_scratch_buf),
                         orbit_cache_ptr
                     );
                 } else {
@@ -2917,8 +2923,8 @@ void wdm_het_get_ll_kernel(
                         chunk_fd, &src, params, bin_i, src.f0_index,
                         chunk_t0, T_chunk,
                         N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
-                        path.direct.t_sparse_buf, path.direct.tdi_amp_buf,
-                        path.direct.tdi_phase_buf, path.direct.phi_ref_buf,
+                        direct->t_sparse_buf, direct->tdi_amp_buf,
+                        direct->tdi_phase_buf, direct->phi_ref_buf,
                         tdi_channels_buf, slow_buf,
                         get_tdi_scratch, get_tdi_scratch_len_per_block,
                         orbit_cache_ptr
@@ -3070,7 +3076,9 @@ void wdm_het_swap_ll_kernel(
     // direct/spline). Saves ~16 KB shared per kernel; spline amp/phase
     // coeff stacks are single-channel (fit+eval per channel inside
     // fast_wdm_inner_heterodyne_spline) for another ~6 KB.
-    CUDA_SHARED WDMHetPathBufs path;
+    CUDA_SHARED alignas(WDM_HET_PATH_ALIGN) char path_arena[WDM_HET_PATH_BYTES];
+    WDMHetDirectBufs *direct = reinterpret_cast<WDMHetDirectBufs *>(path_arena);
+    WDMHetSplineBufs *spline = reinterpret_cast<WDMHetSplineBufs *>(path_arena);
     const bool use_spline_cache = (N_cp_sig > 0 && N_cp_sig <= FAST_WDM_N_CP_SIG_MAX
                                    && N_cp_sig < N_sparse);
     CUDA_SHARED cmplx  slow_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
@@ -3183,18 +3191,18 @@ void wdm_het_swap_ll_kernel(
                     chunk_t0, T_chunk,
                     N_sparse, log2_N_sparse, N_cp_sig,
                     n_rfft_chunk, nchannels, tukey_alpha,
-                    path.spline.t_cp_buf,
-                    path.spline.amp_y_buf, path.spline.amp_c1_buf,
-                    path.spline.amp_c2_buf, path.spline.amp_c3_buf,
-                    path.spline.phase_y_buf, path.spline.phase_c1_buf,
-                    path.spline.phase_c2_buf, path.spline.phase_c3_buf,
-                    path.spline.dphi_ref_y_buf, path.spline.dphi_ref_c1_buf,
-                    path.spline.dphi_ref_c2_buf, path.spline.dphi_ref_c3_buf,
-                    path.spline.B_buf, path.spline.pcr_scratch,
-                    path.spline.phi_ref_un_het_buf,
-                    path.spline.tdi_channels_cp_buf, slow_buf,
-                    path.spline.extract_scratch_buf,
-                    (int) sizeof(path.spline.extract_scratch_buf),
+                    spline->t_cp_buf,
+                    spline->amp_y_buf, spline->amp_c1_buf,
+                    spline->amp_c2_buf, spline->amp_c3_buf,
+                    spline->phase_y_buf, spline->phase_c1_buf,
+                    spline->phase_c2_buf, spline->phase_c3_buf,
+                    spline->dphi_ref_y_buf, spline->dphi_ref_c1_buf,
+                    spline->dphi_ref_c2_buf, spline->dphi_ref_c3_buf,
+                    spline->B_buf, spline->pcr_scratch,
+                    spline->phi_ref_un_het_buf,
+                    spline->tdi_channels_cp_buf, slow_buf,
+                    spline->extract_scratch_buf,
+                    (int) sizeof(spline->extract_scratch_buf),
                     orbit_cache_ptr
                 );
             } else {
@@ -3202,8 +3210,8 @@ void wdm_het_swap_ll_kernel(
                     chunk_fd_add, &src, params_add, bin_i, src.f0_index,
                     chunk_t0, T_chunk,
                     N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
-                    path.direct.t_sparse_buf, path.direct.tdi_amp_buf,
-                    path.direct.tdi_phase_buf, path.direct.phi_ref_buf,
+                    direct->t_sparse_buf, direct->tdi_amp_buf,
+                    direct->tdi_phase_buf, direct->phi_ref_buf,
                     tdi_channels_buf, slow_buf,
                     get_tdi_scratch, get_tdi_scratch_len_per_block,
                     orbit_cache_ptr
@@ -3225,18 +3233,18 @@ void wdm_het_swap_ll_kernel(
                     chunk_t0, T_chunk,
                     N_sparse, log2_N_sparse, N_cp_sig,
                     n_rfft_chunk, nchannels, tukey_alpha,
-                    path.spline.t_cp_buf,
-                    path.spline.amp_y_buf, path.spline.amp_c1_buf,
-                    path.spline.amp_c2_buf, path.spline.amp_c3_buf,
-                    path.spline.phase_y_buf, path.spline.phase_c1_buf,
-                    path.spline.phase_c2_buf, path.spline.phase_c3_buf,
-                    path.spline.dphi_ref_y_buf, path.spline.dphi_ref_c1_buf,
-                    path.spline.dphi_ref_c2_buf, path.spline.dphi_ref_c3_buf,
-                    path.spline.B_buf, path.spline.pcr_scratch,
-                    path.spline.phi_ref_un_het_buf,
-                    path.spline.tdi_channels_cp_buf, slow_buf,
-                    path.spline.extract_scratch_buf,
-                    (int) sizeof(path.spline.extract_scratch_buf),
+                    spline->t_cp_buf,
+                    spline->amp_y_buf, spline->amp_c1_buf,
+                    spline->amp_c2_buf, spline->amp_c3_buf,
+                    spline->phase_y_buf, spline->phase_c1_buf,
+                    spline->phase_c2_buf, spline->phase_c3_buf,
+                    spline->dphi_ref_y_buf, spline->dphi_ref_c1_buf,
+                    spline->dphi_ref_c2_buf, spline->dphi_ref_c3_buf,
+                    spline->B_buf, spline->pcr_scratch,
+                    spline->phi_ref_un_het_buf,
+                    spline->tdi_channels_cp_buf, slow_buf,
+                    spline->extract_scratch_buf,
+                    (int) sizeof(spline->extract_scratch_buf),
                     orbit_cache_ptr
                 );
             } else {
@@ -3244,8 +3252,8 @@ void wdm_het_swap_ll_kernel(
                     chunk_fd_rem, &src, params_rem, bin_i, src.f0_index,
                     chunk_t0, T_chunk,
                     N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
-                    path.direct.t_sparse_buf, path.direct.tdi_amp_buf,
-                    path.direct.tdi_phase_buf, path.direct.phi_ref_buf,
+                    direct->t_sparse_buf, direct->tdi_amp_buf,
+                    direct->tdi_phase_buf, direct->phi_ref_buf,
                     tdi_channels_buf, slow_buf,
                     get_tdi_scratch, get_tdi_scratch_len_per_block,
                     orbit_cache_ptr
