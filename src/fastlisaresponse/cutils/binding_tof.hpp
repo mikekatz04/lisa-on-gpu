@@ -219,7 +219,27 @@ class WaveletLookupTableWrap : public ReturnPointerBase {
 };
 
 
-class WDMDomainWrap : public ReturnPointerBase {
+class WDMSettingsWrap : public ReturnPointerBase {
+  public:
+    WDMSettings *wdm_settings;
+
+    WDMSettingsWrap(double layer_df_, double layer_dt_, int Nf_, int Nt_,
+                    int num_channel_, int ind_min_t_, int ind_max_t_,
+                    int ind_min_f_, int ind_max_f_)
+    {
+        wdm_settings = new WDMSettings(
+            layer_df_, layer_dt_, Nf_, Nt_, num_channel_,
+            ind_min_t_, ind_max_t_, ind_min_f_, ind_max_f_
+        );
+    };
+    ~WDMSettingsWrap(){
+        delete wdm_settings;
+    };
+
+};
+
+
+class WDMDomainWrap : public WDMSettingsWrap {
   public:
     WDMDomain *wdm;
     // array_type<double> c_nm_all;
@@ -232,6 +252,8 @@ class WDMDomainWrap : public ReturnPointerBase {
     // double min_fdot;
 
     WDMDomainWrap(array_type<double>wdm_data_, array_type<double>wdm_noise_, double layer_df_, double layer_dt_, int Nf_, int Nt_, int num_channel_, int ind_min_t_, int ind_max_t_, int ind_min_f_, int ind_max_f_, int num_data_, int num_noise_)
+      : WDMSettingsWrap(layer_df_, layer_dt_, Nf_, Nt_, num_channel_,
+                        ind_min_t_, ind_max_t_, ind_min_f_, ind_max_f_)
     {
         // TODO: adjust noise length check to TDI setups
         int Nt_active = ind_max_t_ - ind_min_t_ + 1;
@@ -244,6 +266,7 @@ class WDMDomainWrap : public ReturnPointerBase {
     };
     ~WDMDomainWrap(){
         delete wdm;
+        // base dtor handles wdm_settings
     };
 
 };
@@ -381,13 +404,14 @@ class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBas
     void gb_wdm_het_fill_global(
         array_type<double> template_fill,
         OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+        WDMSettingsWrap *wdm_settings_wrap,
         array_type<double> params_all, array_type<double> factors_all,
         array_type<double> chunk_t_starts,
         array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
         array_type<int> chunk_n_global_offset,
         array_type<double> wdm_window,
         int n_chunks, int num_bin, int nparams,
-        int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+        int Nt_sub, int log2_Nt_sub,
         int N_sparse, int log2_N_sparse,
         int nchannels, int n_rfft_chunk,
         double T_chunk, double dt, double T, double t_ref,
@@ -396,6 +420,7 @@ class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBas
     void gb_wdm_het_get_ll(
         array_type<double> d_h_out, array_type<double> h_h_out,
         OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+        WDMSettingsWrap *wdm_settings_wrap,
         array_type<double> params_all,
         array_type<int> data_index_all, array_type<int> noise_index_all,
         array_type<double> chunk_t_starts,
@@ -404,10 +429,9 @@ class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBas
         array_type<double> wdm_window,
         array_type<double> data_d, array_type<double> invC,
         int n_chunks, int num_bin, int nparams,
-        int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+        int Nt_sub, int log2_Nt_sub,
         int N_sparse, int log2_N_sparse,
         int nchannels, int n_rfft_chunk,
-        int ind_min_f, int ind_min_t, int Nf_active, int Nt_active,
         double T_chunk, double dt, double T, double t_ref, int tdi_type,
         double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
         array_type<int> binary_perm, array_type<int> group_starts, array_type<int> group_ends,
@@ -418,6 +442,7 @@ class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBas
         array_type<double> add_add_out, array_type<double> remove_remove_out,
         array_type<double> add_remove_out,
         OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+        WDMSettingsWrap *wdm_settings_wrap,
         array_type<double> params_add_all, array_type<double> params_remove_all,
         array_type<int> data_index_all, array_type<int> noise_index_all,
         array_type<double> chunk_t_starts,
@@ -426,10 +451,9 @@ class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBas
         array_type<double> wdm_window,
         array_type<double> data_d, array_type<double> invC,
         int n_chunks, int num_bin, int nparams,
-        int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+        int Nt_sub, int log2_Nt_sub,
         int N_sparse, int log2_N_sparse,
         int nchannels, int n_rfft_chunk,
-        int ind_min_f, int ind_min_t, int Nf_active, int Nt_active,
         double T_chunk, double dt, double T, double t_ref, int tdi_type,
         double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
         array_type<int> binary_perm, array_type<int> group_starts, array_type<int> group_ends,
@@ -446,13 +470,14 @@ class SOBBHComputationGroupWrap: public SOBBHComputationGroup, public ReturnPoin
     void sobbh_wdm_het_fill_global(
         array_type<double> template_fill,
         OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+        WDMSettingsWrap *wdm_settings_wrap,
         array_type<double> params_all, array_type<double> factors_all,
         array_type<double> chunk_t_starts,
         array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
         array_type<int> chunk_n_global_offset,
         array_type<double> wdm_window,
         int n_chunks, int num_bin, int nparams,
-        int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+        int Nt_sub, int log2_Nt_sub,
         int N_sparse, int log2_N_sparse,
         int nchannels, int n_rfft_chunk,
         double T_chunk, double dt, double T, double t_ref,
@@ -461,6 +486,7 @@ class SOBBHComputationGroupWrap: public SOBBHComputationGroup, public ReturnPoin
     void sobbh_wdm_het_get_ll(
         array_type<double> d_h_out, array_type<double> h_h_out,
         OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+        WDMSettingsWrap *wdm_settings_wrap,
         array_type<double> params_all,
         array_type<int> data_index_all, array_type<int> noise_index_all,
         array_type<double> chunk_t_starts,
@@ -469,10 +495,9 @@ class SOBBHComputationGroupWrap: public SOBBHComputationGroup, public ReturnPoin
         array_type<double> wdm_window,
         array_type<double> data_d, array_type<double> invC,
         int n_chunks, int num_bin, int nparams,
-        int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+        int Nt_sub, int log2_Nt_sub,
         int N_sparse, int log2_N_sparse,
         int nchannels, int n_rfft_chunk,
-        int ind_min_f, int ind_min_t, int Nf_active, int Nt_active,
         double T_chunk, double dt, double T, double t_ref, int tdi_type,
         double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
         array_type<int> binary_perm, array_type<int> group_starts, array_type<int> group_ends,
@@ -483,6 +508,7 @@ class SOBBHComputationGroupWrap: public SOBBHComputationGroup, public ReturnPoin
         array_type<double> add_add_out, array_type<double> remove_remove_out,
         array_type<double> add_remove_out,
         OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+        WDMSettingsWrap *wdm_settings_wrap,
         array_type<double> params_add_all, array_type<double> params_remove_all,
         array_type<int> data_index_all, array_type<int> noise_index_all,
         array_type<double> chunk_t_starts,
@@ -491,10 +517,9 @@ class SOBBHComputationGroupWrap: public SOBBHComputationGroup, public ReturnPoin
         array_type<double> wdm_window,
         array_type<double> data_d, array_type<double> invC,
         int n_chunks, int num_bin, int nparams,
-        int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+        int Nt_sub, int log2_Nt_sub,
         int N_sparse, int log2_N_sparse,
         int nchannels, int n_rfft_chunk,
-        int ind_min_f, int ind_min_t, int Nf_active, int Nt_active,
         double T_chunk, double dt, double T, double t_ref, int tdi_type,
         double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
         array_type<int> binary_perm, array_type<int> group_starts, array_type<int> group_ends,

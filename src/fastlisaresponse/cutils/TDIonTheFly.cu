@@ -2502,6 +2502,8 @@ CUDA_KERNEL
 void wdm_het_fill_global_kernel(
     double *template_fill,         // (nchannels, Nf, Nt) global WDM template
     Orbits *orbits, TDIConfig *tdi_config,
+    WDMSettings *wdm_settings,     // Nf, Nt, ind_min_f, ind_min_t,
+                                   // Nf_active, Nt_active, layer_df, ...
     double *params_all,            // (num_bin * nparams,)
     double *factors_all,           // (num_bin,)
     double *chunk_t_starts,        // (n_chunks,)
@@ -2510,7 +2512,7 @@ void wdm_het_fill_global_kernel(
     int    *chunk_n_global_offset, // (n_chunks,) -- global n_pixel for chunk-pixel keep_lo
     double *wdm_window,            // (Nt_sub,) precomputed phitilde samples
     int n_chunks, int num_bin, int nparams,
-    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int Nt_sub, int log2_Nt_sub,
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
     double T_chunk, double dt, double T, double t_ref,
@@ -2529,6 +2531,12 @@ void wdm_het_fill_global_kernel(
 )
 {
     SourceT src(orbits, tdi_config, T, t_ref);
+
+    // Shadow the WDM constants for readable loop bodies (no duplicated
+    // signature parameters -- the kernel reads everything from
+    // ``wdm_settings``).
+    const int Nf = wdm_settings->Nf;
+    const int Nt = wdm_settings->Nt;
 
     // Per-block shared workspace for the heterodyne primitives. Sized at
     // FAST_WDM_N_SPARSE_MAX / FAST_WDM_NCHANNELS_MAX so the kernel JITs
@@ -2744,6 +2752,8 @@ CUDA_KERNEL
 void wdm_het_get_ll_kernel(
     double *d_h_out, double *h_h_out,        // (num_bin,) outputs (host pre-zero'd)
     Orbits *orbits, TDIConfig *tdi_config,
+    WDMSettings *wdm_settings,               // Nf, Nt, ind_min_f, ind_min_t,
+                                             // Nf_active, Nt_active, ...
     double *params_all,                      // (num_bin * nparams,)
     int    *data_index_all, int *noise_index_all,
     double *chunk_t_starts,                  // (n_chunks,)
@@ -2762,11 +2772,9 @@ void wdm_het_get_ll_kernel(
                                              // (m, n) are skipped by the
                                              // accumulator (zero contribution).
     int n_chunks, int num_bin, int nparams,
-    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int Nt_sub, int log2_Nt_sub,
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
-    int ind_min_f, int ind_min_t,            // active-band offsets (inclusive)
-    int Nf_active, int Nt_active,            // active-band sizes
     double T_chunk, double dt, double T, double t_ref,
     int    tdi_type,                         // TDI_XYZ / TDI_AET / TDI_AE
     double tukey_alpha,
@@ -2794,6 +2802,16 @@ void wdm_het_get_ll_kernel(
 )
 {
     SourceT src(orbits, tdi_config, T, t_ref);
+
+    // Shadow the WDM constants for readable loop bodies (no duplicated
+    // signature parameters -- the kernel reads everything from
+    // ``wdm_settings``).
+    const int Nf         = wdm_settings->Nf;
+    const int Nt         = wdm_settings->Nt;
+    const int ind_min_f  = wdm_settings->ind_min_f;
+    const int ind_min_t  = wdm_settings->ind_min_t;
+    const int Nf_active  = wdm_settings->Nf_active;
+    const int Nt_active  = wdm_settings->Nt_active;
 
     // Heterodyne shared workspace (per block / per chunk). The
     // tdi_channels_buf slab has been moved to heap to keep static shared
@@ -3102,6 +3120,8 @@ void wdm_het_swap_ll_kernel(
     double *d_h_add_out, double *d_h_remove_out,
     double *add_add_out, double *remove_remove_out, double *add_remove_out,
     Orbits *orbits, TDIConfig *tdi_config,
+    WDMSettings *wdm_settings,               // Nf, Nt, ind_min_f, ind_min_t,
+                                             // Nf_active, Nt_active, ...
     double *params_add_all, double *params_remove_all,
     int *data_index_all, int *noise_index_all,
     double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
@@ -3114,11 +3134,9 @@ void wdm_het_swap_ll_kernel(
                                              //   invC (TDI_AET/AE)
                                              //     (C, Nf_active, Nt_active)
     int n_chunks, int num_bin, int nparams,
-    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int Nt_sub, int log2_Nt_sub,
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
-    int ind_min_f, int ind_min_t,            // active-band offsets (inclusive)
-    int Nf_active, int Nt_active,            // active-band sizes
     double T_chunk, double dt, double T, double t_ref,
     int    tdi_type,                         // TDI_XYZ / TDI_AET / TDI_AE
     double tukey_alpha,
@@ -3148,6 +3166,16 @@ void wdm_het_swap_ll_kernel(
 )
 {
     SourceT src(orbits, tdi_config, T, t_ref);
+
+    // Shadow the WDM constants for readable loop bodies (no duplicated
+    // signature parameters -- the kernel reads everything from
+    // ``wdm_settings``).
+    const int Nf         = wdm_settings->Nf;
+    const int Nt         = wdm_settings->Nt;
+    const int ind_min_f  = wdm_settings->ind_min_f;
+    const int ind_min_t  = wdm_settings->ind_min_t;
+    const int Nf_active  = wdm_settings->Nf_active;
+    const int Nt_active  = wdm_settings->Nt_active;
 
     // Heterodyne shared workspace (tdi_channels_buf moved to heap). The
     // direct-path and spline-path buffers are OVERLAID via a union -- only
@@ -9389,18 +9417,20 @@ template <class SourceT>
 static void wdm_het_fill_global_impl(
     double *template_fill,
     Orbits *orbits, TDIConfig *tdi_config,
+    WDMSettings *wdm_settings,
     double *params_all, double *factors_all,
     double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
     int *chunk_n_global_offset,
     double *wdm_window,
     int n_chunks, int num_bin, int nparams,
-    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int Nt_sub, int log2_Nt_sub,
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
     double T_chunk, double dt, double T, double t_ref,
     double tukey_alpha,
     int grid_dim, int N_cp_sig, int N_cp_orbit)
 {
+    const int Nf = wdm_settings->Nf;
     const size_t n_fd = (size_t) n_chunks * nchannels * n_rfft_chunk;
     const size_t n_ls = (size_t) n_chunks * Nt_sub;
     const size_t n_wd = (size_t) n_chunks * nchannels * Nf * Nt_sub;
@@ -9423,14 +9453,35 @@ static void wdm_het_fill_global_impl(
     // Kernel zero-inits per-chunk slabs at chunk entry; no host-side memset
     // needed here.
 
+    // The Orbits / TDIConfig / WDMSettings wrapper structs are constructed
+    // on the host heap via ``new`` (see binding_flr.hpp / binding_tof.hpp);
+    // device code dereferencing a host pointer triggers an illegal memory
+    // access. Mirror the LISAResponse.cu:419 pattern: shallow-copy each
+    // struct to device memory, launch with the device-side copies, free
+    // after sync. Inner device-pointer fields (ltt_arr, unit_starts, …)
+    // survive the shallow copy. See sprint-root CLAUDE.md.
+    Orbits      *orbits_gpu       = nullptr;
+    TDIConfig   *tdi_config_gpu   = nullptr;
+    WDMSettings *wdm_settings_gpu = nullptr;
+    gpuErrchk(cudaMalloc(&orbits_gpu,       sizeof(Orbits)));
+    gpuErrchk(cudaMemcpy(orbits_gpu,       orbits,       sizeof(Orbits),
+                         cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMalloc(&tdi_config_gpu,   sizeof(TDIConfig)));
+    gpuErrchk(cudaMemcpy(tdi_config_gpu,   tdi_config,   sizeof(TDIConfig),
+                         cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMalloc(&wdm_settings_gpu, sizeof(WDMSettings)));
+    gpuErrchk(cudaMemcpy(wdm_settings_gpu, wdm_settings, sizeof(WDMSettings),
+                         cudaMemcpyHostToDevice));
+
     const int gd = (grid_dim > 0) ? grid_dim : n_chunks;
     wdm_het_fill_global_kernel<SourceT><<<gd, NUM_THREADS_HERE>>>(
-        template_fill, orbits, tdi_config,
+        template_fill, orbits_gpu, tdi_config_gpu,
+        wdm_settings_gpu,
         params_all, factors_all,
         chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
         wdm_window,
         n_chunks, num_bin, nparams,
-        Nf, Nt, Nt_sub, log2_Nt_sub,
+        Nt_sub, log2_Nt_sub,
         N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
         T_chunk, dt, T, t_ref,
@@ -9447,6 +9498,9 @@ static void wdm_het_fill_global_impl(
     gpuErrchk(cudaFree(ws_chunk_wdm_all));
     gpuErrchk(cudaFree(ws_tdi_channels_all));
     gpuErrchk(cudaFree(get_tdi_scratch_all));
+    gpuErrchk(cudaFree(orbits_gpu));
+    gpuErrchk(cudaFree(tdi_config_gpu));
+    gpuErrchk(cudaFree(wdm_settings_gpu));
 #else
     (void) grid_dim;
     ws_chunk_fd_all      = new cmplx [n_fd]();
@@ -9457,11 +9511,12 @@ static void wdm_het_fill_global_impl(
 
     wdm_het_fill_global_kernel<SourceT>(
         template_fill, orbits, tdi_config,
+        wdm_settings,
         params_all, factors_all,
         chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
         wdm_window,
         n_chunks, num_bin, nparams,
-        Nf, Nt, Nt_sub, log2_Nt_sub,
+        Nt_sub, log2_Nt_sub,
         N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
         T_chunk, dt, T, t_ref,
@@ -9484,6 +9539,7 @@ template <class SourceT>
 static void wdm_het_get_ll_impl(
     double *d_h_out, double *h_h_out,
     Orbits *orbits, TDIConfig *tdi_config,
+    WDMSettings *wdm_settings,
     double *params_all,
     int *data_index_all, int *noise_index_all,
     double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
@@ -9491,11 +9547,9 @@ static void wdm_het_get_ll_impl(
     double *wdm_window,
     double *data_d, double *invC,
     int n_chunks, int num_bin, int nparams,
-    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int Nt_sub, int log2_Nt_sub,
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
-    int ind_min_f, int ind_min_t,
-    int Nf_active, int Nt_active,
     double T_chunk, double dt, double T, double t_ref,
     int    tdi_type,
     double tukey_alpha,
@@ -9503,6 +9557,8 @@ static void wdm_het_get_ll_impl(
     int *binary_perm, int *group_starts, int *group_ends,
     int *group_m_lo, int *group_m_hi, int n_groups)
 {
+    const int Nf = wdm_settings->Nf;
+    const int Nt = wdm_settings->Nt;
     const size_t n_fd = (size_t) n_chunks * nchannels * n_rfft_chunk;
     const size_t n_ls = (size_t) n_chunks * Nt_sub;
     const size_t n_wd = (size_t) n_chunks * nchannels * Nf * Nt_sub;
@@ -9523,18 +9579,33 @@ static void wdm_het_get_ll_impl(
     gpuErrchk(cudaMalloc(&ws_tdi_channels_all,  n_tc * sizeof(cmplx)));
     gpuErrchk(cudaMalloc(&get_tdi_scratch_all,  n_sc));
 
+    // Upload host-side wrapper structs to device (see sprint-root CLAUDE.md
+    // and the fill_global wrapper above for the pattern + rationale).
+    Orbits      *orbits_gpu       = nullptr;
+    TDIConfig   *tdi_config_gpu   = nullptr;
+    WDMSettings *wdm_settings_gpu = nullptr;
+    gpuErrchk(cudaMalloc(&orbits_gpu,       sizeof(Orbits)));
+    gpuErrchk(cudaMemcpy(orbits_gpu,       orbits,       sizeof(Orbits),
+                         cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMalloc(&tdi_config_gpu,   sizeof(TDIConfig)));
+    gpuErrchk(cudaMemcpy(tdi_config_gpu,   tdi_config,   sizeof(TDIConfig),
+                         cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMalloc(&wdm_settings_gpu, sizeof(WDMSettings)));
+    gpuErrchk(cudaMemcpy(wdm_settings_gpu, wdm_settings, sizeof(WDMSettings),
+                         cudaMemcpyHostToDevice));
+
     const int gd = (grid_dim > 0) ? grid_dim : n_chunks;
     wdm_het_get_ll_kernel<SourceT><<<gd, NUM_THREADS_HERE>>>(
-        d_h_out, h_h_out, orbits, tdi_config, params_all,
+        d_h_out, h_h_out, orbits_gpu, tdi_config_gpu,
+        wdm_settings_gpu,
+        params_all,
         data_index_all, noise_index_all,
         chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
         wdm_window, data_d, invC,
         n_chunks, num_bin, nparams,
-        Nf, Nt, Nt_sub, log2_Nt_sub,
+        Nt_sub, log2_Nt_sub,
         N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
-        ind_min_f, ind_min_t,
-        Nf_active, Nt_active,
         T_chunk, dt, T, t_ref,
         tdi_type,
         tukey_alpha,
@@ -9552,6 +9623,9 @@ static void wdm_het_get_ll_impl(
     gpuErrchk(cudaFree(ws_chunk_wdm_all));
     gpuErrchk(cudaFree(ws_tdi_channels_all));
     gpuErrchk(cudaFree(get_tdi_scratch_all));
+    gpuErrchk(cudaFree(orbits_gpu));
+    gpuErrchk(cudaFree(tdi_config_gpu));
+    gpuErrchk(cudaFree(wdm_settings_gpu));
 #else
     (void) grid_dim;
     ws_chunk_fd_all      = new cmplx [n_fd]();
@@ -9561,16 +9635,16 @@ static void wdm_het_get_ll_impl(
     get_tdi_scratch_all  = (void *) new char[n_sc]();
 
     wdm_het_get_ll_kernel<SourceT>(
-        d_h_out, h_h_out, orbits, tdi_config, params_all,
+        d_h_out, h_h_out, orbits, tdi_config,
+        wdm_settings,
+        params_all,
         data_index_all, noise_index_all,
         chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
         wdm_window, data_d, invC,
         n_chunks, num_bin, nparams,
-        Nf, Nt, Nt_sub, log2_Nt_sub,
+        Nt_sub, log2_Nt_sub,
         N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
-        ind_min_f, ind_min_t,
-        Nf_active, Nt_active,
         T_chunk, dt, T, t_ref,
         tdi_type,
         tukey_alpha,
@@ -9595,6 +9669,7 @@ static void wdm_het_swap_ll_impl(
     double *d_h_add_out, double *d_h_remove_out,
     double *add_add_out, double *remove_remove_out, double *add_remove_out,
     Orbits *orbits, TDIConfig *tdi_config,
+    WDMSettings *wdm_settings,
     double *params_add_all, double *params_remove_all,
     int *data_index_all, int *noise_index_all,
     double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
@@ -9602,11 +9677,9 @@ static void wdm_het_swap_ll_impl(
     double *wdm_window,
     double *data_d, double *invC,
     int n_chunks, int num_bin, int nparams,
-    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int Nt_sub, int log2_Nt_sub,
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
-    int ind_min_f, int ind_min_t,
-    int Nf_active, int Nt_active,
     double T_chunk, double dt, double T, double t_ref,
     int    tdi_type,
     double tukey_alpha,
@@ -9615,6 +9688,8 @@ static void wdm_het_swap_ll_impl(
     int *group_m_lo, int *group_m_hi, int n_groups,
     int *pair_m_lo_b, int *pair_m_hi_b)
 {
+    const int Nf = wdm_settings->Nf;
+    const int Nt = wdm_settings->Nt;
     // swap_ll has two chunk_fd slabs (add + rem) and two chunk_wdm slabs.
     const size_t n_fd = (size_t) n_chunks * nchannels * n_rfft_chunk;
     const size_t n_ls = (size_t) n_chunks * Nt_sub;
@@ -9640,19 +9715,34 @@ static void wdm_het_swap_ll_impl(
     gpuErrchk(cudaMalloc(&ws_tdi_channels_all,  n_tc * sizeof(cmplx)));
     gpuErrchk(cudaMalloc(&get_tdi_scratch_all,  n_sc));
 
+    // Upload host-side wrapper structs to device (see sprint-root CLAUDE.md
+    // and the fill_global wrapper above for the pattern + rationale).
+    Orbits      *orbits_gpu       = nullptr;
+    TDIConfig   *tdi_config_gpu   = nullptr;
+    WDMSettings *wdm_settings_gpu = nullptr;
+    gpuErrchk(cudaMalloc(&orbits_gpu,       sizeof(Orbits)));
+    gpuErrchk(cudaMemcpy(orbits_gpu,       orbits,       sizeof(Orbits),
+                         cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMalloc(&tdi_config_gpu,   sizeof(TDIConfig)));
+    gpuErrchk(cudaMemcpy(tdi_config_gpu,   tdi_config,   sizeof(TDIConfig),
+                         cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMalloc(&wdm_settings_gpu, sizeof(WDMSettings)));
+    gpuErrchk(cudaMemcpy(wdm_settings_gpu, wdm_settings, sizeof(WDMSettings),
+                         cudaMemcpyHostToDevice));
+
     const int gd = (grid_dim > 0) ? grid_dim : n_chunks;
     wdm_het_swap_ll_kernel<SourceT><<<gd, NUM_THREADS_HERE>>>(
         d_h_add_out, d_h_remove_out, add_add_out, remove_remove_out, add_remove_out,
-        orbits, tdi_config, params_add_all, params_remove_all,
+        orbits_gpu, tdi_config_gpu,
+        wdm_settings_gpu,
+        params_add_all, params_remove_all,
         data_index_all, noise_index_all,
         chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
         wdm_window, data_d, invC,
         n_chunks, num_bin, nparams,
-        Nf, Nt, Nt_sub, log2_Nt_sub,
+        Nt_sub, log2_Nt_sub,
         N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
-        ind_min_f, ind_min_t,
-        Nf_active, Nt_active,
         T_chunk, dt, T, t_ref,
         tdi_type,
         tukey_alpha,
@@ -9674,6 +9764,9 @@ static void wdm_het_swap_ll_impl(
     gpuErrchk(cudaFree(ws_chunk_wdm_rem_all));
     gpuErrchk(cudaFree(ws_tdi_channels_all));
     gpuErrchk(cudaFree(get_tdi_scratch_all));
+    gpuErrchk(cudaFree(orbits_gpu));
+    gpuErrchk(cudaFree(tdi_config_gpu));
+    gpuErrchk(cudaFree(wdm_settings_gpu));
 #else
     (void) grid_dim;
     ws_chunk_fd_add_all  = new cmplx [n_fd]();
@@ -9686,16 +9779,16 @@ static void wdm_het_swap_ll_impl(
 
     wdm_het_swap_ll_kernel<SourceT>(
         d_h_add_out, d_h_remove_out, add_add_out, remove_remove_out, add_remove_out,
-        orbits, tdi_config, params_add_all, params_remove_all,
+        orbits, tdi_config,
+        wdm_settings,
+        params_add_all, params_remove_all,
         data_index_all, noise_index_all,
         chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
         wdm_window, data_d, invC,
         n_chunks, num_bin, nparams,
-        Nf, Nt, Nt_sub, log2_Nt_sub,
+        Nt_sub, log2_Nt_sub,
         N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
-        ind_min_f, ind_min_t,
-        Nf_active, Nt_active,
         T_chunk, dt, T, t_ref,
         tdi_type,
         tukey_alpha,
@@ -9722,49 +9815,53 @@ static void wdm_het_swap_ll_impl(
 // ---- GB-flavored wrappers --------------------------------------------------
 void GBComputationGroup::gb_wdm_het_fill_global_wrap(
     double *template_fill, Orbits *orbits, TDIConfig *tdi_config,
+    WDMSettings *wdm_settings,
     double *params_all, double *factors_all,
     double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
     int *chunk_n_global_offset, double *wdm_window,
     int n_chunks, int num_bin, int nparams,
-    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int Nt_sub, int log2_Nt_sub,
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
     double T_chunk, double dt, double T, double t_ref,
     double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit)
 {
     wdm_het_fill_global_impl<GBTDIonTheFly>(
-        template_fill, orbits, tdi_config, params_all, factors_all,
+        template_fill, orbits, tdi_config,
+        wdm_settings,
+        params_all, factors_all,
         chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
         wdm_window, n_chunks, num_bin, nparams,
-        Nf, Nt, Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
+        Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk, T_chunk, dt, T, t_ref, tukey_alpha,
         grid_dim, N_cp_sig, N_cp_orbit);
 }
 
 void GBComputationGroup::gb_wdm_het_get_ll_wrap(
     double *d_h_out, double *h_h_out, Orbits *orbits, TDIConfig *tdi_config,
+    WDMSettings *wdm_settings,
     double *params_all, int *data_index_all, int *noise_index_all,
     double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
     int *chunk_n_global_offset, double *wdm_window,
     double *data_d, double *invC,
     int n_chunks, int num_bin, int nparams,
-    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int Nt_sub, int log2_Nt_sub,
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
-    int ind_min_f, int ind_min_t, int Nf_active, int Nt_active,
     double T_chunk, double dt, double T, double t_ref, int tdi_type,
     double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
     int *binary_perm, int *group_starts, int *group_ends,
     int *group_m_lo, int *group_m_hi, int n_groups)
 {
     wdm_het_get_ll_impl<GBTDIonTheFly>(
-        d_h_out, h_h_out, orbits, tdi_config, params_all,
+        d_h_out, h_h_out, orbits, tdi_config,
+        wdm_settings,
+        params_all,
         data_index_all, noise_index_all,
         chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
         wdm_window, data_d, invC, n_chunks, num_bin, nparams,
-        Nf, Nt, Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
+        Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
-        ind_min_f, ind_min_t, Nf_active, Nt_active,
         T_chunk, dt, T, t_ref, tdi_type, tukey_alpha,
         grid_dim, N_cp_sig, N_cp_orbit,
         binary_perm, group_starts, group_ends,
@@ -9775,16 +9872,16 @@ void GBComputationGroup::gb_wdm_het_swap_ll_wrap(
     double *d_h_add_out, double *d_h_remove_out,
     double *add_add_out, double *remove_remove_out, double *add_remove_out,
     Orbits *orbits, TDIConfig *tdi_config,
+    WDMSettings *wdm_settings,
     double *params_add_all, double *params_remove_all,
     int *data_index_all, int *noise_index_all,
     double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
     int *chunk_n_global_offset, double *wdm_window,
     double *data_d, double *invC,
     int n_chunks, int num_bin, int nparams,
-    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int Nt_sub, int log2_Nt_sub,
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
-    int ind_min_f, int ind_min_t, int Nf_active, int Nt_active,
     double T_chunk, double dt, double T, double t_ref, int tdi_type,
     double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
     int *binary_perm, int *group_starts, int *group_ends,
@@ -9793,13 +9890,14 @@ void GBComputationGroup::gb_wdm_het_swap_ll_wrap(
 {
     wdm_het_swap_ll_impl<GBTDIonTheFly>(
         d_h_add_out, d_h_remove_out, add_add_out, remove_remove_out, add_remove_out,
-        orbits, tdi_config, params_add_all, params_remove_all,
+        orbits, tdi_config,
+        wdm_settings,
+        params_add_all, params_remove_all,
         data_index_all, noise_index_all,
         chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
         wdm_window, data_d, invC, n_chunks, num_bin, nparams,
-        Nf, Nt, Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
+        Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
-        ind_min_f, ind_min_t, Nf_active, Nt_active,
         T_chunk, dt, T, t_ref, tdi_type, tukey_alpha,
         grid_dim, N_cp_sig, N_cp_orbit,
         binary_perm, group_starts, group_ends,
@@ -9811,49 +9909,53 @@ void GBComputationGroup::gb_wdm_het_swap_ll_wrap(
 // ---- SOBBH-flavored wrappers ----------------------------------------------
 void SOBBHComputationGroup::sobbh_wdm_het_fill_global_wrap(
     double *template_fill, Orbits *orbits, TDIConfig *tdi_config,
+    WDMSettings *wdm_settings,
     double *params_all, double *factors_all,
     double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
     int *chunk_n_global_offset, double *wdm_window,
     int n_chunks, int num_bin, int nparams,
-    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int Nt_sub, int log2_Nt_sub,
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
     double T_chunk, double dt, double T, double t_ref,
     double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit)
 {
     wdm_het_fill_global_impl<SOBBHTDIonTheFly>(
-        template_fill, orbits, tdi_config, params_all, factors_all,
+        template_fill, orbits, tdi_config,
+        wdm_settings,
+        params_all, factors_all,
         chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
         wdm_window, n_chunks, num_bin, nparams,
-        Nf, Nt, Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
+        Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk, T_chunk, dt, T, t_ref, tukey_alpha,
         grid_dim, N_cp_sig, N_cp_orbit);
 }
 
 void SOBBHComputationGroup::sobbh_wdm_het_get_ll_wrap(
     double *d_h_out, double *h_h_out, Orbits *orbits, TDIConfig *tdi_config,
+    WDMSettings *wdm_settings,
     double *params_all, int *data_index_all, int *noise_index_all,
     double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
     int *chunk_n_global_offset, double *wdm_window,
     double *data_d, double *invC,
     int n_chunks, int num_bin, int nparams,
-    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int Nt_sub, int log2_Nt_sub,
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
-    int ind_min_f, int ind_min_t, int Nf_active, int Nt_active,
     double T_chunk, double dt, double T, double t_ref, int tdi_type,
     double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
     int *binary_perm, int *group_starts, int *group_ends,
     int *group_m_lo, int *group_m_hi, int n_groups)
 {
     wdm_het_get_ll_impl<SOBBHTDIonTheFly>(
-        d_h_out, h_h_out, orbits, tdi_config, params_all,
+        d_h_out, h_h_out, orbits, tdi_config,
+        wdm_settings,
+        params_all,
         data_index_all, noise_index_all,
         chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
         wdm_window, data_d, invC, n_chunks, num_bin, nparams,
-        Nf, Nt, Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
+        Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
-        ind_min_f, ind_min_t, Nf_active, Nt_active,
         T_chunk, dt, T, t_ref, tdi_type, tukey_alpha,
         grid_dim, N_cp_sig, N_cp_orbit,
         binary_perm, group_starts, group_ends,
@@ -9864,16 +9966,16 @@ void SOBBHComputationGroup::sobbh_wdm_het_swap_ll_wrap(
     double *d_h_add_out, double *d_h_remove_out,
     double *add_add_out, double *remove_remove_out, double *add_remove_out,
     Orbits *orbits, TDIConfig *tdi_config,
+    WDMSettings *wdm_settings,
     double *params_add_all, double *params_remove_all,
     int *data_index_all, int *noise_index_all,
     double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
     int *chunk_n_global_offset, double *wdm_window,
     double *data_d, double *invC,
     int n_chunks, int num_bin, int nparams,
-    int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
+    int Nt_sub, int log2_Nt_sub,
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
-    int ind_min_f, int ind_min_t, int Nf_active, int Nt_active,
     double T_chunk, double dt, double T, double t_ref, int tdi_type,
     double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
     int *binary_perm, int *group_starts, int *group_ends,
@@ -9882,13 +9984,14 @@ void SOBBHComputationGroup::sobbh_wdm_het_swap_ll_wrap(
 {
     wdm_het_swap_ll_impl<SOBBHTDIonTheFly>(
         d_h_add_out, d_h_remove_out, add_add_out, remove_remove_out, add_remove_out,
-        orbits, tdi_config, params_add_all, params_remove_all,
+        orbits, tdi_config,
+        wdm_settings,
+        params_add_all, params_remove_all,
         data_index_all, noise_index_all,
         chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
         wdm_window, data_d, invC, n_chunks, num_bin, nparams,
-        Nf, Nt, Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
+        Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
-        ind_min_f, ind_min_t, Nf_active, Nt_active,
         T_chunk, dt, T, t_ref, tdi_type, tukey_alpha,
         grid_dim, N_cp_sig, N_cp_orbit,
         binary_perm, group_starts, group_ends,

@@ -158,6 +158,22 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         self.tdi_config = tdi_config
         self.nchannels = self.tdi_config.nchannels
 
+        # WDMSettings wrap -- single object the het kernels read for all
+        # of (Nf, Nt, ind_min_f, ind_min_t, Nf_active, Nt_active, layer_df,
+        # layer_dt, num_channel). No per-call duplicate ints; mirrors the
+        # cpp_orbits / cpp_tdi_config pattern.
+        self.cpp_wdm_settings = self.backend.WDMSettingsWrap(
+            float(self.wdm_settings.layer_df),
+            float(self.wdm_settings.layer_dt),
+            int(self.wdm_settings.Nf),
+            int(self.wdm_settings.Nt),
+            int(self.nchannels),
+            int(self.wdm_settings.ind_min_t),
+            int(self.wdm_settings.ind_max_t),
+            int(self.wdm_settings.ind_min_f),
+            int(self.wdm_settings.ind_max_f),
+        )
+
     @property
     def tdi_config(self) -> TDIConfig:
         return self._tdi_config
@@ -358,6 +374,7 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         self._kernel("get_ll")(
             d_h_out, h_h_out,
             self.cpp_orbits, self.cpp_tdi_config,
+            self.cpp_wdm_settings,
             params_in, data_index, noise_index,
             self.xp.asarray(self.chunk_t_starts),
             self.xp.asarray(self.chunk_keep_lo), self.xp.asarray(self.chunk_keep_hi),
@@ -366,11 +383,9 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             wdm_holder.linear_data_arr[0],
             wdm_holder.linear_psd_arr[0],
             self.n_chunks, int(num_bin), int(nparams),
-            int(self.Nf), int(self.Nt), int(self.Nt_sub), int(self.log2_Nt_sub),
+            int(self.Nt_sub), int(self.log2_Nt_sub),
             int(self.N_sparse), int(self.log2_N_sparse),
             int(self.nchannels), int(self.n_rfft_chunk),
-            int(self.wdm_settings.ind_min_f), int(self.wdm_settings.ind_min_t),
-            int(self.wdm_settings.Nf_active), int(self.wdm_settings.Nt_active),
             float(self.T_chunk), float(self.dt),
             float(self.T), float(self.t_ref),
             int(self.backend.TDITypeDict[self.tdi_type]),
@@ -452,6 +467,7 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         self._kernel("swap_ll")(
             d_h_a, d_h_r, aa, rr, ar,
             self.cpp_orbits, self.cpp_tdi_config,
+            self.cpp_wdm_settings,
             params_add_in, params_remove_in,
             data_index, noise_index,
             self.chunk_t_starts,
@@ -461,11 +477,9 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             wdm_holder.linear_data_arr[0],
             wdm_holder.linear_psd_arr[0],
             self.n_chunks, int(num_bin), int(nparams),
-            int(self.Nf), int(self.Nt), int(self.Nt_sub), int(self.log2_Nt_sub),
+            int(self.Nt_sub), int(self.log2_Nt_sub),
             int(self.N_sparse), int(self.log2_N_sparse),
             int(self.nchannels), int(self.n_rfft_chunk),
-            int(self.wdm_settings.ind_min_f), int(self.wdm_settings.ind_min_t),
-            int(self.wdm_settings.Nf_active), int(self.wdm_settings.Nt_active),
             float(self.T_chunk), float(self.dt),
             float(self.T), float(self.t_ref),
             int(self.backend.TDITypeDict[self.tdi_type]),
@@ -765,13 +779,14 @@ class GBWDMComputations(FastLISAResponseParallelModule):
         self._kernel("fill_global")(
             templates,
             self.cpp_orbits, self.cpp_tdi_config,
+            self.cpp_wdm_settings,
             params_in, factors,
             self.chunk_t_starts,
             self.chunk_keep_lo, self.chunk_keep_hi,
             self.chunk_n_global_offset,
             self.wdm_window,
             self.n_chunks, int(num_bin), int(nparams),
-            int(self.Nf), int(self.Nt), int(self.Nt_sub), int(self.log2_Nt_sub),
+            int(self.Nt_sub), int(self.log2_Nt_sub),
             int(self.N_sparse), int(self.log2_N_sparse),
             int(self.nchannels), int(self.n_rfft_chunk),
             float(self.T_chunk), float(self.dt),

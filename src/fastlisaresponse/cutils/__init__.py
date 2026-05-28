@@ -22,6 +22,7 @@ class FastLISAResponseBackendMethods(BackendMethods):
     TDIConfigWrap: object
     TDIConfig: object
     CubicSplineWrap: object
+    WDMSettingsWrap: object
     WDMDomainWrap: object
     FDDomainWrap: object
     WaveletLookupTableWrap: object
@@ -40,6 +41,7 @@ class FastLISAResponseBackend:
     TDIConfigWrap: object
     TDIConfig: object
     CubicSplineWrap: object
+    WDMSettingsWrap: object
     WDMDomainWrap: object
     FDDomainWrap: object
     WaveletLookupTableWrap: object
@@ -63,6 +65,7 @@ class FastLISAResponseBackend:
         self.CubicSplineWrap = fastlisaresponse_backend_methods.CubicSplineWrap
         self.LISAResponseWrap = fastlisaresponse_backend_methods.LISAResponseWrap
         self.LISAResponse = fastlisaresponse_backend_methods.LISAResponse
+        self.WDMSettingsWrap = fastlisaresponse_backend_methods.WDMSettingsWrap
         self.WDMDomainWrap = fastlisaresponse_backend_methods.WDMDomainWrap
         self.FDDomainWrap = fastlisaresponse_backend_methods.FDDomainWrap
         self.WaveletLookupTableWrap = fastlisaresponse_backend_methods.WaveletLookupTableWrap
@@ -108,6 +111,7 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
             TDIConfig=fastlisaresponse_backend_cpu.responselisa.TDIConfigCPU,
             TDIConfigWrap=fastlisaresponse_backend_cpu.responselisa.TDIConfigWrapCPU,
             CubicSplineWrap=fastlisaresponse_backend_cpu.responselisa.CubicSplineWrapCPU_responselisa,
+            WDMSettingsWrap=fastlisaresponse_backend_cpu.tdionthefly.WDMSettingsWrapCPU,
             WDMDomainWrap=fastlisaresponse_backend_cpu.tdionthefly.WDMDomainWrapCPU,
             FDDomainWrap=fastlisaresponse_backend_cpu.tdionthefly.FDDomainWrapCPU,
             WaveletLookupTableWrap=fastlisaresponse_backend_cpu.tdionthefly.WaveletLookupTableWrapCPU,
@@ -162,6 +166,7 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
             TDIConfig=fastlisaresponse_backend_cuda11x.responselisa.TDIConfigGPU,
             TDIConfigWrap=fastlisaresponse_backend_cuda11x.responselisa.TDIConfigWrapGPU,
             CubicSplineWrap=fastlisaresponse_backend_cuda11x.responselisa.CubicSplineWrapGPU_responselisa,
+            WDMSettingsWrap=fastlisaresponse_backend_cuda11x.tdionthefly.WDMSettingsWrapGPU,
             WDMDomainWrap=fastlisaresponse_backend_cuda11x.tdionthefly.WDMDomainWrapGPU,
             FDDomainWrap=fastlisaresponse_backend_cuda11x.tdionthefly.FDDomainWrapGPU,
             WaveletLookupTableWrap=fastlisaresponse_backend_cuda11x.tdionthefly.WaveletLookupTableWrapGPU,
@@ -213,6 +218,7 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
             TDIConfig=fastlisaresponse_backend_cuda12x.responselisa.TDIConfigGPU,
             TDIConfigWrap=fastlisaresponse_backend_cuda12x.responselisa.TDIConfigWrapGPU,
             CubicSplineWrap=fastlisaresponse_backend_cuda12x.responselisa.CubicSplineWrapGPU_responselisa,
+            WDMSettingsWrap=fastlisaresponse_backend_cuda12x.tdionthefly.WDMSettingsWrapGPU,
             WDMDomainWrap=fastlisaresponse_backend_cuda12x.tdionthefly.WDMDomainWrapGPU,
             FDDomainWrap=fastlisaresponse_backend_cuda12x.tdionthefly.FDDomainWrapGPU,
             WaveletLookupTableWrap=fastlisaresponse_backend_cuda12x.tdionthefly.WaveletLookupTableWrapGPU,

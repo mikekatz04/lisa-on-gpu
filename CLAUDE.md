@@ -63,3 +63,90 @@ One instance = one backend keeps ``xp`` arrays, kernels, and dispatch
 consistent. Cross-backend usage (e.g. evaluating gradients on a CPU
 instance via a separate JAX setup) belongs to a separate instance,
 not a shared method-level flag.
+
+
+## Host→device upload of class-wrapper objects (sprint-wide rule)
+
+Pybind11 wrapper classes in this codebase (``OrbitsWrap_responselisa``,
+``TDIConfigWrap``, ``WDMSettingsWrap``, ``WDMDomainWrap``,
+``FDDomainWrap``, ``AnalysisContainerArrayWrap``, …) store their
+underlying C++ instance via plain ``new`` on the **host** heap, e.g.
+
+```cpp
+class OrbitsWrap_responselisa : public ReturnPointerBase {
+    Orbits *orbits;
+    OrbitsWrap_responselisa(...) {
+        orbits = new Orbits(..., _ltt_arr_device_ptr, ...);
+        //       ^^^^^^^^^^ host allocation; pointer fields inside
+        //                  may already point to device memory.
+    }
+};
+```
+
+The pointer fields inside the struct (``Orbits::ltt_arr``,
+``WDMDomain::wdm_data``, ``TDIConfig::unit_starts``) are device
+pointers extracted from cupy arrays via
+``return_pointer_and_check_length``. But **the struct itself lives on
+the host**.
+
+A CUDA kernel parameter of type ``Orbits *`` therefore cannot be the
+host pointer ``orbits_wrap->orbits`` directly. Dereferencing it from
+device code (``orbits->ltt_t0``) reads garbage and triggers an illegal
+memory access -- typically with a faulting address in the canonical
+Linux PIE/heap range (``0x55555...``) and a sanitizer message of the
+form "X bytes after the nearest allocation" with a wildly OOB delta
+(tens of TB). That delta is **not** an off-by-one; it means the device
+dereferenced a host address.
+
+The required upload pattern (mirrors
+``LISAResponse.cu:419-433``):
+
+```cpp
+#ifdef __CUDACC__
+    Orbits *orbits_gpu = nullptr;
+    gpuErrchk(cudaMalloc(&orbits_gpu, sizeof(Orbits)));
+    gpuErrchk(cudaMemcpy(orbits_gpu, orbits, sizeof(Orbits),
+                         cudaMemcpyHostToDevice));
+
+    TDIConfig *tdi_config_gpu = nullptr;
+    gpuErrchk(cudaMalloc(&tdi_config_gpu, sizeof(TDIConfig)));
+    gpuErrchk(cudaMemcpy(tdi_config_gpu, tdi_config, sizeof(TDIConfig),
+                         cudaMemcpyHostToDevice));
+
+    // ...repeat for every host-side wrapper struct accessed on device:
+    //    WDMSettings, WDMDomain, FDDomain, etc.
+
+    my_kernel<<<...>>>(orbits_gpu, tdi_config_gpu, ...);
+    cudaDeviceSynchronize();
+    gpuErrchk(cudaGetLastError());
+
+    gpuErrchk(cudaFree(orbits_gpu));
+    gpuErrchk(cudaFree(tdi_config_gpu));
+#else
+    // CPU branch keeps the host pointers unchanged.
+    my_kernel(orbits, tdi_config, ...);
+#endif
+```
+
+Rules:
+
+1. **Every** struct constructed via ``new`` on the host that the kernel
+   dereferences (i.e. reads scalar fields or pointer fields off of
+   ``this``) must be copied to device with ``cudaMalloc`` +
+   ``cudaMemcpy(..., cudaMemcpyHostToDevice)`` before the kernel
+   launch.
+2. The device-side pointer fields *inside* the uploaded struct survive
+   the shallow copy; do **not** also try to upload those.
+3. Free the device-side struct copies after the kernel sync, before
+   returning.
+4. The CPU branch (``#else``) does not copy -- it passes the host
+   pointer directly into the (host-compiled) kernel.
+5. This applies to every CUDA wrapper across the sprint tree --
+   existing legacy kernels in ``LISAResponse.cu`` and ``Detector.cu``
+   already follow it; new chunked-het / chunked-FD / WDM impl
+   wrappers must do the same.
+
+When debugging an IMA whose faulting address starts with
+``0x55555...`` and whose "nearest allocation" delta is in the TB
+range, the first hypothesis should be a missing wrapper upload --
+not an indexing bug in the kernel.
