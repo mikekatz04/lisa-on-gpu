@@ -2750,15 +2750,23 @@ void wdm_het_get_ll_kernel(
     int    *chunk_keep_lo, int *chunk_keep_hi,
     int    *chunk_n_global_offset,
     double *wdm_window,                      // (Nt_sub,)
-    double *data_d, double *invC,            // tdi_type=TDI_XYZ:
-                                             //   data_d (nchannels, Nf, Nt),
-                                             //   invC   (nchannels, nchannels, Nf, Nt)
-                                             // tdi_type=TDI_AET/AE:
-                                             //   both (nchannels, Nf, Nt) diagonal
+    double *data_d, double *invC,            // ACTIVE-band layout (matches the
+                                             // natural lisatools output of
+                                             // AnalysisContainerArray):
+                                             //   data_d : (nchannels, Nf_active, Nt_active)
+                                             //   invC (TDI_XYZ):
+                                             //     (nchannels, nchannels, Nf_active, Nt_active)
+                                             //   invC (TDI_AET/AE):
+                                             //     (nchannels, Nf_active, Nt_active) diagonal
+                                             // Pixels outside the active band
+                                             // (m, n) are skipped by the
+                                             // accumulator (zero contribution).
     int n_chunks, int num_bin, int nparams,
     int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
+    int ind_min_f, int ind_min_t,            // active-band offsets (inclusive)
+    int Nf_active, int Nt_active,            // active-band sizes
     double T_chunk, double dt, double T, double t_ref,
     int    tdi_type,                         // TDI_XYZ / TDI_AET / TDI_AE
     double tukey_alpha,
@@ -2960,33 +2968,46 @@ void wdm_het_get_ll_kernel(
 
                 // 3) per-pixel accumulation, m restricted to the group band.
                 //    Dispatch on tdi_type to mirror the lisatools layout:
-                //      TDI_XYZ   -> invC is (nchannels, nchannels, Nf, Nt)
+                //      TDI_XYZ   -> invC is (nchannels, nchannels,
+                //                            Nf_active, Nt_active)
                 //                    (full Hermitian inverse), inner product
                 //                    is sum_{c1,c2} d[c1]*h[c2]*invC[c1,c2].
-                //      TDI_AET/AE -> invC is (nchannels, Nf, Nt) diagonal,
-                //                    inner product is sum_c d[c]*h[c]*invC[c].
-                //    The diagonal layout matches the historical convention
-                //    other het callers use; the XYZ layout matches what
-                //    XYZ2SensitivityMatrix.invC produces (4*dc=1 cancels
-                //    the lisatools 4*differential_component prefactor for
-                //    real-only WDM, so bit-equal inner products).
+                //      TDI_AET/AE -> invC is (nchannels, Nf_active, Nt_active)
+                //                    diagonal, inner product is
+                //                    sum_c d[c]*h[c]*invC[c].
+                //    data_d follows the same active-band layout in both
+                //    cases ((nchannels, Nf_active, Nt_active)). Pixels with
+                //    m or n_glob outside the active band contribute zero
+                //    and are skipped at the loop level.
+                //
+                //    For real-only WDM, lisatools' 4*dc prefactor = 1, so
+                //    these sums are bit-equal to lisatools.diagnostic.inner_product.
+                const int ind_max_f_excl = ind_min_f + Nf_active;
+                const int ind_max_t_excl = ind_min_t + Nt_active;
+                const int m_lo_act = (m_lo < ind_min_f) ? ind_min_f : m_lo;
+                const int m_hi_act = (m_hi > ind_max_f_excl) ? ind_max_f_excl : m_hi;
                 if (tdi_type == TDI_XYZ) {
-                    for (int m = m_lo; m < m_hi; ++m) {
+                    for (int m = m_lo_act; m < m_hi_act; ++m) {
+                        const int m_act = m - ind_min_f;
                         for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
                              n_loc += BLOCK_INCR) {
-                            const int    n_glob = n_global_lo + (n_loc - keep_lo);
+                            const int n_glob = n_global_lo + (n_loc - keep_lo);
+                            if (n_glob < ind_min_t || n_glob >= ind_max_t_excl) continue;
+                            const int n_act = n_glob - ind_min_t;
                             double w_arr[FAST_WDM_NCHANNELS_MAX];
                             double d_arr[FAST_WDM_NCHANNELS_MAX];
                             for (int c = 0; c < nchannels; ++c) {
                                 const size_t g_w  = ((size_t) c * Nf + m) * Nt_sub + n_loc;
-                                const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
+                                const size_t g_dt = ((size_t) c * Nf_active + m_act)
+                                                     * Nt_active + n_act;
                                 w_arr[c] = w_chunk[g_w];
                                 d_arr[c] = data_d[g_dt];
                             }
                             for (int c1 = 0; c1 < nchannels; ++c1) {
                                 for (int c2 = 0; c2 < nchannels; ++c2) {
                                     const size_t g_inv = (((size_t) c1 * nchannels + c2)
-                                                           * Nf + m) * Nt + n_glob;
+                                                           * Nf_active + m_act)
+                                                          * Nt_active + n_act;
                                     const double inv = invC[g_inv];
                                     partial_dh[THREAD_START] += d_arr[c1] * w_arr[c2] * inv;
                                     partial_hh[THREAD_START] += w_arr[c1] * w_arr[c2] * inv;
@@ -2996,12 +3017,16 @@ void wdm_het_get_ll_kernel(
                     }
                 } else {
                     for (int c = 0; c < nchannels; ++c) {
-                        for (int m = m_lo; m < m_hi; ++m) {
+                        for (int m = m_lo_act; m < m_hi_act; ++m) {
+                            const int m_act = m - ind_min_f;
                             for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
                                  n_loc += BLOCK_INCR) {
+                                const int n_glob = n_global_lo + (n_loc - keep_lo);
+                                if (n_glob < ind_min_t || n_glob >= ind_max_t_excl) continue;
+                                const int n_act = n_glob - ind_min_t;
                                 const size_t g_w  = ((size_t) c * Nf + m) * Nt_sub + n_loc;
-                                const int    n_glob = n_global_lo + (n_loc - keep_lo);
-                                const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
+                                const size_t g_dt = ((size_t) c * Nf_active + m_act)
+                                                     * Nt_active + n_act;
                                 const double w   = w_chunk[g_w];
                                 const double d   = data_d[g_dt];
                                 const double inv = invC  [g_dt];
@@ -3082,13 +3107,18 @@ void wdm_het_swap_ll_kernel(
     double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
     int *chunk_n_global_offset,
     double *wdm_window,
-    double *data_d, double *invC,            // layout depends on tdi_type:
-                                             //   TDI_XYZ -> invC (C, C, Nf, Nt)
-                                             //   TDI_AET/AE -> invC (C, Nf, Nt)
+    double *data_d, double *invC,            // ACTIVE-band layout:
+                                             //   data_d (C, Nf_active, Nt_active)
+                                             //   invC (TDI_XYZ)
+                                             //     (C, C, Nf_active, Nt_active)
+                                             //   invC (TDI_AET/AE)
+                                             //     (C, Nf_active, Nt_active)
     int n_chunks, int num_bin, int nparams,
     int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
+    int ind_min_f, int ind_min_t,            // active-band offsets (inclusive)
+    int Nf_active, int Nt_active,            // active-band sizes
     double T_chunk, double dt, double T, double t_ref,
     int    tdi_type,                         // TDI_XYZ / TDI_AET / TDI_AE
     double tukey_alpha,
@@ -3318,21 +3348,31 @@ void wdm_het_swap_ll_kernel(
             );
             CUDA_SYNC_THREADS;
 
-            // Accumulate the 5 quantities -- dispatch on tdi_type:
-            //   TDI_XYZ   -> cross-channel inner product over full
-            //                 Hermitian invC (matches lisatools).
-            //   TDI_AET/AE -> diagonal-only (historical fast path).
+            // Accumulate the 5 quantities -- active-band indexing for both
+            // dispatch branches (see get_ll comments for the layout):
+            //   TDI_XYZ   -> invC (C, C, Nf_active, Nt_active), full sum.
+            //   TDI_AET/AE -> invC (C, Nf_active, Nt_active) diagonal.
+            // data_d is always (C, Nf_active, Nt_active). Pixels outside
+            // the active band contribute zero and are skipped.
+            const int ind_max_f_excl = ind_min_f + Nf_active;
+            const int ind_max_t_excl = ind_min_t + Nt_active;
+            const int m_lo_act = (m_lo < ind_min_f) ? ind_min_f : m_lo;
+            const int m_hi_act = (m_hi > ind_max_f_excl) ? ind_max_f_excl : m_hi;
             if (tdi_type == TDI_XYZ) {
-                for (int m = m_lo; m < m_hi; ++m) {
+                for (int m = m_lo_act; m < m_hi_act; ++m) {
+                    const int m_act = m - ind_min_f;
                     for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
                          n_loc += BLOCK_INCR) {
-                        const int    n_glob = n_global_lo + (n_loc - keep_lo);
+                        const int n_glob = n_global_lo + (n_loc - keep_lo);
+                        if (n_glob < ind_min_t || n_glob >= ind_max_t_excl) continue;
+                        const int n_act = n_glob - ind_min_t;
                         double wa_arr[FAST_WDM_NCHANNELS_MAX];
                         double wr_arr[FAST_WDM_NCHANNELS_MAX];
                         double d_arr [FAST_WDM_NCHANNELS_MAX];
                         for (int c = 0; c < nchannels; ++c) {
                             const size_t g_w  = ((size_t) c * Nf + m) * Nt_sub + n_loc;
-                            const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
+                            const size_t g_dt = ((size_t) c * Nf_active + m_act)
+                                                 * Nt_active + n_act;
                             wa_arr[c] = w_chunk_add[g_w];
                             wr_arr[c] = w_chunk_rem[g_w];
                             d_arr [c] = data_d[g_dt];
@@ -3340,7 +3380,8 @@ void wdm_het_swap_ll_kernel(
                         for (int c1 = 0; c1 < nchannels; ++c1) {
                             for (int c2 = 0; c2 < nchannels; ++c2) {
                                 const size_t g_inv = (((size_t) c1 * nchannels + c2)
-                                                       * Nf + m) * Nt + n_glob;
+                                                       * Nf_active + m_act)
+                                                      * Nt_active + n_act;
                                 const double inv = invC[g_inv];
                                 partial_dh_add[THREAD_START] += d_arr[c1] * wa_arr[c2] * inv;
                                 partial_dh_rem[THREAD_START] += d_arr[c1] * wr_arr[c2] * inv;
@@ -3353,12 +3394,16 @@ void wdm_het_swap_ll_kernel(
                 }
             } else {
                 for (int c = 0; c < nchannels; ++c) {
-                    for (int m = m_lo; m < m_hi; ++m) {
+                    for (int m = m_lo_act; m < m_hi_act; ++m) {
+                        const int m_act = m - ind_min_f;
                         for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
                              n_loc += BLOCK_INCR) {
+                            const int n_glob = n_global_lo + (n_loc - keep_lo);
+                            if (n_glob < ind_min_t || n_glob >= ind_max_t_excl) continue;
+                            const int n_act = n_glob - ind_min_t;
                             const size_t g_w  = ((size_t) c * Nf + m) * Nt_sub + n_loc;
-                            const int    n_glob = n_global_lo + (n_loc - keep_lo);
-                            const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
+                            const size_t g_dt = ((size_t) c * Nf_active + m_act)
+                                                 * Nt_active + n_act;
                             const double wa  = w_chunk_add[g_w];
                             const double wr  = w_chunk_rem[g_w];
                             const double d   = data_d[g_dt];
@@ -3394,32 +3439,61 @@ void wdm_het_swap_ll_kernel(
                 const int m_hi_b   = (m_hi_b_in > Nf) ? Nf : m_hi_b_in;
                 const bool need_pass2 = (m_lo_b_c != m_lo) || (m_hi_b != m_hi);
                 if (need_pass2 && m_lo_b_c < m_hi_b) {
-                    // Pass-2 accumulator: cross-channel inner products over
-                    // the full Hermitian invC. Adds d_h_rem and rem_rem
-                    // contributions from m-layers outside source 1's band,
-                    // skipping the overlap with pass 1 to avoid double-
-                    // counting.
-                    for (int m = m_lo_b_c; m < m_hi_b; ++m) {
-                        const bool in_pass1 = (m >= m_lo) && (m < m_hi);
-                        if (in_pass1) continue;
-                        for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
-                             n_loc += BLOCK_INCR) {
-                            const int n_glob = n_global_lo + (n_loc - keep_lo);
-                            double wr_arr[FAST_WDM_NCHANNELS_MAX];
-                            double d_arr [FAST_WDM_NCHANNELS_MAX];
-                            for (int c = 0; c < nchannels; ++c) {
-                                const size_t g_w  = ((size_t) c * Nf + m) * Nt_sub + n_loc;
-                                const size_t g_dt = ((size_t) c * Nf + m) * Nt + n_glob;
-                                wr_arr[c] = w_chunk_rem[g_w];
-                                d_arr [c] = data_d[g_dt];
+                    // Pass-2 accumulator: same tdi_type dispatch + active-band
+                    // indexing as pass 1. Adds d_h_rem / rem_rem from m-layers
+                    // outside source 1's band, skipping pass-1 overlap.
+                    const int m_lo_b_act = (m_lo_b_c < ind_min_f) ? ind_min_f : m_lo_b_c;
+                    const int m_hi_b_act = (m_hi_b   > ind_max_f_excl) ? ind_max_f_excl : m_hi_b;
+                    if (tdi_type == TDI_XYZ) {
+                        for (int m = m_lo_b_act; m < m_hi_b_act; ++m) {
+                            const bool in_pass1 = (m >= m_lo) && (m < m_hi);
+                            if (in_pass1) continue;
+                            const int m_act = m - ind_min_f;
+                            for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
+                                 n_loc += BLOCK_INCR) {
+                                const int n_glob = n_global_lo + (n_loc - keep_lo);
+                                if (n_glob < ind_min_t || n_glob >= ind_max_t_excl) continue;
+                                const int n_act = n_glob - ind_min_t;
+                                double wr_arr[FAST_WDM_NCHANNELS_MAX];
+                                double d_arr [FAST_WDM_NCHANNELS_MAX];
+                                for (int c = 0; c < nchannels; ++c) {
+                                    const size_t g_w  = ((size_t) c * Nf + m) * Nt_sub + n_loc;
+                                    const size_t g_dt = ((size_t) c * Nf_active + m_act)
+                                                         * Nt_active + n_act;
+                                    wr_arr[c] = w_chunk_rem[g_w];
+                                    d_arr [c] = data_d[g_dt];
+                                }
+                                for (int c1 = 0; c1 < nchannels; ++c1) {
+                                    for (int c2 = 0; c2 < nchannels; ++c2) {
+                                        const size_t g_inv = (((size_t) c1 * nchannels + c2)
+                                                               * Nf_active + m_act)
+                                                              * Nt_active + n_act;
+                                        const double inv = invC[g_inv];
+                                        partial_dh_rem[THREAD_START] += d_arr[c1] * wr_arr[c2] * inv;
+                                        partial_rr    [THREAD_START] += wr_arr[c1] * wr_arr[c2] * inv;
+                                    }
+                                }
                             }
-                            for (int c1 = 0; c1 < nchannels; ++c1) {
-                                for (int c2 = 0; c2 < nchannels; ++c2) {
-                                    const size_t g_inv = (((size_t) c1 * nchannels + c2)
-                                                           * Nf + m) * Nt + n_glob;
-                                    const double inv = invC[g_inv];
-                                    partial_dh_rem[THREAD_START] += d_arr[c1] * wr_arr[c2] * inv;
-                                    partial_rr    [THREAD_START] += wr_arr[c1] * wr_arr[c2] * inv;
+                        }
+                    } else {
+                        for (int c = 0; c < nchannels; ++c) {
+                            for (int m = m_lo_b_act; m < m_hi_b_act; ++m) {
+                                const bool in_pass1 = (m >= m_lo) && (m < m_hi);
+                                if (in_pass1) continue;
+                                const int m_act = m - ind_min_f;
+                                for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
+                                     n_loc += BLOCK_INCR) {
+                                    const int n_glob = n_global_lo + (n_loc - keep_lo);
+                                    if (n_glob < ind_min_t || n_glob >= ind_max_t_excl) continue;
+                                    const int n_act = n_glob - ind_min_t;
+                                    const size_t g_w = ((size_t) c * Nf + m) * Nt_sub + n_loc;
+                                    const size_t g_dt = ((size_t) c * Nf_active + m_act)
+                                                         * Nt_active + n_act;
+                                    const double wr  = w_chunk_rem[g_w];
+                                    const double d   = data_d[g_dt];
+                                    const double inv = invC  [g_dt];
+                                    partial_dh_rem[THREAD_START] += d * wr * inv;
+                                    partial_rr    [THREAD_START] += wr * wr * inv;
                                 }
                             }
                         }
@@ -9420,6 +9494,8 @@ static void wdm_het_get_ll_impl(
     int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
+    int ind_min_f, int ind_min_t,
+    int Nf_active, int Nt_active,
     double T_chunk, double dt, double T, double t_ref,
     int    tdi_type,
     double tukey_alpha,
@@ -9457,6 +9533,8 @@ static void wdm_het_get_ll_impl(
         Nf, Nt, Nt_sub, log2_Nt_sub,
         N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
+        ind_min_f, ind_min_t,
+        Nf_active, Nt_active,
         T_chunk, dt, T, t_ref,
         tdi_type,
         tukey_alpha,
@@ -9491,6 +9569,8 @@ static void wdm_het_get_ll_impl(
         Nf, Nt, Nt_sub, log2_Nt_sub,
         N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
+        ind_min_f, ind_min_t,
+        Nf_active, Nt_active,
         T_chunk, dt, T, t_ref,
         tdi_type,
         tukey_alpha,
@@ -9525,6 +9605,8 @@ static void wdm_het_swap_ll_impl(
     int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
+    int ind_min_f, int ind_min_t,
+    int Nf_active, int Nt_active,
     double T_chunk, double dt, double T, double t_ref,
     int    tdi_type,
     double tukey_alpha,
@@ -9569,6 +9651,8 @@ static void wdm_het_swap_ll_impl(
         Nf, Nt, Nt_sub, log2_Nt_sub,
         N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
+        ind_min_f, ind_min_t,
+        Nf_active, Nt_active,
         T_chunk, dt, T, t_ref,
         tdi_type,
         tukey_alpha,
@@ -9610,6 +9694,8 @@ static void wdm_het_swap_ll_impl(
         Nf, Nt, Nt_sub, log2_Nt_sub,
         N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
+        ind_min_f, ind_min_t,
+        Nf_active, Nt_active,
         T_chunk, dt, T, t_ref,
         tdi_type,
         tukey_alpha,
@@ -9665,6 +9751,7 @@ void GBComputationGroup::gb_wdm_het_get_ll_wrap(
     int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
+    int ind_min_f, int ind_min_t, int Nf_active, int Nt_active,
     double T_chunk, double dt, double T, double t_ref, int tdi_type,
     double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
     int *binary_perm, int *group_starts, int *group_ends,
@@ -9676,7 +9763,9 @@ void GBComputationGroup::gb_wdm_het_get_ll_wrap(
         chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
         wdm_window, data_d, invC, n_chunks, num_bin, nparams,
         Nf, Nt, Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
-        nchannels, n_rfft_chunk, T_chunk, dt, T, t_ref, tdi_type, tukey_alpha,
+        nchannels, n_rfft_chunk,
+        ind_min_f, ind_min_t, Nf_active, Nt_active,
+        T_chunk, dt, T, t_ref, tdi_type, tukey_alpha,
         grid_dim, N_cp_sig, N_cp_orbit,
         binary_perm, group_starts, group_ends,
         group_m_lo, group_m_hi, n_groups);
@@ -9695,6 +9784,7 @@ void GBComputationGroup::gb_wdm_het_swap_ll_wrap(
     int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
+    int ind_min_f, int ind_min_t, int Nf_active, int Nt_active,
     double T_chunk, double dt, double T, double t_ref, int tdi_type,
     double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
     int *binary_perm, int *group_starts, int *group_ends,
@@ -9708,7 +9798,9 @@ void GBComputationGroup::gb_wdm_het_swap_ll_wrap(
         chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
         wdm_window, data_d, invC, n_chunks, num_bin, nparams,
         Nf, Nt, Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
-        nchannels, n_rfft_chunk, T_chunk, dt, T, t_ref, tdi_type, tukey_alpha,
+        nchannels, n_rfft_chunk,
+        ind_min_f, ind_min_t, Nf_active, Nt_active,
+        T_chunk, dt, T, t_ref, tdi_type, tukey_alpha,
         grid_dim, N_cp_sig, N_cp_orbit,
         binary_perm, group_starts, group_ends,
         group_m_lo, group_m_hi, n_groups,
@@ -9748,6 +9840,7 @@ void SOBBHComputationGroup::sobbh_wdm_het_get_ll_wrap(
     int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
+    int ind_min_f, int ind_min_t, int Nf_active, int Nt_active,
     double T_chunk, double dt, double T, double t_ref, int tdi_type,
     double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
     int *binary_perm, int *group_starts, int *group_ends,
@@ -9759,7 +9852,9 @@ void SOBBHComputationGroup::sobbh_wdm_het_get_ll_wrap(
         chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
         wdm_window, data_d, invC, n_chunks, num_bin, nparams,
         Nf, Nt, Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
-        nchannels, n_rfft_chunk, T_chunk, dt, T, t_ref, tdi_type, tukey_alpha,
+        nchannels, n_rfft_chunk,
+        ind_min_f, ind_min_t, Nf_active, Nt_active,
+        T_chunk, dt, T, t_ref, tdi_type, tukey_alpha,
         grid_dim, N_cp_sig, N_cp_orbit,
         binary_perm, group_starts, group_ends,
         group_m_lo, group_m_hi, n_groups);
@@ -9778,6 +9873,7 @@ void SOBBHComputationGroup::sobbh_wdm_het_swap_ll_wrap(
     int Nf, int Nt, int Nt_sub, int log2_Nt_sub,
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
+    int ind_min_f, int ind_min_t, int Nf_active, int Nt_active,
     double T_chunk, double dt, double T, double t_ref, int tdi_type,
     double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
     int *binary_perm, int *group_starts, int *group_ends,
@@ -9791,7 +9887,9 @@ void SOBBHComputationGroup::sobbh_wdm_het_swap_ll_wrap(
         chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_offset,
         wdm_window, data_d, invC, n_chunks, num_bin, nparams,
         Nf, Nt, Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
-        nchannels, n_rfft_chunk, T_chunk, dt, T, t_ref, tdi_type, tukey_alpha,
+        nchannels, n_rfft_chunk,
+        ind_min_f, ind_min_t, Nf_active, Nt_active,
+        T_chunk, dt, T, t_ref, tdi_type, tukey_alpha,
         grid_dim, N_cp_sig, N_cp_orbit,
         binary_perm, group_starts, group_ends,
         group_m_lo, group_m_hi, n_groups,
