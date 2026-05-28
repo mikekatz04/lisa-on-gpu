@@ -2655,14 +2655,41 @@ void wdm_het_fill_global_kernel(
             if (bin_m_lo < 0)   bin_m_lo = 0;
             if (bin_m_hi > Nf)  bin_m_hi = Nf;
 
-            // Zero per-chunk workspaces. (fast_wdm_inner_heterodyne writes
-            // only N_sparse bins of chunk_fd, so the rest must be zero;
-            // gb_chunk_fd_to_wdm assumes w_chunk is zero-init.)
-            for (int k = THREAD_START_X; k < nchannels * n_rfft_chunk; k += BLOCK_INCR_X) {
-                chunk_fd[k] = cmplx(0.0, 0.0);
+            // Zero per-chunk workspaces -- only the live region (see the
+            // identical optimization in wdm_het_get_ll_kernel for the full
+            // rationale). The dead regions outside the live windows are
+            // never written by fast_wdm_inner_heterodyne / gb_chunk_fd_to_wdm
+            // and never read by the template_fill stitch below.
+            //
+            //   chunk_fd live: kbin in [k_f0 - N_sparse/2, k_f0 + N_sparse/2)
+            //   w_chunk live:  m in [bin_m_lo, bin_m_hi); the stitch at
+            //                  line ~2720 only reads that band.
+            const double df_chunk_zero = 1.0 / T_chunk;
+            const int    k_f0_zero     = (int) round(params[src.f0_index]
+                                                      / df_chunk_zero);
+            int kf0_lo = k_f0_zero - N_sparse / 2;
+            int kf0_hi = k_f0_zero + N_sparse / 2 + 1;
+            if (kf0_lo < 0)             kf0_lo = 0;
+            if (kf0_hi > n_rfft_chunk)  kf0_hi = n_rfft_chunk;
+            const int kf0_band = (kf0_hi > kf0_lo) ? (kf0_hi - kf0_lo) : 0;
+            for (int idx = THREAD_START_X; idx < nchannels * kf0_band;
+                 idx += BLOCK_INCR_X) {
+                const int c = idx / kf0_band;
+                const int k = kf0_lo + (idx - c * kf0_band);
+                chunk_fd[c * n_rfft_chunk + k] = cmplx(0.0, 0.0);
             }
-            for (int k = THREAD_START_X; k < nchannels * Nf * Nt_sub; k += BLOCK_INCR_X) {
-                w_chunk[k] = 0.0;
+
+            const int wm_band = (bin_m_hi > bin_m_lo)
+                                ? (bin_m_hi - bin_m_lo) : 0;
+            for (int idx = THREAD_START_X;
+                 idx < nchannels * wm_band * Nt_sub;
+                 idx += BLOCK_INCR_X) {
+                const int c    = idx / (wm_band * Nt_sub);
+                const int rem  = idx - c * wm_band * Nt_sub;
+                const int mloc = rem / Nt_sub;
+                const int n    = rem - mloc * Nt_sub;
+                const int m    = bin_m_lo + mloc;
+                w_chunk[((size_t) c * Nf + m) * Nt_sub + n] = 0.0;
             }
             CUDA_SYNC_THREADS;
 
@@ -2967,12 +2994,52 @@ void wdm_het_get_ll_kernel(
                 const int bin_i = (n_groups > 0) ? binary_perm[bin_iter] : bin_iter;
                 double *params = &params_all[(size_t) bin_i * nparams];
 
-                // Zero per-chunk workspaces.
-                for (int k = THREAD_START_X; k < nchannels * n_rfft_chunk; k += BLOCK_INCR_X) {
-                    chunk_fd[k] = cmplx(0.0, 0.0);
+                // Zero per-chunk workspaces -- BUT only the live region the
+                // downstream code actually reads/writes. The full-buffer zero
+                // (524k cmplx + 1M doubles per channel) was burning ~50 MB
+                // of HBM write traffic per binary, the dominant per-binary
+                // cost on A100 at moderate gridDim.x. The live regions are:
+                //
+                //   chunk_fd:   fast_wdm_inner_heterodyne only writes at
+                //               kbin = k_f0 + [-N_sparse/2, N_sparse/2).
+                //               Everything else stays zero, which is exactly
+                //               what the chunk_fd -> WDM transform expects
+                //               for "no energy outside the heterodyne band."
+                //   w_chunk:    gb_chunk_fd_to_wdm only writes inside
+                //               [m_lo, m_hi) (the group band), and the
+                //               accumulator only reads inside
+                //               [max(m_lo, ind_min_f), min(m_hi, ind_max_f+1)).
+                //               Anything outside that intersection is dead.
+                //
+                // ~1000x reduction in zero-init traffic per binary.
+                const double df_chunk_zero = 1.0 / T_chunk;
+                const int    k_f0_zero     = (int) round(params[src.f0_index]
+                                                          / df_chunk_zero);
+                int kf0_lo = k_f0_zero - N_sparse / 2;
+                int kf0_hi = k_f0_zero + N_sparse / 2 + 1;        // exclusive
+                if (kf0_lo < 0)             kf0_lo = 0;
+                if (kf0_hi > n_rfft_chunk)  kf0_hi = n_rfft_chunk;
+                const int kf0_band = (kf0_hi > kf0_lo) ? (kf0_hi - kf0_lo) : 0;
+                for (int idx = THREAD_START_X; idx < nchannels * kf0_band;
+                     idx += BLOCK_INCR_X) {
+                    const int c = idx / kf0_band;
+                    const int k = kf0_lo + (idx - c * kf0_band);
+                    chunk_fd[c * n_rfft_chunk + k] = cmplx(0.0, 0.0);
                 }
-                for (int k = THREAD_START_X; k < nchannels * Nf * Nt_sub; k += BLOCK_INCR_X) {
-                    w_chunk[k] = 0.0;
+
+                int wm_lo = (m_lo < ind_min_f) ? ind_min_f : m_lo;
+                int wm_hi = (m_hi > ind_min_f + Nf_active)
+                              ? (ind_min_f + Nf_active) : m_hi;
+                const int wm_band = (wm_hi > wm_lo) ? (wm_hi - wm_lo) : 0;
+                for (int idx = THREAD_START_X;
+                     idx < nchannels * wm_band * Nt_sub;
+                     idx += BLOCK_INCR_X) {
+                    const int c    = idx / (wm_band * Nt_sub);
+                    const int rem  = idx - c * wm_band * Nt_sub;
+                    const int mloc = rem / Nt_sub;
+                    const int n    = rem - mloc * Nt_sub;
+                    const int m    = wm_lo + mloc;
+                    w_chunk[((size_t) c * Nf + m) * Nt_sub + n] = 0.0;
                 }
                 partial_dh[THREAD_START_X] = 0.0;
                 partial_hh[THREAD_START_X] = 0.0;
@@ -3326,14 +3393,55 @@ void wdm_het_swap_ll_kernel(
             double *params_add = &params_add_all   [(size_t) bin_i * nparams];
             double *params_rem = &params_remove_all[(size_t) bin_i * nparams];
 
-            // Zero workspaces and partials
-            for (int k = THREAD_START_X; k < nchannels * n_rfft_chunk; k += BLOCK_INCR_X) {
-                chunk_fd_add[k] = cmplx(0.0, 0.0);
-                chunk_fd_rem[k] = cmplx(0.0, 0.0);
+            // Zero workspaces and partials. Same live-region-only
+            // optimization as wdm_het_get_ll_kernel (see that comment for
+            // the rationale). swap_ll has two carrier bands (add + rem)
+            // for chunk_fd: zero each around its own k_f0. Both
+            // w_chunk_add / w_chunk_rem share the group m-band restricted
+            // to the active band (the accumulator below reads only that
+            // intersection).
+            const double df_chunk_zero = 1.0 / T_chunk;
+            const int    k_f0_add = (int) round(params_add[src.f0_index]
+                                                  / df_chunk_zero);
+            const int    k_f0_rem = (int) round(params_rem[src.f0_index]
+                                                  / df_chunk_zero);
+            int kf0a_lo = k_f0_add - N_sparse / 2;
+            int kf0a_hi = k_f0_add + N_sparse / 2 + 1;
+            if (kf0a_lo < 0)             kf0a_lo = 0;
+            if (kf0a_hi > n_rfft_chunk)  kf0a_hi = n_rfft_chunk;
+            const int kf0a_band = (kf0a_hi > kf0a_lo) ? (kf0a_hi - kf0a_lo) : 0;
+            for (int idx = THREAD_START_X; idx < nchannels * kf0a_band;
+                 idx += BLOCK_INCR_X) {
+                const int c = idx / kf0a_band;
+                const int k = kf0a_lo + (idx - c * kf0a_band);
+                chunk_fd_add[c * n_rfft_chunk + k] = cmplx(0.0, 0.0);
             }
-            for (int k = THREAD_START_X; k < nchannels * Nf * Nt_sub; k += BLOCK_INCR_X) {
-                w_chunk_add[k] = 0.0;
-                w_chunk_rem[k] = 0.0;
+            int kf0r_lo = k_f0_rem - N_sparse / 2;
+            int kf0r_hi = k_f0_rem + N_sparse / 2 + 1;
+            if (kf0r_lo < 0)             kf0r_lo = 0;
+            if (kf0r_hi > n_rfft_chunk)  kf0r_hi = n_rfft_chunk;
+            const int kf0r_band = (kf0r_hi > kf0r_lo) ? (kf0r_hi - kf0r_lo) : 0;
+            for (int idx = THREAD_START_X; idx < nchannels * kf0r_band;
+                 idx += BLOCK_INCR_X) {
+                const int c = idx / kf0r_band;
+                const int k = kf0r_lo + (idx - c * kf0r_band);
+                chunk_fd_rem[c * n_rfft_chunk + k] = cmplx(0.0, 0.0);
+            }
+
+            int wm_lo = (m_lo < ind_min_f) ? ind_min_f : m_lo;
+            int wm_hi = (m_hi > ind_min_f + Nf_active)
+                          ? (ind_min_f + Nf_active) : m_hi;
+            const int wm_band = (wm_hi > wm_lo) ? (wm_hi - wm_lo) : 0;
+            for (int idx = THREAD_START_X;
+                 idx < nchannels * wm_band * Nt_sub;
+                 idx += BLOCK_INCR_X) {
+                const int c    = idx / (wm_band * Nt_sub);
+                const int rem  = idx - c * wm_band * Nt_sub;
+                const int mloc = rem / Nt_sub;
+                const int n    = rem - mloc * Nt_sub;
+                const int m    = wm_lo + mloc;
+                w_chunk_add[((size_t) c * Nf + m) * Nt_sub + n] = 0.0;
+                w_chunk_rem[((size_t) c * Nf + m) * Nt_sub + n] = 0.0;
             }
             partial_dh_add[THREAD_START_X] = 0.0;
             partial_dh_rem[THREAD_START_X] = 0.0;
