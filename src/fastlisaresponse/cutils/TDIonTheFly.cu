@@ -987,7 +987,7 @@ bool build_wdm_spline_window(
     const int L = WDM_SPLINE_L;
     const int nchannels = 3;
 
-    for (int i = THREAD_START; i < L; i += BLOCK_INCR)
+    for (int i = THREAD_START_X; i < L; i += BLOCK_INCR_X)
     {
         S->t_grid[i] = t_window_start + (double) i * coarse_dt;
     }
@@ -1009,7 +1009,7 @@ bool build_wdm_spline_window(
     CUDA_SHARED bool any_bad;
     if (THREAD_ZERO) any_bad = false;
     CUDA_SYNC_THREADS;
-    for (int i = THREAD_START; i < L; i += BLOCK_INCR)
+    for (int i = THREAD_START_X; i < L; i += BLOCK_INCR_X)
     {
         if ((tdi_chan_scratch[i].real() == 0.0) &&
             (tdi_chan_scratch[i].imag() == 0.0))
@@ -1135,7 +1135,7 @@ bool build_wdm_demod_spline_window(
     const int L = WDM_SPLINE_L;
     const int nchannels = 3;
 
-    for (int i = THREAD_START; i < L; i += BLOCK_INCR)
+    for (int i = THREAD_START_X; i < L; i += BLOCK_INCR_X)
         S->t_grid[i] = t_window_start + (double) i * coarse_dt;
     CUDA_SYNC_THREADS;
 
@@ -1144,13 +1144,13 @@ bool build_wdm_demod_spline_window(
 
     // Per-coarse-pt raw M[3] + phi_ref evaluation, demodulated into
     // (re, im) per channel. We share the work across threads with
-    // THREAD_START / BLOCK_INCR strides; each thread is responsible for
+    // THREAD_START_X / BLOCK_INCR_X strides; each thread is responsible for
     // a subset of the L points.
     CUDA_SHARED bool any_bad;
     if (THREAD_ZERO) any_bad = false;
     CUDA_SYNC_THREADS;
 
-    for (int i = THREAD_START; i < L; i += BLOCK_INCR)
+    for (int i = THREAD_START_X; i < L; i += BLOCK_INCR_X)
     {
         double t = S->t_grid[i];
         cmplx M[3];
@@ -1500,7 +1500,7 @@ CUDA_SYNC_THREADS;
 // :func:`GBComputationGroup::gb_heterodyne_chunk_prepare_wrap` is
 // declared in binding_tof.hpp (TBD; not added by this commit).
 //
-// CPU vs CUDA: ``CUDA_DEVICE``, ``THREAD_START`` and ``BLOCK_INCR``
+// CPU vs CUDA: ``CUDA_DEVICE``, ``THREAD_START_X`` and ``BLOCK_INCR_X``
 // macros let the same code run as a serial CPU function or a CUDA
 // per-block routine. The FFT helper (``wdm_spline_radix2_fft``) is
 // already dual-mode.
@@ -1581,13 +1581,26 @@ CUDA_SYNC_THREADS;
 #define FAST_WDM_N_CP_SIG_MAX 2048
 #endif
 
+// Default cap on gridDim.x for the chunked-het kernels (binaries axis).
+// Each (x, z) block keeps its own per-(chunk, binary) heap scratch slot
+// (chunk_fd / chunk_wdm / tdi_channels / get_tdi_scratch), so total heap
+// scratch scales as ``gd_x * n_chunks * per_slot_size``. A small default
+// keeps heap bounded; the host can pass ``grid_dim`` explicitly to
+// override. With Nf=4096 / Nt_sub=256 / nch=3 / N_sparse=256 a single
+// per-(chunk, binary) slot is ~24 MB for w_chunk, so the default of 4
+// keeps total at ~1.5 GB for n_chunks=16. TODO: tune by occupancy and
+// (a) move ``w_chunk`` to per-block shared memory if it fits or
+// (b) shrink ``w_chunk`` to per-group active-band width, which would
+//     let us raise this default substantially.
+#define FAST_WDM_HET_GRID_DIM_X_DEFAULT 4
+
 // ---------------------------------------------------------------------------
 // Threading model notes for upcoming gb_wdm_het_* kernels
 // ---------------------------------------------------------------------------
 //
 // NUM_THREADS vs N_sparse: the radix-2 FFT helper
 // (``wdm_spline_radix2_fft`` in WDMSplineHelpers.hh) already strides via
-// THREAD_START / BLOCK_INCR, so a block can be sized with NUM_THREADS
+// THREAD_START_X / BLOCK_INCR_X, so a block can be sized with NUM_THREADS
 // != N_sparse. The only constraint is N_sparse >= NUM_THREADS (each
 // thread handles N_sparse / NUM_THREADS sequential samples). On CPU
 // NUM_THREADS = 1, the loops serialise.
@@ -1687,19 +1700,19 @@ inline void populate_orbit_spline_cache(
     cache->pos_c3  = pos_c3_buf;
 
     // 1) Build t_cp grid and sample raw orbits at the cp times.
-    for (int i = THREAD_START; i < N_cp; i += BLOCK_INCR) {
+    for (int i = THREAD_START_X; i < N_cp; i += BLOCK_INCR_X) {
         t_cp_buf[i] = chunk_t_start + (double) i * dt_cp;
     }
     CUDA_SYNC_THREADS;
     // Sample LTT per link, per cp time.
-    for (int idx = THREAD_START; idx < 6 * N_cp; idx += BLOCK_INCR) {
+    for (int idx = THREAD_START_X; idx < 6 * N_cp; idx += BLOCK_INCR_X) {
         const int link_i = idx / N_cp;
         const int i      = idx - link_i * N_cp;
         ltt_y_buf[link_i * N_cp + i] =
             orbits->get_light_travel_time(t_cp_buf[i], LINKS[link_i]);
     }
     // Sample positions per (sc, xyz), per cp time.
-    for (int idx = THREAD_START; idx < 9 * N_cp; idx += BLOCK_INCR) {
+    for (int idx = THREAD_START_X; idx < 9 * N_cp; idx += BLOCK_INCR_X) {
         const int sx = idx / N_cp;        // 0..8 (= sc * 3 + xyz)
         const int i  = idx - sx * N_cp;
         const int sc  = sx / 3 + 1;       // spacecraft index 1..3
@@ -1890,7 +1903,7 @@ inline void fast_wdm_inner_heterodyne_spline(
     }
 
     // ---- 1) cp time grid (uniform) ----------------------------------------
-    for (int i = THREAD_START; i < N_cp_sig; i += BLOCK_INCR) {
+    for (int i = THREAD_START_X; i < N_cp_sig; i += BLOCK_INCR_X) {
         t_cp_buf[i] = chunk_t_start + (double) i * dt_cp;
     }
     CUDA_SYNC_THREADS;
@@ -1920,7 +1933,7 @@ inline void fast_wdm_inner_heterodyne_spline(
     // below. The dphi_ref spline (fit here, evaluated in step 4d) is the
     // OLD get_tdi_heterodyned convention -- preserves bitwise math match
     // against the direct path.
-    for (int i = THREAD_START; i < N_cp_sig; i += BLOCK_INCR) {
+    for (int i = THREAD_START_X; i < N_cp_sig; i += BLOCK_INCR_X) {
         dphi_ref_y_buf[i] = phi_ref_un_het_buf[i] - two_pi_f0 * t_cp_buf[i];
     }
     CUDA_SYNC_THREADS;
@@ -1979,7 +1992,7 @@ inline void fast_wdm_inner_heterodyne_spline(
 
         // (d) evaluate amp, phase, dphi_ref on the N_sparse t-grid and
         //     write the windowed slow signal for this channel into slow_buf.
-        for (int i = THREAD_START; i < N_sparse; i += BLOCK_INCR) {
+        for (int i = THREAD_START_X; i < N_sparse; i += BLOCK_INCR_X) {
             const double tau = (double) i * dt_sparse;
             const double t   = chunk_t_start + tau;
 
@@ -2040,7 +2053,7 @@ inline void fast_wdm_inner_heterodyne_spline(
 
     // ---- 6) Place into chunk_fd_out (identical to direct path) -----------
     for (int c = 0; c < nchannels; ++c) {
-        for (int m_idx = THREAD_START; m_idx < N_sparse; m_idx += BLOCK_INCR) {
+        for (int m_idx = THREAD_START_X; m_idx < N_sparse; m_idx += BLOCK_INCR_X) {
             const int m = (m_idx < half_Nsp) ? m_idx : (m_idx - N_sparse);
             const int kbin = k_f0 + m;
             if (kbin >= 0 && kbin < n_rfft_chunk) {
@@ -2100,7 +2113,7 @@ inline void fast_wdm_inner_heterodyne(
     }
 
     // ---- 1) sparse time grid for this chunk -------------------------------
-    for (int i = THREAD_START; i < N_sparse; i += BLOCK_INCR) {
+    for (int i = THREAD_START_X; i < N_sparse; i += BLOCK_INCR_X) {
         t_sparse_buf[i] = chunk_t_start + (double) i * dt_sparse;
     }
     CUDA_SYNC_THREADS;
@@ -2128,7 +2141,7 @@ inline void fast_wdm_inner_heterodyne(
     // spectral leakage into adjacent bins vs the Python reference).
     const double n_taper = 0.5 * alpha_eff * (double) (N_sparse - 1);
     for (int c = 0; c < nchannels; ++c) {
-        for (int i = THREAD_START; i < N_sparse; i += BLOCK_INCR) {
+        for (int i = THREAD_START_X; i < N_sparse; i += BLOCK_INCR_X) {
             const int idx = c * N_sparse + i;
             const double tau   = (double) i * dt_sparse;
             const double phase = tdi_phase_buf[idx] + phi_ref_buf[i]
@@ -2170,7 +2183,7 @@ inline void fast_wdm_inner_heterodyne(
     // The chunk's dense rfft array has length n_rfft_chunk = N_chunk_td/2+1.
     // Bins outside [0, n_rfft_chunk) are dropped.
     for (int c = 0; c < nchannels; ++c) {
-        for (int m_idx = THREAD_START; m_idx < N_sparse; m_idx += BLOCK_INCR) {
+        for (int m_idx = THREAD_START_X; m_idx < N_sparse; m_idx += BLOCK_INCR_X) {
             const int m = (m_idx < half_Nsp) ? m_idx : (m_idx - N_sparse);
             const int kbin = k_f0 + m;
             if (kbin >= 0 && kbin < n_rfft_chunk) {
@@ -2197,7 +2210,7 @@ inline void fast_wdm_inner_heterodyne(
 //   get_tdi_scratch_all   (n_chunks * get_tdi_scratch_len_per_block bytes)
 //
 // NUM_THREADS may be < N_sparse: the FFT helper strides via
-// THREAD_START / BLOCK_INCR. On CPU GRID_INCR = 1 -> the for-loop runs
+// THREAD_START_X / BLOCK_INCR_X. On CPU GRID_INCR_X = 1 -> the for-loop runs
 // chunks serially.
 CUDA_KERNEL
 inline void fast_wdm_inner_heterodyne_kernel(
@@ -2224,7 +2237,7 @@ inline void fast_wdm_inner_heterodyne_kernel(
     CUDA_SHARED cmplx  tdi_channels_buf[FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
     CUDA_SHARED cmplx  slow_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
 
-    for (int j = BLOCK_START; j < n_chunks; j += GRID_INCR) {
+    for (int j = BLOCK_START_X; j < n_chunks; j += GRID_INCR_X) {
         cmplx *chunk_fd = &chunk_fd_all[j * nchannels * n_rfft_chunk];
         void  *get_tdi_scratch = (char *) get_tdi_scratch_all
             + (size_t) j * (size_t) get_tdi_scratch_len_per_block;
@@ -2287,7 +2300,7 @@ inline void fast_wdm_inner_heterodyne_kernel(
 //   * tmp_w_mn      -- (nchannels, Nf+1, Nt_sub) real, sized at compile
 //                      time with the FAST_WDM_* maxima.
 //
-// Threading: per-block; THREAD_START / BLOCK_INCR parallelism within
+// Threading: per-block; THREAD_START_X / BLOCK_INCR_X parallelism within
 // the inner Nt_sub loops. The outer m-loop is serial within a block.
 // ----------------------------------------------------------------------------
 
@@ -2338,7 +2351,7 @@ inline void gb_chunk_fd_to_wdm(
         for (int m = m_lo; m < m_hi; ++m) {
 
             // --- 1) build windowed FD slice (length Nt_sub) -----------------
-            for (int k_idx = THREAD_START; k_idx < Nt_sub; k_idx += BLOCK_INCR) {
+            for (int k_idx = THREAD_START_X; k_idx < Nt_sub; k_idx += BLOCK_INCR_X) {
                 long k_global = (long) m * (long) half_Nt_sub + (long)(k_idx - half_Nt_sub);
                 bool herm = false;
                 if (k_global < 0)              { k_global = -k_global;       herm = true; }
@@ -2365,7 +2378,7 @@ inline void gb_chunk_fd_to_wdm(
             // For m in [1, Nf-1] -> directly into w_mn_out[c, m, n].
             // For m = 0 -> w_mn_out[c, 0, even n] (folded).
             // For m = Nf -> w_mn_out[c, 0, odd n]  (folded; n_src is even).
-            for (int n = THREAD_START; n < Nt_sub; n += BLOCK_INCR) {
+            for (int n = THREAD_START_X; n < Nt_sub; n += BLOCK_INCR_X) {
                 const bool boundary = (m == 0 || m == Nf);
                 const bool mn_parity_even = (((m + n) & 1) == 0);
                 if (boundary && !mn_parity_even) {
@@ -2582,16 +2595,21 @@ void wdm_het_fill_global_kernel(
     CUDA_SHARED cmplx layer_scratch[FAST_WDM_NT_SUB_MAX];
 
 
-    // OUTER: chunks (one block per chunk). The fill_global per-binary
-    // contention is per (chunk, m, n_local) -> different global pixel
-    // per binary, so no atomic needed on the template_fill write.
-    for (int j = BLOCK_START; j < n_chunks; j += GRID_INCR) {
-        cmplx  *chunk_fd       = &ws_chunk_fd_all[(size_t) j * nchannels * n_rfft_chunk];
+    // OUTER: chunks on grid.Z. See the equivalent comment block in
+    // ``wdm_het_get_ll_kernel`` for the 3D-grid rationale and the
+    // (BLOCK_START_X, j) scratch-slot key. fill_global has no per-binary
+    // contention on template_fill (each binary writes a distinct global
+    // pixel set), so atomic-free writes remain correct under the new
+    // X-axis parallelism.
+    for (int j = BLOCK_START_Z; j < n_chunks; j += GRID_INCR_Z) {
+        const size_t scratch_slot = (size_t) BLOCK_START_X * (size_t) n_chunks
+                                     + (size_t) j;
+        cmplx  *chunk_fd       = &ws_chunk_fd_all[scratch_slot * nchannels * n_rfft_chunk];
         // layer_scratch lives in CUDA_SHARED (declared at kernel top).
-        double *w_chunk        = &ws_chunk_wdm_all[(size_t) j * nchannels * Nf * Nt_sub];
-        cmplx  *tdi_channels_buf = &ws_tdi_channels_all[(size_t) j * nchannels * N_sparse];
+        double *w_chunk        = &ws_chunk_wdm_all[scratch_slot * nchannels * Nf * Nt_sub];
+        cmplx  *tdi_channels_buf = &ws_tdi_channels_all[scratch_slot * nchannels * N_sparse];
         void   *get_tdi_scratch = (char *) get_tdi_scratch_all
-            + (size_t) j * (size_t) get_tdi_scratch_len_per_block;
+            + scratch_slot * (size_t) get_tdi_scratch_len_per_block;
 
         const int keep_lo        = chunk_keep_lo[j];
         const int keep_hi        = chunk_keep_hi[j];
@@ -2613,9 +2631,13 @@ void wdm_het_fill_global_kernel(
             orbit_cache_ptr = &orbit_cache_storage;
         }
 
-        // INNER: binaries
+        // INNER: binaries -- grid-strided over the X axis. Each X
+        // block walks BLOCK_START_X, BLOCK_START_X + GRID_INCR_X, ...,
+        // sharing this chunk's orbit cache across the binaries it
+        // visits. On CPU GRID_INCR_X = 1, so the loop covers
+        // [0, num_bin) sequentially (the original single-block path).
         const double layer_df = 1.0 / (2.0 * (double) Nf * dt);
-        for (int bin_i = 0; bin_i < num_bin; ++bin_i) {
+        for (int bin_i = BLOCK_START_X; bin_i < num_bin; bin_i += GRID_INCR_X) {
             double *params = &params_all[(size_t) bin_i * nparams];
             const double factor = factors_all[bin_i];
 
@@ -2636,10 +2658,10 @@ void wdm_het_fill_global_kernel(
             // Zero per-chunk workspaces. (fast_wdm_inner_heterodyne writes
             // only N_sparse bins of chunk_fd, so the rest must be zero;
             // gb_chunk_fd_to_wdm assumes w_chunk is zero-init.)
-            for (int k = THREAD_START; k < nchannels * n_rfft_chunk; k += BLOCK_INCR) {
+            for (int k = THREAD_START_X; k < nchannels * n_rfft_chunk; k += BLOCK_INCR_X) {
                 chunk_fd[k] = cmplx(0.0, 0.0);
             }
-            for (int k = THREAD_START; k < nchannels * Nf * Nt_sub; k += BLOCK_INCR) {
+            for (int k = THREAD_START_X; k < nchannels * Nf * Nt_sub; k += BLOCK_INCR_X) {
                 w_chunk[k] = 0.0;
             }
             CUDA_SYNC_THREADS;
@@ -2696,8 +2718,8 @@ void wdm_het_fill_global_kernel(
             //        factor * w_chunk[c, m, n]   for n in [keep_lo, keep_hi)
             for (int c = 0; c < nchannels; ++c) {
                 for (int m = bin_m_lo; m < bin_m_hi; ++m) {
-                    for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
-                         n_loc += BLOCK_INCR) {
+                    for (int n_loc = keep_lo + THREAD_START_X; n_loc < keep_hi;
+                         n_loc += BLOCK_INCR_X) {
                         const int n_glob = n_global_lo + (n_loc - keep_lo);
                         const size_t dst = ((size_t) c * Nf + m) * Nt + n_glob;
                         template_fill[dst] +=
@@ -2854,7 +2876,7 @@ void wdm_het_get_ll_kernel(
     CUDA_SHARED cmplx layer_scratch[FAST_WDM_NT_SUB_MAX];
 
     // Per-thread partial accumulators (one slot per thread; reduced at end).
-    // Sized at a generous upper bound; THREAD_START / BLOCK_INCR controls
+    // Sized at a generous upper bound; THREAD_START_X / BLOCK_INCR_X controls
     // the active extent.
     CUDA_SHARED double partial_dh[FAST_WDM_N_SPARSE_MAX];   // reuse N_sparse cap
     CUDA_SHARED double partial_hh[FAST_WDM_N_SPARSE_MAX];
@@ -2869,14 +2891,25 @@ void wdm_het_get_ll_kernel(
     // automatically via the hardware cache. See profile + design
     // discussion in the sprint root.
 
-    // OUTER: chunks (one block per chunk).
-    for (int j = BLOCK_START; j < n_chunks; j += GRID_INCR) {
-        cmplx  *chunk_fd      = &ws_chunk_fd_all[(size_t) j * nchannels * n_rfft_chunk];
+    // OUTER: chunks on grid.Z (default ``gridDim.z == n_chunks``).
+    //
+    // 3D-grid layout (see FAST_WDM_HET_GRID_DIM_X_DEFAULT and the impl
+    // wrapper below): blockIdx.z indexes chunks (grid-stride to
+    // tolerate gridDim.z < n_chunks); blockIdx.x indexes binaries with
+    // a grid-stride that lets a single X block process multiple
+    // binaries from the same group, reusing the chunk-local orbit
+    // cache and m-band metadata across them. The per-(x, z) heap
+    // scratch slot is ``BLOCK_START_X * n_chunks + j`` -- unique per
+    // (x-block, chunk) so independent (x, z) blocks never collide.
+    for (int j = BLOCK_START_Z; j < n_chunks; j += GRID_INCR_Z) {
+        const size_t scratch_slot = (size_t) BLOCK_START_X * (size_t) n_chunks
+                                     + (size_t) j;
+        cmplx  *chunk_fd      = &ws_chunk_fd_all[scratch_slot * nchannels * n_rfft_chunk];
         // layer_scratch lives in CUDA_SHARED (declared at kernel top).
-        double *w_chunk       = &ws_chunk_wdm_all[(size_t) j * nchannels * Nf * Nt_sub];
-        cmplx  *tdi_channels_buf = &ws_tdi_channels_all[(size_t) j * nchannels * N_sparse];
+        double *w_chunk       = &ws_chunk_wdm_all[scratch_slot * nchannels * Nf * Nt_sub];
+        cmplx  *tdi_channels_buf = &ws_tdi_channels_all[scratch_slot * nchannels * N_sparse];
         void   *get_tdi_scratch = (char *) get_tdi_scratch_all
-            + (size_t) j * (size_t) get_tdi_scratch_len_per_block;
+            + scratch_slot * (size_t) get_tdi_scratch_len_per_block;
 
         const int keep_lo     = chunk_keep_lo[j];
         const int keep_hi     = chunk_keep_hi[j];
@@ -2920,20 +2953,29 @@ void wdm_het_get_ll_kernel(
             // (Per-thread populate-pass removed; direct global reads in
             // the accumulator below pick up L1/L2 caching automatically.)
 
-            // INNER: binaries in this group (or all binaries when un-grouped).
-            for (int bin_iter = bin_iter_lo; bin_iter < bin_iter_hi; ++bin_iter) {
+            // INNER: binaries in this group, grid-strided across the X
+            // dimension. Each X block walks ``bin_iter_lo +
+            // BLOCK_START_X, bin_iter_lo + BLOCK_START_X + GRID_INCR_X,
+            // ...`` -- so adjacent X blocks process adjacent binaries
+            // within the same group, sharing the chunk-local orbit
+            // cache and m-band metadata. With GRID_INCR_X = 1 on CPU
+            // the loop walks the whole [bin_iter_lo, bin_iter_hi)
+            // range sequentially (single-block behaviour).
+            for (int bin_iter = bin_iter_lo + BLOCK_START_X;
+                 bin_iter < bin_iter_hi;
+                 bin_iter += GRID_INCR_X) {
                 const int bin_i = (n_groups > 0) ? binary_perm[bin_iter] : bin_iter;
                 double *params = &params_all[(size_t) bin_i * nparams];
 
                 // Zero per-chunk workspaces.
-                for (int k = THREAD_START; k < nchannels * n_rfft_chunk; k += BLOCK_INCR) {
+                for (int k = THREAD_START_X; k < nchannels * n_rfft_chunk; k += BLOCK_INCR_X) {
                     chunk_fd[k] = cmplx(0.0, 0.0);
                 }
-                for (int k = THREAD_START; k < nchannels * Nf * Nt_sub; k += BLOCK_INCR) {
+                for (int k = THREAD_START_X; k < nchannels * Nf * Nt_sub; k += BLOCK_INCR_X) {
                     w_chunk[k] = 0.0;
                 }
-                partial_dh[THREAD_START] = 0.0;
-                partial_hh[THREAD_START] = 0.0;
+                partial_dh[THREAD_START_X] = 0.0;
+                partial_hh[THREAD_START_X] = 0.0;
                 CUDA_SYNC_THREADS;
 
                 // 1) heterodyne FD
@@ -3007,8 +3049,8 @@ void wdm_het_get_ll_kernel(
                 if (tdi_type == TDI_XYZ) {
                     for (int m = m_lo_act; m < m_hi_act; ++m) {
                         const int m_act = m - ind_min_f;
-                        for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
-                             n_loc += BLOCK_INCR) {
+                        for (int n_loc = keep_lo + THREAD_START_X; n_loc < keep_hi;
+                             n_loc += BLOCK_INCR_X) {
                             const int n_glob = n_global_lo + (n_loc - keep_lo);
                             if (n_glob < ind_min_t || n_glob >= ind_max_t_excl) continue;
                             const int n_act = n_glob - ind_min_t;
@@ -3027,8 +3069,8 @@ void wdm_het_get_ll_kernel(
                                                            * Nf_active + m_act)
                                                           * Nt_active + n_act;
                                     const double inv = invC[g_inv];
-                                    partial_dh[THREAD_START] += d_arr[c1] * w_arr[c2] * inv;
-                                    partial_hh[THREAD_START] += w_arr[c1] * w_arr[c2] * inv;
+                                    partial_dh[THREAD_START_X] += d_arr[c1] * w_arr[c2] * inv;
+                                    partial_hh[THREAD_START_X] += w_arr[c1] * w_arr[c2] * inv;
                                 }
                             }
                         }
@@ -3037,8 +3079,8 @@ void wdm_het_get_ll_kernel(
                     for (int c = 0; c < nchannels; ++c) {
                         for (int m = m_lo_act; m < m_hi_act; ++m) {
                             const int m_act = m - ind_min_f;
-                            for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
-                                 n_loc += BLOCK_INCR) {
+                            for (int n_loc = keep_lo + THREAD_START_X; n_loc < keep_hi;
+                                 n_loc += BLOCK_INCR_X) {
                                 const int n_glob = n_global_lo + (n_loc - keep_lo);
                                 if (n_glob < ind_min_t || n_glob >= ind_max_t_excl) continue;
                                 const int n_act = n_glob - ind_min_t;
@@ -3048,8 +3090,8 @@ void wdm_het_get_ll_kernel(
                                 const double w   = w_chunk[g_w];
                                 const double d   = data_d[g_dt];
                                 const double inv = invC  [g_dt];
-                                partial_dh[THREAD_START] += d * w * inv;
-                                partial_hh[THREAD_START] += w * w * inv;
+                                partial_dh[THREAD_START_X] += d * w * inv;
+                                partial_hh[THREAD_START_X] += w * w * inv;
                             }
                         }
                     }
@@ -3069,18 +3111,18 @@ void wdm_het_get_ll_kernel(
 #ifdef __CUDACC__
                 // tree-reduction over partial_dh / partial_hh in shared mem
                 for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-                    if (THREAD_START < stride) {
-                        partial_dh[THREAD_START] += partial_dh[THREAD_START + stride];
-                        partial_hh[THREAD_START] += partial_hh[THREAD_START + stride];
+                    if (THREAD_START_X < stride) {
+                        partial_dh[THREAD_START_X] += partial_dh[THREAD_START_X + stride];
+                        partial_hh[THREAD_START_X] += partial_hh[THREAD_START_X + stride];
                     }
                     CUDA_SYNC_THREADS;
                 }
-                if (THREAD_START == 0) {
+                if (THREAD_START_X == 0) {
                     atomicAdd(&d_h_out[bin_i], partial_dh[0]);
                     atomicAdd(&h_h_out[bin_i], partial_hh[0]);
                 }
 #else
-                // CPU: NUM_THREADS = 1 by THREAD_START convention; partial_dh[0]
+                // CPU: NUM_THREADS = 1 by THREAD_START_X convention; partial_dh[0]
                 // already holds the full sum from the single thread.
                 d_h_out[bin_i] += partial_dh[0];
                 h_h_out[bin_i] += partial_hh[0];
@@ -3225,15 +3267,19 @@ void wdm_het_swap_ll_kernel(
     // FAST_WDM_NT_SUB_MAX (256 GPU / 4096 CPU).
     CUDA_SHARED cmplx layer_scratch[FAST_WDM_NT_SUB_MAX];
 
-    for (int j = BLOCK_START; j < n_chunks; j += GRID_INCR) {
-        cmplx  *chunk_fd_add  = &ws_chunk_fd_add_all [(size_t) j * nchannels * n_rfft_chunk];
-        cmplx  *chunk_fd_rem  = &ws_chunk_fd_rem_all [(size_t) j * nchannels * n_rfft_chunk];
+    // OUTER: chunks on grid.Z. See ``wdm_het_get_ll_kernel`` for the
+    // 3D-grid rationale and (BLOCK_START_X, j) scratch-slot key.
+    for (int j = BLOCK_START_Z; j < n_chunks; j += GRID_INCR_Z) {
+        const size_t scratch_slot = (size_t) BLOCK_START_X * (size_t) n_chunks
+                                     + (size_t) j;
+        cmplx  *chunk_fd_add  = &ws_chunk_fd_add_all [scratch_slot * nchannels * n_rfft_chunk];
+        cmplx  *chunk_fd_rem  = &ws_chunk_fd_rem_all [scratch_slot * nchannels * n_rfft_chunk];
         // layer_scratch lives in CUDA_SHARED (declared at kernel top).
-        double *w_chunk_add   = &ws_chunk_wdm_add_all[(size_t) j * nchannels * Nf * Nt_sub];
-        double *w_chunk_rem   = &ws_chunk_wdm_rem_all[(size_t) j * nchannels * Nf * Nt_sub];
-        cmplx  *tdi_channels_buf = &ws_tdi_channels_all[(size_t) j * nchannels * N_sparse];
+        double *w_chunk_add   = &ws_chunk_wdm_add_all[scratch_slot * nchannels * Nf * Nt_sub];
+        double *w_chunk_rem   = &ws_chunk_wdm_rem_all[scratch_slot * nchannels * Nf * Nt_sub];
+        cmplx  *tdi_channels_buf = &ws_tdi_channels_all[scratch_slot * nchannels * N_sparse];
         void   *get_tdi_scratch = (char *) get_tdi_scratch_all
-            + (size_t) j * (size_t) get_tdi_scratch_len_per_block;
+            + scratch_slot * (size_t) get_tdi_scratch_len_per_block;
 
         const int keep_lo     = chunk_keep_lo[j];
         const int keep_hi     = chunk_keep_hi[j];
@@ -3271,25 +3317,29 @@ void wdm_het_swap_ll_kernel(
 
             // (Per-thread cache populate removed; direct reads below.)
 
-        for (int bin_iter = bin_iter_lo; bin_iter < bin_iter_hi; ++bin_iter) {
+            // INNER: binaries -- grid-strided on the X axis (see the
+            // equivalent comment in ``wdm_het_get_ll_kernel``).
+        for (int bin_iter = bin_iter_lo + BLOCK_START_X;
+             bin_iter < bin_iter_hi;
+             bin_iter += GRID_INCR_X) {
             const int bin_i = (n_groups > 0) ? binary_perm[bin_iter] : bin_iter;
             double *params_add = &params_add_all   [(size_t) bin_i * nparams];
             double *params_rem = &params_remove_all[(size_t) bin_i * nparams];
 
             // Zero workspaces and partials
-            for (int k = THREAD_START; k < nchannels * n_rfft_chunk; k += BLOCK_INCR) {
+            for (int k = THREAD_START_X; k < nchannels * n_rfft_chunk; k += BLOCK_INCR_X) {
                 chunk_fd_add[k] = cmplx(0.0, 0.0);
                 chunk_fd_rem[k] = cmplx(0.0, 0.0);
             }
-            for (int k = THREAD_START; k < nchannels * Nf * Nt_sub; k += BLOCK_INCR) {
+            for (int k = THREAD_START_X; k < nchannels * Nf * Nt_sub; k += BLOCK_INCR_X) {
                 w_chunk_add[k] = 0.0;
                 w_chunk_rem[k] = 0.0;
             }
-            partial_dh_add[THREAD_START] = 0.0;
-            partial_dh_rem[THREAD_START] = 0.0;
-            partial_aa    [THREAD_START] = 0.0;
-            partial_rr    [THREAD_START] = 0.0;
-            partial_ar    [THREAD_START] = 0.0;
+            partial_dh_add[THREAD_START_X] = 0.0;
+            partial_dh_rem[THREAD_START_X] = 0.0;
+            partial_aa    [THREAD_START_X] = 0.0;
+            partial_rr    [THREAD_START_X] = 0.0;
+            partial_ar    [THREAD_START_X] = 0.0;
             CUDA_SYNC_THREADS;
 
             // Add template
@@ -3389,8 +3439,8 @@ void wdm_het_swap_ll_kernel(
             if (tdi_type == TDI_XYZ) {
                 for (int m = m_lo_act; m < m_hi_act; ++m) {
                     const int m_act = m - ind_min_f;
-                    for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
-                         n_loc += BLOCK_INCR) {
+                    for (int n_loc = keep_lo + THREAD_START_X; n_loc < keep_hi;
+                         n_loc += BLOCK_INCR_X) {
                         const int n_glob = n_global_lo + (n_loc - keep_lo);
                         if (n_glob < ind_min_t || n_glob >= ind_max_t_excl) continue;
                         const int n_act = n_glob - ind_min_t;
@@ -3411,11 +3461,11 @@ void wdm_het_swap_ll_kernel(
                                                        * Nf_active + m_act)
                                                       * Nt_active + n_act;
                                 const double inv = invC[g_inv];
-                                partial_dh_add[THREAD_START] += d_arr[c1] * wa_arr[c2] * inv;
-                                partial_dh_rem[THREAD_START] += d_arr[c1] * wr_arr[c2] * inv;
-                                partial_aa    [THREAD_START] += wa_arr[c1] * wa_arr[c2] * inv;
-                                partial_rr    [THREAD_START] += wr_arr[c1] * wr_arr[c2] * inv;
-                                partial_ar    [THREAD_START] += wa_arr[c1] * wr_arr[c2] * inv;
+                                partial_dh_add[THREAD_START_X] += d_arr[c1] * wa_arr[c2] * inv;
+                                partial_dh_rem[THREAD_START_X] += d_arr[c1] * wr_arr[c2] * inv;
+                                partial_aa    [THREAD_START_X] += wa_arr[c1] * wa_arr[c2] * inv;
+                                partial_rr    [THREAD_START_X] += wr_arr[c1] * wr_arr[c2] * inv;
+                                partial_ar    [THREAD_START_X] += wa_arr[c1] * wr_arr[c2] * inv;
                             }
                         }
                     }
@@ -3424,8 +3474,8 @@ void wdm_het_swap_ll_kernel(
                 for (int c = 0; c < nchannels; ++c) {
                     for (int m = m_lo_act; m < m_hi_act; ++m) {
                         const int m_act = m - ind_min_f;
-                        for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
-                             n_loc += BLOCK_INCR) {
+                        for (int n_loc = keep_lo + THREAD_START_X; n_loc < keep_hi;
+                             n_loc += BLOCK_INCR_X) {
                             const int n_glob = n_global_lo + (n_loc - keep_lo);
                             if (n_glob < ind_min_t || n_glob >= ind_max_t_excl) continue;
                             const int n_act = n_glob - ind_min_t;
@@ -3436,11 +3486,11 @@ void wdm_het_swap_ll_kernel(
                             const double wr  = w_chunk_rem[g_w];
                             const double d   = data_d[g_dt];
                             const double inv = invC  [g_dt];
-                            partial_dh_add[THREAD_START] += d * wa * inv;
-                            partial_dh_rem[THREAD_START] += d * wr * inv;
-                            partial_aa    [THREAD_START] += wa * wa * inv;
-                            partial_rr    [THREAD_START] += wr * wr * inv;
-                            partial_ar    [THREAD_START] += wa * wr * inv;
+                            partial_dh_add[THREAD_START_X] += d * wa * inv;
+                            partial_dh_rem[THREAD_START_X] += d * wr * inv;
+                            partial_aa    [THREAD_START_X] += wa * wa * inv;
+                            partial_rr    [THREAD_START_X] += wr * wr * inv;
+                            partial_ar    [THREAD_START_X] += wa * wr * inv;
                         }
                     }
                 }
@@ -3477,8 +3527,8 @@ void wdm_het_swap_ll_kernel(
                             const bool in_pass1 = (m >= m_lo) && (m < m_hi);
                             if (in_pass1) continue;
                             const int m_act = m - ind_min_f;
-                            for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
-                                 n_loc += BLOCK_INCR) {
+                            for (int n_loc = keep_lo + THREAD_START_X; n_loc < keep_hi;
+                                 n_loc += BLOCK_INCR_X) {
                                 const int n_glob = n_global_lo + (n_loc - keep_lo);
                                 if (n_glob < ind_min_t || n_glob >= ind_max_t_excl) continue;
                                 const int n_act = n_glob - ind_min_t;
@@ -3497,8 +3547,8 @@ void wdm_het_swap_ll_kernel(
                                                                * Nf_active + m_act)
                                                               * Nt_active + n_act;
                                         const double inv = invC[g_inv];
-                                        partial_dh_rem[THREAD_START] += d_arr[c1] * wr_arr[c2] * inv;
-                                        partial_rr    [THREAD_START] += wr_arr[c1] * wr_arr[c2] * inv;
+                                        partial_dh_rem[THREAD_START_X] += d_arr[c1] * wr_arr[c2] * inv;
+                                        partial_rr    [THREAD_START_X] += wr_arr[c1] * wr_arr[c2] * inv;
                                     }
                                 }
                             }
@@ -3509,8 +3559,8 @@ void wdm_het_swap_ll_kernel(
                                 const bool in_pass1 = (m >= m_lo) && (m < m_hi);
                                 if (in_pass1) continue;
                                 const int m_act = m - ind_min_f;
-                                for (int n_loc = keep_lo + THREAD_START; n_loc < keep_hi;
-                                     n_loc += BLOCK_INCR) {
+                                for (int n_loc = keep_lo + THREAD_START_X; n_loc < keep_hi;
+                                     n_loc += BLOCK_INCR_X) {
                                     const int n_glob = n_global_lo + (n_loc - keep_lo);
                                     if (n_glob < ind_min_t || n_glob >= ind_max_t_excl) continue;
                                     const int n_act = n_glob - ind_min_t;
@@ -3520,8 +3570,8 @@ void wdm_het_swap_ll_kernel(
                                     const double wr  = w_chunk_rem[g_w];
                                     const double d   = data_d[g_dt];
                                     const double inv = invC  [g_dt];
-                                    partial_dh_rem[THREAD_START] += d * wr * inv;
-                                    partial_rr    [THREAD_START] += wr * wr * inv;
+                                    partial_dh_rem[THREAD_START_X] += d * wr * inv;
+                                    partial_rr    [THREAD_START_X] += wr * wr * inv;
                                 }
                             }
                         }
@@ -3532,16 +3582,16 @@ void wdm_het_swap_ll_kernel(
 
 #ifdef __CUDACC__
             for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-                if (THREAD_START < stride) {
-                    partial_dh_add[THREAD_START] += partial_dh_add[THREAD_START + stride];
-                    partial_dh_rem[THREAD_START] += partial_dh_rem[THREAD_START + stride];
-                    partial_aa    [THREAD_START] += partial_aa    [THREAD_START + stride];
-                    partial_rr    [THREAD_START] += partial_rr    [THREAD_START + stride];
-                    partial_ar    [THREAD_START] += partial_ar    [THREAD_START + stride];
+                if (THREAD_START_X < stride) {
+                    partial_dh_add[THREAD_START_X] += partial_dh_add[THREAD_START_X + stride];
+                    partial_dh_rem[THREAD_START_X] += partial_dh_rem[THREAD_START_X + stride];
+                    partial_aa    [THREAD_START_X] += partial_aa    [THREAD_START_X + stride];
+                    partial_rr    [THREAD_START_X] += partial_rr    [THREAD_START_X + stride];
+                    partial_ar    [THREAD_START_X] += partial_ar    [THREAD_START_X + stride];
                 }
                 CUDA_SYNC_THREADS;
             }
-            if (THREAD_START == 0) {
+            if (THREAD_START_X == 0) {
                 atomicAdd(&d_h_add_out      [bin_i], partial_dh_add[0]);
                 atomicAdd(&d_h_remove_out   [bin_i], partial_dh_rem[0]);
                 atomicAdd(&add_add_out      [bin_i], partial_aa    [0]);
@@ -3623,12 +3673,12 @@ void gb_wdm_fill_global_kernel(double *template_fill, Orbits* orbits, TDIConfig 
     int Nf_active = wdm->Nf_active;
     int total_points = Nf_active * Nt_active;
     double factor;
-    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    for (int bin_i = BLOCK_START_X; bin_i < num_bin; bin_i += GRID_INCR_X)
     {
 
         data_index = data_index_all[bin_i];
         factor = factors_all[bin_i];
-        for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+        for (int i = THREAD_START_X; i < nparams; i += BLOCK_INCR_X)
         {
             params[i] = params_all[bin_i * nparams + i];
         }
@@ -3641,7 +3691,7 @@ void gb_wdm_fill_global_kernel(double *template_fill, Orbits* orbits, TDIConfig 
         // jumps under LISA-Doppler crossings of layer boundaries). Use the
         // source's carrier frequency f0 = params[1] once per binary.
 
-        for (int n = THREAD_START + n_min; n <= n_max; n += BLOCK_INCR)
+        for (int n = THREAD_START_X + n_min; n <= n_max; n += BLOCK_INCR_X)
         {
             // Absolute time: WDM pixel n corresponds to t = n*layer_dt + t_ref so
             // orbits/TDI see the same epoch the Python wrap uses.
@@ -3948,12 +3998,12 @@ void gb_wdm_spline_fill_global_kernel(
                          coefs_shared);
     CUDA_SYNC_THREADS;
 
-    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    for (int bin_i = BLOCK_START_X; bin_i < num_bin; bin_i += GRID_INCR_X)
     {
         int data_index = data_index_all[bin_i];
         double factor = factors_all[bin_i];
 
-        for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+        for (int i = THREAD_START_X; i < nparams; i += BLOCK_INCR_X)
             params[i] = params_all[bin_i * nparams + i];
         CUDA_SYNC_THREADS;
 
@@ -3982,7 +4032,7 @@ void gb_wdm_spline_fill_global_kernel(
 
             cmplx tdi_channel_val[3];
             double f[3], fdot[3];
-            for (int n = THREAD_START + n_lo; n <= n_hi; n += BLOCK_INCR)
+            for (int n = THREAD_START_X + n_lo; n <= n_hi; n += BLOCK_INCR_X)
             {
                 double tn = (double) n * layer_dt + t_ref;
                 eval_wdm_spline_pixel(&S, tn, tdi_channel_val, f, fdot);
@@ -4116,10 +4166,10 @@ void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIC
     double wmn_channel[3];
     double avg_f = 0.0;
     int total_points = Nf * Nt;
-    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    for (int bin_i = BLOCK_START_X; bin_i < num_bin; bin_i += GRID_INCR_X)
     {
 
-        for (int i = THREAD_START; i < NUM_THREADS_HERE; i += BLOCK_INCR)
+        for (int i = THREAD_START_X; i < NUM_THREADS_HERE; i += BLOCK_INCR_X)
         {
             d_h_tmp[i] = 0.0;
             h_h_tmp[i] = 0.0;
@@ -4128,7 +4178,7 @@ void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIC
 
         data_index = data_index_all[bin_i];
         noise_index = noise_index_all[bin_i];
-        for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+        for (int i = THREAD_START_X; i < nparams; i += BLOCK_INCR_X)
         {
             params[i] = params_all[bin_i * nparams + i];
         }
@@ -4139,7 +4189,7 @@ void gb_wdm_get_ll_kernel(double *d_h_out, double *h_h_out, Orbits* orbits, TDIC
 
         // gb_wdm_fill_global_kernel).
 
-        for (int n = THREAD_START + n_min; n <= n_max; n += BLOCK_INCR)
+        for (int n = THREAD_START_X + n_min; n <= n_max; n += BLOCK_INCR_X)
         {
             // Absolute time: WDM pixel n corresponds to t = n*layer_dt + t_ref so
             // orbits/TDI see the same epoch the Python wrap uses.
@@ -4277,9 +4327,9 @@ void gb_wdm_spline_get_ll_kernel(
                          coefs_shared);
     CUDA_SYNC_THREADS;
 
-    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    for (int bin_i = BLOCK_START_X; bin_i < num_bin; bin_i += GRID_INCR_X)
     {
-        for (int i = THREAD_START; i < NUM_THREADS_HERE; i += BLOCK_INCR)
+        for (int i = THREAD_START_X; i < NUM_THREADS_HERE; i += BLOCK_INCR_X)
         {
             d_h_tmp[i] = 0.0;
             h_h_tmp[i] = 0.0;
@@ -4287,7 +4337,7 @@ void gb_wdm_spline_get_ll_kernel(
 
         int data_index = data_index_all[bin_i];
         int noise_index = noise_index_all[bin_i];
-        for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+        for (int i = THREAD_START_X; i < nparams; i += BLOCK_INCR_X)
             params[i] = params_all[bin_i * nparams + i];
         CUDA_SYNC_THREADS;
 
@@ -4317,7 +4367,7 @@ void gb_wdm_spline_get_ll_kernel(
             cmplx tdi_channel_val[3];
             double f[3], fdot[3];
             double wmn_channel[3];
-            for (int n = THREAD_START + n_lo; n <= n_hi; n += BLOCK_INCR)
+            for (int n = THREAD_START_X + n_lo; n <= n_hi; n += BLOCK_INCR_X)
             {
                 double tn = (double) n * layer_dt + t_ref;
                 eval_wdm_spline_pixel(&S, tn, tdi_channel_val, f, fdot);
@@ -4469,7 +4519,7 @@ void gb_wdm_swap_ll_kernel(double *d_h_add_out, double *d_h_remove_out, double *
     double avg_f_add, avg_f_remove;
     int data_index, noise_index;
 
-    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    for (int bin_i = BLOCK_START_X; bin_i < num_bin; bin_i += GRID_INCR_X)
     {
         // Per-thread register accumulators -- avoid the previous
         // 5*NUM_THREADS_HERE shared staging buffer.
@@ -4482,7 +4532,7 @@ void gb_wdm_swap_ll_kernel(double *d_h_add_out, double *d_h_remove_out, double *
         data_index = data_index_all[bin_i];
         noise_index = noise_index_all[bin_i];
 
-        for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+        for (int i = THREAD_START_X; i < nparams; i += BLOCK_INCR_X)
         {
             params_add[i] = params_add_all[bin_i * nparams + i];
             params_remove[i] = params_remove_all[bin_i * nparams + i];
@@ -4494,7 +4544,7 @@ void gb_wdm_swap_ll_kernel(double *d_h_add_out, double *d_h_remove_out, double *
 
         // gb_wdm_fill_global_kernel).
 
-        for (int n = THREAD_START + n_min; n <= n_max; n += BLOCK_INCR)
+        for (int n = THREAD_START_X + n_min; n <= n_max; n += BLOCK_INCR_X)
         {
             // Same absolute-time convention as gb_wdm_get_ll_kernel: WDM pixel
             // n corresponds to t = n*layer_dt + t_ref.
@@ -4697,7 +4747,7 @@ void gb_wdm_spline_swap_ll_kernel(
                          amp_y_rem, dphi_y_rem, phi_ref_y_rem, coefs_rem);
     CUDA_SYNC_THREADS;
 
-    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    for (int bin_i = BLOCK_START_X; bin_i < num_bin; bin_i += GRID_INCR_X)
     {
         double d_h_add_acc = 0.0;
         double d_h_remove_acc = 0.0;
@@ -4708,7 +4758,7 @@ void gb_wdm_spline_swap_ll_kernel(
         int data_index = data_index_all[bin_i];
         int noise_index = noise_index_all[bin_i];
 
-        for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+        for (int i = THREAD_START_X; i < nparams; i += BLOCK_INCR_X)
         {
             params_add[i]    = params_add_all   [bin_i * nparams + i];
             params_remove[i] = params_remove_all[bin_i * nparams + i];
@@ -4750,7 +4800,7 @@ void gb_wdm_spline_swap_ll_kernel(
             double f_remove[3], fdot_remove[3];
             double wmn_add[3], wmn_remove[3];
 
-            for (int n = THREAD_START + n_lo; n <= n_hi; n += BLOCK_INCR)
+            for (int n = THREAD_START_X + n_lo; n <= n_hi; n += BLOCK_INCR_X)
             {
                 double tn = (double) n * layer_dt + t_ref;
                 if (add_ok)
@@ -4945,7 +4995,7 @@ void gb_wdm_get_ll_grad_kernel(double *grad_out, Orbits* orbits, TDIConfig *tdi_
 
     tdi_on_fly_here.fill_link_arrays(link_Space_craft_rec, link_Space_craft_em);
 
-    for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+    for (int i = THREAD_START_X; i < nparams; i += BLOCK_INCR_X)
     {
         param_eps_shared[i] = param_eps[i];
     }
@@ -4953,7 +5003,7 @@ void gb_wdm_get_ll_grad_kernel(double *grad_out, Orbits* orbits, TDIConfig *tdi_
 
     int data_index, noise_index;
 
-    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    for (int bin_i = BLOCK_START_X; bin_i < num_bin; bin_i += GRID_INCR_X)
     {
         data_index = data_index_all[bin_i];
         noise_index = noise_index_all[bin_i];
@@ -4974,7 +5024,7 @@ void gb_wdm_get_ll_grad_kernel(double *grad_out, Orbits* orbits, TDIConfig *tdi_
         Vec k_c(0.0, 0.0, 0.0), u_c(0.0, 0.0, 0.0), v_c(0.0, 0.0, 0.0);
         tdi_on_fly_here.get_sky_vectors(&k_c, &u_c, &v_c, params_priv);
 
-        for (int n = THREAD_START + n_min; n <= n_max; n += BLOCK_INCR)
+        for (int n = THREAD_START_X + n_min; n <= n_max; n += BLOCK_INCR_X)
         {
             double tn = n * layer_dt + t_ref;
 
@@ -5176,7 +5226,7 @@ void gb_wdm_spline_get_ll_grad_kernel(
 
     tdi_on_fly_here.fill_link_arrays(link_Space_craft_rec, link_Space_craft_em);
 
-    for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+    for (int i = THREAD_START_X; i < nparams; i += BLOCK_INCR_X)
         param_eps_shared[i] = param_eps[i];
     CUDA_SYNC_THREADS;
 
@@ -5212,12 +5262,12 @@ void gb_wdm_spline_get_ll_grad_kernel(
     CUDA_SHARED double params_base[N_PARAMS_MAX];
     CUDA_SHARED double params_pert[N_PARAMS_MAX];
 
-    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    for (int bin_i = BLOCK_START_X; bin_i < num_bin; bin_i += GRID_INCR_X)
     {
         int data_index = data_index_all[bin_i];
         int noise_index = noise_index_all[bin_i];
 
-        for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+        for (int i = THREAD_START_X; i < nparams; i += BLOCK_INCR_X)
             params_base[i] = params_all[bin_i * nparams + i];
         CUDA_SYNC_THREADS;
 
@@ -5253,7 +5303,7 @@ void gb_wdm_spline_get_ll_grad_kernel(
                 if (eps_k <= 0.0) continue;
 
                 // Build plus splines.
-                for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+                for (int i = THREAD_START_X; i < nparams; i += BLOCK_INCR_X)
                     params_pert[i] = params_base[i];
                 CUDA_SYNC_THREADS;
                 if (THREAD_ZERO) params_pert[kk] = params_base[kk] + eps_k;
@@ -5266,7 +5316,7 @@ void gb_wdm_spline_get_ll_grad_kernel(
                 CUDA_SYNC_THREADS;
 
                 // Build minus splines.
-                for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+                for (int i = THREAD_START_X; i < nparams; i += BLOCK_INCR_X)
                     params_pert[i] = params_base[i];
                 CUDA_SYNC_THREADS;
                 if (THREAD_ZERO) params_pert[kk] = params_base[kk] - eps_k;
@@ -5284,7 +5334,7 @@ void gb_wdm_spline_get_ll_grad_kernel(
                 cmplx tdi_chan_c[3], tdi_chan_p[3], tdi_chan_m[3];
                 double f_c[3], fdot_c[3], f_p[3], fdot_p[3], f_m[3], fdot_m[3];
 
-                for (int n = THREAD_START + n_lo; n <= n_hi; n += BLOCK_INCR)
+                for (int n = THREAD_START_X + n_lo; n <= n_hi; n += BLOCK_INCR_X)
                 {
                     double tn = (double) n * layer_dt + t_ref;
 
@@ -5432,7 +5482,7 @@ void gb_wdm_swap_ll_grad_kernel(double *grad_add_out, double *grad_remove_out, O
 
     tdi_on_fly_here.fill_link_arrays(link_Space_craft_rec, link_Space_craft_em);
 
-    for (int i = THREAD_START; i < nparams; i += BLOCK_INCR)
+    for (int i = THREAD_START_X; i < nparams; i += BLOCK_INCR_X)
     {
         param_eps_add_shared[i] = param_eps_add[i];
         param_eps_rem_shared[i] = param_eps_remove[i];
@@ -5441,7 +5491,7 @@ void gb_wdm_swap_ll_grad_kernel(double *grad_add_out, double *grad_remove_out, O
 
     int data_index, noise_index;
 
-    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    for (int bin_i = BLOCK_START_X; bin_i < num_bin; bin_i += GRID_INCR_X)
     {
         data_index = data_index_all[bin_i];
         noise_index = noise_index_all[bin_i];
@@ -5470,7 +5520,7 @@ void gb_wdm_swap_ll_grad_kernel(double *grad_add_out, double *grad_remove_out, O
 
         // gb_wdm_fill_global_kernel).
 
-        for (int n = THREAD_START + n_min; n <= n_max; n += BLOCK_INCR)
+        for (int n = THREAD_START_X + n_min; n <= n_max; n += BLOCK_INCR_X)
         {
             double tn = n * layer_dt + t_ref;
 
@@ -5776,7 +5826,7 @@ void LISATDIonTheFly::xi_projections(double *xi_p, double *xi_c, Vec u, Vec v, V
 CUDA_DEVICE
 void LISATDIonTheFly::fill_link_arrays(int *link_Space_craft_rec, int *link_Space_craft_em)
 {
-    for (int i = THREAD_START; i < NLINKS; i += BLOCK_INCR)
+    for (int i = THREAD_START_X; i < NLINKS; i += BLOCK_INCR_X)
     {
         link_Space_craft_rec[i] = orbits->sc_r[i];
         link_Space_craft_em[i] = orbits->sc_e[i];
@@ -5791,7 +5841,7 @@ void LISATDIonTheFly::get_tdi_Xf(cmplx *tdi_channels_arr, double *params, double
 {
     double t;
     cmplx tdi_channel_tmp[3];
-    for (int i = THREAD_START; i < N; i += BLOCK_INCR)
+    for (int i = THREAD_START_X; i < N; i += BLOCK_INCR_X)
     {
         t = t_data[i];
         get_tdi_Xf_single(&tdi_channel_tmp[0], t, params, k, u, v, link_Space_craft_rec, link_Space_craft_em, bin_i);
@@ -6103,7 +6153,7 @@ void LISATDIonTheFly::get_tdi_Xf_cached(
 {
     double t;
     cmplx tdi_channel_tmp[3];
-    for (int i = THREAD_START; i < N; i += BLOCK_INCR)
+    for (int i = THREAD_START_X; i < N; i += BLOCK_INCR_X)
     {
         t = t_data[i];
         get_tdi_Xf_single_cached(&tdi_channel_tmp[0], t, params, k, u, v,
@@ -7762,7 +7812,7 @@ void gbfd_radix2_fft_inplace(cmplx *a, int N, int log2N)
     // threads of the block.
 
     // Bit-reversal permutation
-    for (int n = THREAD_START; n < N; n += BLOCK_INCR)
+    for (int n = THREAD_START_X; n < N; n += BLOCK_INCR_X)
     {
         int r = gbfd_bit_reverse(n, log2N);
         if (r > n)
@@ -7780,7 +7830,7 @@ void gbfd_radix2_fft_inplace(cmplx *a, int N, int log2N)
         int m  = 1 << s;
         int mh = m >> 1;
         double base = -2.0 * M_PI / (double) m;  // forward FFT sign
-        for (int k = THREAD_START; k < (N >> 1); k += BLOCK_INCR)
+        for (int k = THREAD_START_X; k < (N >> 1); k += BLOCK_INCR_X)
         {
             int g  = k / mh;          // butterfly group
             int j  = k - g * mh;      // position within group
@@ -7843,7 +7893,7 @@ void gbfd_build_one_source(GBTDIonTheFly *tof, void *shared_mem,
     int   get_tdi_scratch_len = tof->get_tdi_buffer_size(N);
 
     // ---- broadcast params into shared ------------------------------------
-    for (int i = THREAD_START; i < n_params; i += BLOCK_INCR)
+    for (int i = THREAD_START_X; i < n_params; i += BLOCK_INCR_X)
         params_here[i] = params_in[bin_i * n_params + i];
     CUDA_SYNC_THREADS;
 
@@ -7854,7 +7904,7 @@ void gbfd_build_one_source(GBTDIonTheFly *tof, void *shared_mem,
     const double dts  = Tobs / (double) N;
 
     // ---- build sparse absolute-time array in shared ----------------------
-    for (int n = THREAD_START; n < N; n += BLOCK_INCR)
+    for (int n = THREAD_START_X; n < N; n += BLOCK_INCR_X)
         t_arr_local[n] = t_start + (double) n * dts;
     CUDA_SYNC_THREADS;
 
@@ -7865,7 +7915,7 @@ void gbfd_build_one_source(GBTDIonTheFly *tof, void *shared_mem,
                  params_here, t_arr_local, N, bin_i, nchannels);
 
     // ---- build slow positive-freq complex signal in-place over tdi_chan --
-    for (int n = THREAD_START; n < N; n += BLOCK_INCR)
+    for (int n = THREAD_START_X; n < N; n += BLOCK_INCR_X)
     {
         const double tau     = (double) n * dts;
         const double carrier = 2.0 * M_PI * f0g * tau;
@@ -7886,7 +7936,7 @@ void gbfd_build_one_source(GBTDIonTheFly *tof, void *shared_mem,
     //      FFT below, NaN-ing 4096 contiguous output bins. Zero those
     //      samples so the FFT stays finite; we lose at most a handful of
     //      O(N_sparse^-1) sparse samples at the singular locus.
-    for (int n = THREAD_START; n < N; n += BLOCK_INCR)
+    for (int n = THREAD_START_X; n < N; n += BLOCK_INCR_X)
     {
         for (int c = 0; c < nchannels; ++c)
         {
@@ -7909,7 +7959,7 @@ void gbfd_build_one_source(GBTDIonTheFly *tof, void *shared_mem,
     // ---- absorb the 1/2 * dt_sparse scale here so callers can use the
     //      values directly as the heterodyne FD piece ---------------------
     const double scale = 0.5 * dts;
-    for (int n = THREAD_START; n < N; n += BLOCK_INCR)
+    for (int n = THREAD_START_X; n < N; n += BLOCK_INCR_X)
     {
         for (int c = 0; c < nchannels; ++c)
         {
@@ -7950,7 +8000,7 @@ void gbfd_run_one_source(GBTDIonTheFly *tof, void *shared_mem,
                           &tdi_chan, &kf0, &f0g, &dts);
 
     // Write heterodyne FD to global, in FFT order.
-    for (int n = THREAD_START; n < N; n += BLOCK_INCR)
+    for (int n = THREAD_START_X; n < N; n += BLOCK_INCR_X)
     {
         for (int c = 0; c < nchannels; ++c)
         {
@@ -7977,7 +8027,7 @@ void gb_run_fd_wave_tdi_kernel(GBTDIonTheFly *tdi_on_fly,
     extern CUDA_SHARED char shared_mem[];
     GBTDIonTheFly tof(tdi_on_fly->orbits, tdi_on_fly->tdi_config,
                       tdi_on_fly->T, tdi_on_fly->t_ref);
-    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    for (int bin_i = BLOCK_START_X; bin_i < num_bin; bin_i += GRID_INCR_X)
     {
         gbfd_run_one_source(&tof, (void*) shared_mem,
                             X_het, k_f0_out, f0_grid_out,
@@ -8098,7 +8148,7 @@ inline void gbfd_accumulate_ll(double *d_h_acc, double *h_h_acc,
     if (tdi_type == TDI_XYZ)
     {
         // cross-channel 3x3 inv-covariance
-        for (int m = THREAD_START; m < N; m += BLOCK_INCR)
+        for (int m = THREAD_START_X; m < N; m += BLOCK_INCR_X)
         {
             int k = gbfd_dense_bin(m, N, kf0);
             if (!fd->in_band(k)) continue;
@@ -8122,7 +8172,7 @@ inline void gbfd_accumulate_ll(double *d_h_acc, double *h_h_acc,
     {
         // TDI_AET (3 diag) or TDI_AE (2 diag): diagonal inv-covariance.
         int Cd = (tdi_type == TDI_AE) ? 2 : C;
-        for (int m = THREAD_START; m < N; m += BLOCK_INCR)
+        for (int m = THREAD_START_X; m < N; m += BLOCK_INCR_X)
         {
             int k = gbfd_dense_bin(m, N, kf0);
             if (!fd->in_band(k)) continue;
@@ -8159,9 +8209,9 @@ void gb_fd_get_ll_kernel(double *d_h_out, double *h_h_out,
     GBTDIonTheFly tof(tdi_on_fly_handle->orbits, tdi_on_fly_handle->tdi_config,
                       tdi_on_fly_handle->T, tdi_on_fly_handle->t_ref);
 
-    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    for (int bin_i = BLOCK_START_X; bin_i < num_bin; bin_i += GRID_INCR_X)
     {
-        for (int i = THREAD_START; i < NUM_THREADS_HERE; i += BLOCK_INCR)
+        for (int i = THREAD_START_X; i < NUM_THREADS_HERE; i += BLOCK_INCR_X)
         {
             d_h_tmp[i] = 0.0;
             h_h_tmp[i] = 0.0;
@@ -8292,7 +8342,7 @@ void gb_fd_fill_global_kernel(cmplx *template_fill,
     extern CUDA_SHARED char shared_mem[];
     GBTDIonTheFly tof(tdi_on_fly_handle->orbits, tdi_on_fly_handle->tdi_config,
                       tdi_on_fly_handle->T, tdi_on_fly_handle->t_ref);
-    for (int bin_i = BLOCK_START; bin_i < num_bin; bin_i += GRID_INCR)
+    for (int bin_i = BLOCK_START_X; bin_i < num_bin; bin_i += GRID_INCR_X)
     {
         cmplx *tdi_chan = NULL;
         int    kf0      = 0;
@@ -8304,7 +8354,7 @@ void gb_fd_fill_global_kernel(cmplx *template_fill,
 
         int data_index = data_index_all[bin_i];
         double factor  = factors_all[bin_i];
-        for (int m = THREAD_START; m < N; m += BLOCK_INCR)
+        for (int m = THREAD_START_X; m < N; m += BLOCK_INCR_X)
         {
             int k = gbfd_dense_bin(m, N, kf0);
             if (!fd->in_band(k)) continue;
@@ -9397,7 +9447,7 @@ void fd_spline_run_wave_tdi_wrap(FDSplineTDIWaveform *tdi_on_fly, cmplx *tdi_cha
 //
 // On GPU, ``grid_dim`` selects the launch grid (caller picks via
 // ``gb_wdm_het.chunked_het_grid_dim`` on the Python side). On CPU,
-// ``grid_dim`` is ignored -- ``BLOCK_START`` / ``GRID_INCR`` walk the
+// ``grid_dim`` is ignored -- ``BLOCK_START_X`` / ``GRID_INCR_X`` walk the
 // whole range serially with the single fake "block".
 //
 // The 6 GBComputationGroup / SOBBHComputationGroup methods at the bottom
@@ -9431,12 +9481,35 @@ static void wdm_het_fill_global_impl(
     int grid_dim, int N_cp_sig, int N_cp_orbit)
 {
     const int Nf = wdm_settings->Nf;
-    const size_t n_fd = (size_t) n_chunks * nchannels * n_rfft_chunk;
-    const size_t n_ls = (size_t) n_chunks * Nt_sub;
-    const size_t n_wd = (size_t) n_chunks * nchannels * Nf * Nt_sub;
-    const size_t n_tc = (size_t) n_chunks * nchannels * N_sparse;
+    // 3D-grid launch: gridDim.x = gd_x (binaries axis, capped by default
+    // for heap-scratch sizing), gridDim.z = n_chunks (chunks axis). Each
+    // (x, z) block keeps its own per-(chunk, binary) scratch slot keyed
+    // by ``(BLOCK_START_X * n_chunks + j)`` inside the kernel, so the
+    // heap slabs scale as ``gd_x * n_chunks * per_slot`` (NOT *num_bin):
+    // each X block grid-strides through binaries, reusing one scratch
+    // set across all binaries it visits.
+    // TODO: tune gd_x default by occupancy + shared-mem availability;
+    // a follow-up should move ``w_chunk`` into per-block shared memory
+    // (or shrink to per-group active-band width) so we can raise this
+    // significantly.
+    // On CPU gd_x = 1 (BLOCK_START_X / GRID_INCR_X stubs collapse to a
+    // single virtual block), so n_slots = n_chunks -- same as pre-3D-grid.
+#ifdef __CUDACC__
+    const int gd_x = (grid_dim > 0) ? grid_dim
+                                    : FAST_WDM_HET_GRID_DIM_X_DEFAULT;
+#else
+    (void) grid_dim;
+    const int gd_x = 1;
+#endif
+    const int gd_z = n_chunks;
+    const size_t n_slots = (size_t) gd_x * (size_t) n_chunks;
+
+    const size_t n_fd = n_slots * nchannels * n_rfft_chunk;
+    const size_t n_ls = n_slots * Nt_sub;
+    const size_t n_wd = n_slots * nchannels * Nf * Nt_sub;
+    const size_t n_tc = n_slots * nchannels * N_sparse;
     const int    scratch_per = wdm_het_get_tdi_scratch_bytes(N_sparse);
-    const size_t n_sc = (size_t) n_chunks * (size_t) scratch_per;
+    const size_t n_sc = n_slots * (size_t) scratch_per;
 
     cmplx  *ws_chunk_fd_all      = nullptr;
     cmplx  *ws_layer_scratch_all = nullptr;
@@ -9473,8 +9546,8 @@ static void wdm_het_fill_global_impl(
     gpuErrchk(cudaMemcpy(wdm_settings_gpu, wdm_settings, sizeof(WDMSettings),
                          cudaMemcpyHostToDevice));
 
-    const int gd = (grid_dim > 0) ? grid_dim : n_chunks;
-    wdm_het_fill_global_kernel<SourceT><<<gd, NUM_THREADS_HERE>>>(
+    dim3 grid((unsigned) gd_x, 1u, (unsigned) gd_z);
+    wdm_het_fill_global_kernel<SourceT><<<grid, NUM_THREADS_HERE>>>(
         template_fill, orbits_gpu, tdi_config_gpu,
         wdm_settings_gpu,
         params_all, factors_all,
@@ -9559,12 +9632,26 @@ static void wdm_het_get_ll_impl(
 {
     const int Nf = wdm_settings->Nf;
     const int Nt = wdm_settings->Nt;
-    const size_t n_fd = (size_t) n_chunks * nchannels * n_rfft_chunk;
-    const size_t n_ls = (size_t) n_chunks * Nt_sub;
-    const size_t n_wd = (size_t) n_chunks * nchannels * Nf * Nt_sub;
-    const size_t n_tc = (size_t) n_chunks * nchannels * N_sparse;
+    // See ``wdm_het_fill_global_impl`` for the n_slots / gd_x / gd_z
+    // contract and the heap-sizing rationale. On CPU gd_x = 1 (the
+    // BLOCK_START_X / GRID_INCR_X stubs collapse to a single virtual
+    // block) so n_slots = n_chunks, matching the pre-3D-grid layout.
+#ifdef __CUDACC__
+    const int gd_x = (grid_dim > 0) ? grid_dim
+                                    : FAST_WDM_HET_GRID_DIM_X_DEFAULT;
+#else
+    (void) grid_dim;
+    const int gd_x = 1;
+#endif
+    const int gd_z = n_chunks;
+    const size_t n_slots = (size_t) gd_x * (size_t) n_chunks;
+
+    const size_t n_fd = n_slots * nchannels * n_rfft_chunk;
+    const size_t n_ls = n_slots * Nt_sub;
+    const size_t n_wd = n_slots * nchannels * Nf * Nt_sub;
+    const size_t n_tc = n_slots * nchannels * N_sparse;
     const int    scratch_per = wdm_het_get_tdi_scratch_bytes(N_sparse);
-    const size_t n_sc = (size_t) n_chunks * (size_t) scratch_per;
+    const size_t n_sc = n_slots * (size_t) scratch_per;
 
     cmplx  *ws_chunk_fd_all      = nullptr;
     cmplx  *ws_layer_scratch_all = nullptr;
@@ -9594,8 +9681,8 @@ static void wdm_het_get_ll_impl(
     gpuErrchk(cudaMemcpy(wdm_settings_gpu, wdm_settings, sizeof(WDMSettings),
                          cudaMemcpyHostToDevice));
 
-    const int gd = (grid_dim > 0) ? grid_dim : n_chunks;
-    wdm_het_get_ll_kernel<SourceT><<<gd, NUM_THREADS_HERE>>>(
+    dim3 grid((unsigned) gd_x, 1u, (unsigned) gd_z);
+    wdm_het_get_ll_kernel<SourceT><<<grid, NUM_THREADS_HERE>>>(
         d_h_out, h_h_out, orbits_gpu, tdi_config_gpu,
         wdm_settings_gpu,
         params_all,
@@ -9690,13 +9777,25 @@ static void wdm_het_swap_ll_impl(
 {
     const int Nf = wdm_settings->Nf;
     const int Nt = wdm_settings->Nt;
-    // swap_ll has two chunk_fd slabs (add + rem) and two chunk_wdm slabs.
-    const size_t n_fd = (size_t) n_chunks * nchannels * n_rfft_chunk;
-    const size_t n_ls = (size_t) n_chunks * Nt_sub;
-    const size_t n_wd = (size_t) n_chunks * nchannels * Nf * Nt_sub;
-    const size_t n_tc = (size_t) n_chunks * nchannels * N_sparse;
+    // See ``wdm_het_fill_global_impl`` for n_slots / gd_x / gd_z contract.
+    // swap_ll has two chunk_fd slabs (add + rem) and two chunk_wdm slabs;
+    // each is sized at n_slots = gd_x * n_chunks.
+#ifdef __CUDACC__
+    const int gd_x = (grid_dim > 0) ? grid_dim
+                                    : FAST_WDM_HET_GRID_DIM_X_DEFAULT;
+#else
+    (void) grid_dim;
+    const int gd_x = 1;
+#endif
+    const int gd_z = n_chunks;
+    const size_t n_slots = (size_t) gd_x * (size_t) n_chunks;
+
+    const size_t n_fd = n_slots * nchannels * n_rfft_chunk;
+    const size_t n_ls = n_slots * Nt_sub;
+    const size_t n_wd = n_slots * nchannels * Nf * Nt_sub;
+    const size_t n_tc = n_slots * nchannels * N_sparse;
     const int    scratch_per = wdm_het_get_tdi_scratch_bytes(N_sparse);
-    const size_t n_sc = (size_t) n_chunks * (size_t) scratch_per;
+    const size_t n_sc = n_slots * (size_t) scratch_per;
 
     cmplx  *ws_chunk_fd_add_all  = nullptr;
     cmplx  *ws_chunk_fd_rem_all  = nullptr;
@@ -9730,8 +9829,8 @@ static void wdm_het_swap_ll_impl(
     gpuErrchk(cudaMemcpy(wdm_settings_gpu, wdm_settings, sizeof(WDMSettings),
                          cudaMemcpyHostToDevice));
 
-    const int gd = (grid_dim > 0) ? grid_dim : n_chunks;
-    wdm_het_swap_ll_kernel<SourceT><<<gd, NUM_THREADS_HERE>>>(
+    dim3 grid((unsigned) gd_x, 1u, (unsigned) gd_z);
+    wdm_het_swap_ll_kernel<SourceT><<<grid, NUM_THREADS_HERE>>>(
         d_h_add_out, d_h_remove_out, add_add_out, remove_remove_out, add_remove_out,
         orbits_gpu, tdi_config_gpu,
         wdm_settings_gpu,

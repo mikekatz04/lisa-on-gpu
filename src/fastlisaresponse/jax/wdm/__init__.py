@@ -34,11 +34,13 @@ Out-of-scope (raises ``NotImplementedError``):
 from __future__ import annotations
 
 from .wavelet_lookup import WaveletLookupTableWrapJAX
+from .wdm_settings import WDMSettingsWrapJAX
 from .wdm_domain import WDMDomainWrapJAX
 from .computation_group import GBComputationGroupWrapJAX, SOBBHComputationGroupWrapJAX
 
 __all__ = [
     "WaveletLookupTableWrapJAX",
+    "WDMSettingsWrapJAX",
     "WDMDomainWrapJAX",
     "GBComputationGroupWrapJAX",
     "SOBBHComputationGroupWrapJAX",

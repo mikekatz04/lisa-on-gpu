@@ -13,6 +13,7 @@
 #define FDSplineTDIWaveform FDSplineTDIWaveformGPU
 #define TDSplineTDIWaveform TDSplineTDIWaveformGPU
 #define WaveletLookupTable WaveletLookupTableGPU
+#define WDMSettings WDMSettingsGPU
 #define WDMDomain WDMDomainGPU
 #define FDDomain FDDomainGPU
 #define GBComputationGroup GBComputationGroupGPU
@@ -21,6 +22,8 @@
 #define SOBBHTDIonTheFly SOBBHTDIonTheFlyCPU
 #define FDSplineTDIWaveform FDSplineTDIWaveformCPU
 #define TDSplineTDIWaveform TDSplineTDIWaveformCPU
+#define WaveletLookupTable WaveletLookupTableCPU
+#define WDMSettings WDMSettingsCPU
 #define WDMDomain WDMDomainCPU
 #define FDDomain FDDomainCPU
 #define GBComputationGroup GBComputationGroupCPU

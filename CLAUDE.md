@@ -14,8 +14,8 @@ backends (GPU C++ / CPU C++ / JAX), follow this hierarchy:
 
 2. **CPU C++ mirrors GPU C++ as closely as possible.** Same kernel
    structure, same algorithm, same data flow — use `#ifdef __CUDACC__`
-   or shared compile-time macros (`CUDA_SHARED`, `THREAD_START`,
-   `BLOCK_INCR`, …) to bridge platform differences. The CPU path
+   or shared compile-time macros (`CUDA_SHARED`, `THREAD_START_X`,
+   `BLOCK_INCR_X`, …) to bridge platform differences. The CPU path
    exists primarily for testing and CPU-only environments; it must
    not diverge in algorithm or output beyond floating-point order of
    operations.
@@ -150,3 +150,103 @@ When debugging an IMA whose faulting address starts with
 ``0x55555...`` and whose "nearest allocation" delta is in the TB
 range, the first hypothesis should be a missing wrapper upload --
 not an indexing bug in the kernel.
+
+
+## CPU/GPU class-name aliasing (sprint-wide rule)
+
+Every C++ class that is compiled into **both** the CPU and the GPU
+shared object (one per backend wheel) MUST have a per-backend
+``#define`` alias at the top of the header that declares it, so the
+two builds emit **distinct C++ type names** for the same logical
+class. This applies to **two** layers:
+
+**(a) The pybind11 wrapper classes** -- anything passed to
+``py::class_<...>(m, "...")``. Block lives at the top of
+``src/fastlisaresponse/cutils/binding_tof.hpp``:
+
+```cpp
+#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
+#include "pybind11_cuda_array_interface.hpp"
+#define GBTDIonTheFlyWrap         GBTDIonTheFlyWrapGPU
+#define SOBBHTDIonTheFlyWrap      SOBBHTDIonTheFlyWrapGPU
+#define FDSplineTDIWaveformWrap   FDSplineTDIWaveformWrapGPU
+#define TDSplineTDIWaveformWrap   TDSplineTDIWaveformWrapGPU
+#define WaveletLookupTableWrap    WaveletLookupTableWrapGPU
+#define WDMSettingsWrap           WDMSettingsWrapGPU
+#define WDMDomainWrap             WDMDomainWrapGPU
+#define FDDomainWrap              FDDomainWrapGPU
+#define GBComputationGroupWrap    GBComputationGroupWrapGPU
+#define SOBBHComputationGroupWrap SOBBHComputationGroupWrapGPU
+#else
+// ...CPU suffixes...
+#endif
+```
+
+**(b) The underlying C++ classes** that the wrappers hold a pointer
+to -- ``Orbits``, ``WDMSettings``, ``WDMDomain``, ``TDIConfig``,
+``GBTDIonTheFly``, ``GBComputationGroup``, etc. Same block pattern,
+at the top of each header that declares them:
+
+- ``Detector.hpp`` (in LISAanalysistools) aliases ``Orbits`` →
+  ``OrbitsGPU`` / ``OrbitsCPU``.
+- ``src/fastlisaresponse/cutils/TDIonTheFly.hh`` aliases
+  ``GBTDIonTheFly``, ``SOBBHTDIonTheFly``, ``FDSplineTDIWaveform``,
+  ``TDSplineTDIWaveform``, ``WaveletLookupTable``, ``WDMSettings``,
+  ``WDMDomain``, ``FDDomain``, ``GBComputationGroup``
+  (``SOBBHComputationGroup`` should be added when next touched).
+
+After preprocessing, the GPU build defines ``class WDMSettingsGPU``
+and the CPU build defines ``class WDMSettingsCPU``: distinct C++
+types with distinct ``typeid``s and distinct mangled symbol names.
+
+Rules:
+
+1. **Every class -- wrapper or underlying -- that ends up in both
+   shared objects must appear in the relevant header's ``#define``
+   block, with both GPU and CPU branches.** When you add a new
+   class to a backend-shared header, add it to the block in the same
+   commit.
+2. **Both branches of the ``#if/#else`` must have the same set of
+   entries.** A missing CPU- or GPU-branch entry (e.g. an alias
+   present only on the GPU side) silently produces a backend-asymmetric
+   class name, which is exactly the situation the rule prevents.
+3. The pybind11 registration line ``py::class_<FooWrap>(m, "FooWrapGPU"
+   / "FooWrapCPU")`` in the ``.cxx`` binding source must be guarded by
+   the same ``#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)``
+   toggle so the Python-visible name tracks the C++ alias.
+4. **Inheritance only works through the alias if both the base and
+   derived class names are in the ``#define`` block.** Example:
+   ``class WDMDomain : public WDMSettings`` works correctly only when
+   *both* ``WDMSettings`` and ``WDMDomain`` are aliased; otherwise the
+   GPU build links ``WDMDomainGPU`` against the (still-unaliased)
+   ``WDMSettings``, while the CPU build links ``WDMDomainCPU`` against
+   the same ``WDMSettings`` -- the base type collides across the two
+   shared objects even though the derived names differ.
+5. Plain helper structs that never escape a single translation unit
+   (e.g. a file-static ``OrbitsSplineCache``) do NOT need aliasing --
+   only types whose symbols end up in the .so's exported interface
+   (held by wrappers, referenced by pybind11, instantiated by
+   templates exported from the shared object) need it.
+
+**Rationale: ensures we do not duplicate imported symbols across the
+CPU and GPU imports.** Both backends ship as separate plugin wheels
+(``lisaanalysistools-cuda12x``, ``-cpu``, …) that load into the same
+Python interpreter. If both shared objects declare ``class
+WDMSettings``, they emit the same mangled C++ symbols and the same
+``typeid``. Effects:
+
+- pybind11's global type registry, keyed by ``typeid``, sees a
+  collision: the second registration is rejected or silently shadows
+  the first.
+- The dynamic linker may resolve one shared object's call to
+  ``WDMSettings::method`` against the *other* shared object's vtable,
+  producing wrong-arch device calls or stack corruption.
+- Inheritance edges registered with pybind11 reference the wrong
+  base typeid, breaking ``isinstance`` / downcasts at the Python
+  layer.
+
+Aliasing forces every backend-specific symbol to be distinct end to
+end, so the CPU and GPU plugin wheels are ABI-independent and
+side-loadable in the same process. This is what allows
+``has_backend("cpu")`` and ``has_backend("cuda12x")`` to both be true
+simultaneously.

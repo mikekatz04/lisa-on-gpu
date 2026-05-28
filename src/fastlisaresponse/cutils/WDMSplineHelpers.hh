@@ -24,7 +24,7 @@
 // centered on narrow_centers[bin_i, m] (must be even).  The phase/parity
 // computation always uses the global n index.
 //
-// All code uses the THREAD_START / BLOCK_INCR / CUDA_SYNC_THREADS macros so
+// All code uses the THREAD_START_X / BLOCK_INCR_X / CUDA_SYNC_THREADS macros so
 // it compiles cleanly as single-threaded on CPU and block-cooperative on
 // GPU.
 
@@ -176,7 +176,7 @@ void fd_spline_wdm_swap_ll_wrap(
 // includes this header (i.e. TDIonTheFly.cu).  They are not exported as
 // stand-alone symbols.  They rely on macros and types defined by
 // TDIonTheFly.hh / gbt_global.h being already in scope (cmplx, CUDA_DEVICE,
-// THREAD_START, etc.).
+// THREAD_START_X, etc.).
 // ---------------------------------------------------------------------------
 
 #ifdef WDM_SPLINE_HELPERS_IMPLEMENTATION
@@ -375,7 +375,7 @@ CUDA_DEVICE
 inline void wdm_spline_radix2_fft(cmplx *a, int N, int log2N, bool inverse)
 {
     // bit-reversal permutation
-    for (int n = THREAD_START; n < N; n += BLOCK_INCR) {
+    for (int n = THREAD_START_X; n < N; n += BLOCK_INCR_X) {
         int r = 0, x = n;
         for (int i = 0; i < log2N; ++i) { r = (r << 1) | (x & 1); x >>= 1; }
         if (r > n) { cmplx t = a[n]; a[n] = a[r]; a[r] = t; }
@@ -386,7 +386,7 @@ inline void wdm_spline_radix2_fft(cmplx *a, int N, int log2N, bool inverse)
         int m  = 1 << s;
         int mh = m >> 1;
         double base = sign * 2.0 * M_PI / (double) m;
-        for (int k = THREAD_START; k < (N >> 1); k += BLOCK_INCR) {
+        for (int k = THREAD_START_X; k < (N >> 1); k += BLOCK_INCR_X) {
             int g  = k / mh;
             int j  = k - g * mh;
             int i0 = g * m + j;
@@ -402,7 +402,7 @@ inline void wdm_spline_radix2_fft(cmplx *a, int N, int log2N, bool inverse)
     }
     if (inverse) {
         double inv_N = 1.0 / (double) N;
-        for (int n = THREAD_START; n < N; n += BLOCK_INCR) {
+        for (int n = THREAD_START_X; n < N; n += BLOCK_INCR_X) {
             cmplx v = a[n];
             a[n] = cmplx(v.real() * inv_N, v.imag() * inv_N);
         }
@@ -429,9 +429,9 @@ inline void wdm_spline_bluestein_fft(cmplx *a, cmplx *workspace,
     // Build pad = (x_k * chirp_n[k]) for k in [0, N), zeros elsewhere.
     // For inverse we use conj(chirp_n[k]).
     cmplx *pad = workspace;
-    for (int k = THREAD_START; k < M; k += BLOCK_INCR) pad[k] = cmplx(0.0, 0.0);
+    for (int k = THREAD_START_X; k < M; k += BLOCK_INCR_X) pad[k] = cmplx(0.0, 0.0);
     CUDA_SYNC_THREADS;
-    for (int k = THREAD_START; k < N; k += BLOCK_INCR) {
+    for (int k = THREAD_START_X; k < N; k += BLOCK_INCR_X) {
         cmplx cn = chirp_n[k];
         if (inverse) cn = cmplx(cn.real(), -cn.imag());
         pad[k] = a[k] * cn;
@@ -443,7 +443,7 @@ inline void wdm_spline_bluestein_fft(cmplx *a, cmplx *workspace,
     CUDA_SYNC_THREADS;
 
     // Pointwise multiply by chirp_M_fft (conj for inverse)
-    for (int k = THREAD_START; k < M; k += BLOCK_INCR) {
+    for (int k = THREAD_START_X; k < M; k += BLOCK_INCR_X) {
         cmplx cM = chirp_M_fft[k];
         if (inverse) cM = cmplx(cM.real(), -cM.imag());
         pad[k] = pad[k] * cM;
@@ -456,7 +456,7 @@ inline void wdm_spline_bluestein_fft(cmplx *a, cmplx *workspace,
 
     // Write back: a[k] = pad[k] * chirp_n[k] (conj for inverse); /N for inverse.
     double scale = inverse ? (1.0 / (double) N) : 1.0;
-    for (int k = THREAD_START; k < N; k += BLOCK_INCR) {
+    for (int k = THREAD_START_X; k < N; k += BLOCK_INCR_X) {
         cmplx cn = chirp_n[k];
         if (inverse) cn = cmplx(cn.real(), -cn.imag());
         cmplx out = pad[k] * cn;
@@ -508,7 +508,7 @@ inline void wdm_spline_synth_and_fft(
     for (int b = 0; b < Nt; ++b)
     {
         // Synthesize the column into row_buf
-        for (int a = THREAD_START; a < Nf; a += BLOCK_INCR) {
+        for (int a = THREAD_START_X; a < Nf; a += BLOCK_INCR_X) {
             int n_sample = a * Nt + b;
             double t = (double) n_sample * dt;
             // FDSplineTDIWaveform represents amp(t) * exp(i * 2*pi*f(t)*t),
@@ -536,7 +536,7 @@ inline void wdm_spline_synth_and_fft(
         CUDA_SYNC_THREADS;
 
         // Twiddle: S'[a, b] = S[a, b] * exp(-i 2*pi * a * b / N) and write to scratch
-        for (int a = THREAD_START; a < Nf; a += BLOCK_INCR) {
+        for (int a = THREAD_START_X; a < Nf; a += BLOCK_INCR_X) {
             double th = -2.0 * M_PI * (double) a * (double) b / (double) N_total;
             cmplx w(cos(th), sin(th));
             scratch[a * Nt + b] = row_buf[a] * w;
@@ -547,7 +547,7 @@ inline void wdm_spline_synth_and_fft(
     // ---------------- Stage B: Nf FFTs of size Nt -----------------------
     // For each row k_f, load scratch[k_f, :] (Nt values), FFT, write back.
     for (int kf = 0; kf < Nf; ++kf) {
-        for (int b = THREAD_START; b < Nt; b += BLOCK_INCR) {
+        for (int b = THREAD_START_X; b < Nt; b += BLOCK_INCR_X) {
             row_buf[b] = scratch[kf * Nt + b];
         }
         CUDA_SYNC_THREADS;
@@ -559,7 +559,7 @@ inline void wdm_spline_synth_and_fft(
                                      Nt, Mt, log2_Nt, false);
         }
         CUDA_SYNC_THREADS;
-        for (int b = THREAD_START; b < Nt; b += BLOCK_INCR) {
+        for (int b = THREAD_START_X; b < Nt; b += BLOCK_INCR_X) {
             scratch[kf * Nt + b] = row_buf[b];
         }
         CUDA_SYNC_THREADS;
@@ -601,7 +601,7 @@ inline void wdm_spline_extract_layer(
 {
     // 1. Gather Nt_layer FD bins around m * Nt_layer/2, with Hermitian wrap
     int center = m * (Nt_layer / 2);
-    for (int i = THREAD_START; i < Nt_layer; i += BLOCK_INCR) {
+    for (int i = THREAD_START_X; i < Nt_layer; i += BLOCK_INCR_X) {
         int kk = center + (i - Nt_layer / 2);
         bool conj_it = false;
         int  k_use   = kk;
@@ -640,7 +640,7 @@ inline void wdm_spline_extract_layer(
     //                ( ((m + n_global) & 1) ? imag(IFFT[i]) : real(IFFT[i]) )
     //    Zero out the (m == 0 || m == Nf) && ((m + n_global) & 1) "edge" pixels
     //    -- the caller handles DC/Nyquist merging separately.
-    for (int i = THREAD_START; i < Nt_layer; i += BLOCK_INCR) {
+    for (int i = THREAD_START_X; i < Nt_layer; i += BLOCK_INCR_X) {
         int n_global = n_global_start + i;
         int parity   = (m + n_global) & 1;          // 0 -> real, 1 -> imag
         int phase_p  = ((m + 1) * n_global) & 1;     // 0 -> +1, 1 -> -1

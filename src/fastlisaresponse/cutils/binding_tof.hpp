@@ -23,6 +23,7 @@ namespace py = pybind11;
 #define FDSplineTDIWaveformWrap FDSplineTDIWaveformWrapGPU
 #define TDSplineTDIWaveformWrap TDSplineTDIWaveformWrapGPU
 #define WaveletLookupTableWrap WaveletLookupTableWrapGPU
+#define WDMSettingsWrap WDMSettingsWrapGPU
 #define WDMDomainWrap WDMDomainWrapGPU
 #define FDDomainWrap FDDomainWrapGPU
 #define GBComputationGroupWrap GBComputationGroupWrapGPU
@@ -33,6 +34,7 @@ namespace py = pybind11;
 #define FDSplineTDIWaveformWrap FDSplineTDIWaveformWrapCPU
 #define TDSplineTDIWaveformWrap TDSplineTDIWaveformWrapCPU
 #define WaveletLookupTableWrap WaveletLookupTableWrapCPU
+#define WDMSettingsWrap WDMSettingsWrapCPU
 #define WDMDomainWrap WDMDomainWrapCPU
 #define FDDomainWrap FDDomainWrapCPU
 #define GBComputationGroupWrap GBComputationGroupWrapCPU

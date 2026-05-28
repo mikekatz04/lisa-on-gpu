@@ -204,17 +204,31 @@ class GBComputationGroupWrapJAX:
     # :class:`fastlisaresponse.gbcomps.GBWDMComputations`, then adapts
     # internally to the pure-functional standalone JAX kernel:
     #
-    # * flat ``params`` -> ``(num_bin, nparams)``
-    # * flat ``data`` / ``invC`` -> ``(nchannels, Nf, Nt)``
-    # * ``cpp_orbits`` / ``cpp_tdi_config`` are already
-    #   :class:`OrbitsWrapJAX` / :class:`TDIConfigWrapJAX` (built by
-    #   :class:`FastLISAResponseJaxBackend`).
+    # * flat ``params`` -> ``(num_bin, nparams)``.
+    # * ``data`` / ``invC`` follow the **active-band** layout the C++
+    #   chunked-het kernels now consume (matches the natural
+    #   ``AnalysisContainerArray`` output sliced to
+    #   ``[ind_min_t, ind_max_t] x [ind_min_f, ind_max_f]``):
+    #     - ``data_d`` : ``(nchannels, Nf_active, Nt_active)``
+    #     - ``invC``   : ``(nchannels, nchannels, Nf_active, Nt_active)``
+    #       for ``tdi_type == TDI_XYZ`` (full Hermitian Sigma^-1);
+    #       ``(nchannels, Nf_active, Nt_active)`` diagonal for
+    #       ``TDI_AET`` / ``TDI_AE``.
+    # * ``cpp_orbits`` / ``cpp_tdi_config`` / ``cpp_wdm_settings`` are
+    #   already the corresponding JAX wrap classes
+    #   (:class:`OrbitsWrapJAX`, :class:`TDIConfigWrapJAX`,
+    #   :class:`WDMSettingsWrapJAX`) -- built by
+    #   :class:`FastLISAResponseJaxBackend`.
     # * the per-binary :class:`JaxAmpPhaseSource` is resolved lazily
     #   from ``t_ref``.
     # * scratch integers the JAX path doesn't need (``log2_Nt_sub``,
     #   ``log2_N_sparse``, ``n_rfft_chunk``, ``grid_dim``, ``n_chunks``,
     #   ``N_cp_sig``, ``N_cp_orbit``, layer-group arrays) are accepted
     #   for ABI parity and ignored.
+    # * ``tdi_type`` is passed as the int enum from
+    #   ``TDITypeDict`` (``TDI_XYZ=1`` / ``TDI_AET=2`` / ``TDI_AE=3``);
+    #   the inner-product dispatch happens at trace time so a JIT'd
+    #   function specialises to one branch per backend choice.
     # ----------------------------------------------------------------
 
     @staticmethod
@@ -223,6 +237,8 @@ class GBComputationGroupWrapJAX:
 
     @staticmethod
     def _reshape_grid(arr, nchannels, Nf, Nt):
+        """Reshape a (flat or already-shaped) FULL-grid array to
+        ``(nchannels, Nf, Nt)``. Used only by ``fill_global``."""
         a = np.asarray(arr)
         if a.ndim == 1:
             a = a.reshape(int(nchannels), int(Nf), int(Nt))
@@ -231,15 +247,36 @@ class GBComputationGroupWrapJAX:
                 f"expected ({nchannels}, {Nf}, {Nt}), got {a.shape}")
         return a
 
+    @staticmethod
+    def _reshape_active_band(arr, expected_shape):
+        """Reshape a (flat or shaped) active-band array to
+        ``expected_shape``. Used for ``data_d`` / ``invC`` on the
+        inner-product paths after the C++ active-band layout switch.
+        """
+        a = np.asarray(arr)
+        target = tuple(int(s) for s in expected_shape)
+        if a.ndim == 1:
+            n_expected = 1
+            for s in target:
+                n_expected *= s
+            assert a.size == n_expected, (
+                f"flat array of size {a.size} cannot reshape to {target}")
+            a = a.reshape(target)
+        else:
+            assert a.shape == target, (
+                f"expected {target}, got {a.shape}")
+        return a
+
     def gb_wdm_het_fill_global(
         self,
         templates,
         cpp_orbits, cpp_tdi_config,
+        cpp_wdm_settings,
         params_in, factors,
         chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_lo,
         wdm_window,
         n_chunks, num_bin, nparams,
-        Nf, Nt, Nt_sub, log2_Nt_sub,
+        Nt_sub, log2_Nt_sub,
         N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
         T_chunk, dt, T, t_ref,
@@ -248,10 +285,15 @@ class GBComputationGroupWrapJAX:
     ):
         """C++-style chunked-het fill_global -> JAX standalone kernel.
 
-        Mutates ``templates`` in place (must be numpy)."""
+        Mutates ``templates`` in place (must be numpy). ``fill_global``
+        writes into the FULL ``(nchannels, Nf, Nt)`` template -- the
+        active-band layout only applies on the inner-product paths.
+        """
         from .heterodyne_kernels import gb_wdm_het_fill_global_jax
         source = self._resolve_source(t_ref)
         p2d = self._reshape_params(params_in, num_bin, nparams)
+        Nf = int(cpp_wdm_settings.Nf)
+        Nt = int(cpp_wdm_settings.Nt)
         import jax.numpy as jnp
         out = gb_wdm_het_fill_global_jax(
             params_batch=jnp.asarray(p2d),
@@ -262,7 +304,7 @@ class GBComputationGroupWrapJAX:
             chunk_n_global_lo=jnp.asarray(np.asarray(chunk_n_global_lo)),
             source=source, orbits=cpp_orbits, tdi_config=cpp_tdi_config,
             wdm_window=jnp.asarray(np.asarray(wdm_window)),
-            Nf=int(Nf), Nt=int(Nt), Nt_sub=int(Nt_sub),
+            Nf=Nf, Nt=Nt, Nt_sub=int(Nt_sub),
             N_sparse=int(N_sparse),
             dt=float(dt), T_chunk=float(T_chunk),
             tukey_alpha=float(tukey_alpha),
@@ -276,26 +318,48 @@ class GBComputationGroupWrapJAX:
         self,
         d_h_out, h_h_out,
         cpp_orbits, cpp_tdi_config,
+        cpp_wdm_settings,
         params_in, data_index, noise_index,
         chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_lo,
         wdm_window,
         data_d, invC,
         n_chunks, num_bin, nparams,
-        Nf, Nt, Nt_sub, log2_Nt_sub,
+        Nt_sub, log2_Nt_sub,
         N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
         T_chunk, dt, T, t_ref,
+        tdi_type,
         tukey_alpha, grid_dim,
         N_cp_sig, N_cp_orbit,
         binary_perm, group_starts, group_ends,
         group_m_lo, group_m_hi, n_groups,
     ):
-        """C++-style chunked-het get_ll -> JAX standalone kernel."""
+        """C++-style chunked-het get_ll -> JAX standalone kernel.
+
+        ``data_d`` is taken at active-band shape
+        ``(nchannels, Nf_active, Nt_active)``; ``invC`` is
+        ``(nchannels, nchannels, Nf_active, Nt_active)`` for
+        ``tdi_type == TDI_XYZ`` and ``(nchannels, Nf_active, Nt_active)``
+        for ``TDI_AET`` / ``TDI_AE``. Matches the C++ contract.
+        """
         from .heterodyne_kernels import gb_wdm_het_get_ll_jax
         source = self._resolve_source(t_ref)
         p2d = self._reshape_params(params_in, num_bin, nparams)
-        d_grid = self._reshape_grid(data_d, nchannels, Nf, Nt)
-        c_grid = self._reshape_grid(invC,   nchannels, Nf, Nt)
+        Nf        = int(cpp_wdm_settings.Nf)
+        Nt        = int(cpp_wdm_settings.Nt)
+        ind_min_f = int(cpp_wdm_settings.ind_min_f)
+        ind_min_t = int(cpp_wdm_settings.ind_min_t)
+        Nf_active = int(cpp_wdm_settings.Nf_active)
+        Nt_active = int(cpp_wdm_settings.Nt_active)
+        tdi_type_int = int(tdi_type)
+        # invC shape depends on tdi_type (XYZ has extra nchannels axis).
+        if tdi_type_int == 1:                                 # TDI_XYZ
+            invC_shape = (int(nchannels), int(nchannels), Nf_active, Nt_active)
+        else:                                                  # TDI_AET / TDI_AE
+            invC_shape = (int(nchannels), Nf_active, Nt_active)
+        data_shape = (int(nchannels), Nf_active, Nt_active)
+        d_grid = self._reshape_active_band(data_d, data_shape)
+        c_grid = self._reshape_active_band(invC,   invC_shape)
         import jax.numpy as jnp
         d_h, h_h = gb_wdm_het_get_ll_jax(
             params_batch=jnp.asarray(p2d),
@@ -306,9 +370,12 @@ class GBComputationGroupWrapJAX:
             chunk_n_global_lo=jnp.asarray(np.asarray(chunk_n_global_lo)),
             source=source, orbits=cpp_orbits, tdi_config=cpp_tdi_config,
             wdm_window=jnp.asarray(np.asarray(wdm_window)),
-            Nf=int(Nf), Nt=int(Nt), Nt_sub=int(Nt_sub),
+            Nf=Nf, Nt=Nt, Nt_sub=int(Nt_sub),
             N_sparse=int(N_sparse),
             dt=float(dt), T_chunk=float(T_chunk),
+            ind_min_f=ind_min_f, ind_min_t=ind_min_t,
+            Nf_active=Nf_active, Nt_active=Nt_active,
+            tdi_type=tdi_type_int,
             tukey_alpha=float(tukey_alpha),
         )
         _copy_into(d_h_out, d_h)
@@ -318,28 +385,46 @@ class GBComputationGroupWrapJAX:
         self,
         d_h_add_out, d_h_remove_out, add_add_out, remove_remove_out, add_remove_out,
         cpp_orbits, cpp_tdi_config,
+        cpp_wdm_settings,
         params_add_in, params_remove_in, data_index, noise_index,
         chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_lo,
         wdm_window,
         data_d, invC,
         n_chunks, num_bin, nparams,
-        Nf, Nt, Nt_sub, log2_Nt_sub,
+        Nt_sub, log2_Nt_sub,
         N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
         T_chunk, dt, T, t_ref,
+        tdi_type,
         tukey_alpha, grid_dim,
         N_cp_sig, N_cp_orbit,
         binary_perm, group_starts, group_ends,
         group_m_lo, group_m_hi, n_groups,
         pair_m_lo_b, pair_m_hi_b,
     ):
-        """C++-style chunked-het swap_ll -> JAX standalone kernel."""
+        """C++-style chunked-het swap_ll -> JAX standalone kernel.
+
+        Same data / invC layout and ``tdi_type`` dispatch as
+        :meth:`gb_wdm_het_get_ll`.
+        """
         from .heterodyne_kernels import gb_wdm_het_swap_ll_jax
         source = self._resolve_source(t_ref)
         pa = self._reshape_params(params_add_in,    num_bin, nparams)
         pr = self._reshape_params(params_remove_in, num_bin, nparams)
-        d_grid = self._reshape_grid(data_d, nchannels, Nf, Nt)
-        c_grid = self._reshape_grid(invC,   nchannels, Nf, Nt)
+        Nf        = int(cpp_wdm_settings.Nf)
+        Nt        = int(cpp_wdm_settings.Nt)
+        ind_min_f = int(cpp_wdm_settings.ind_min_f)
+        ind_min_t = int(cpp_wdm_settings.ind_min_t)
+        Nf_active = int(cpp_wdm_settings.Nf_active)
+        Nt_active = int(cpp_wdm_settings.Nt_active)
+        tdi_type_int = int(tdi_type)
+        if tdi_type_int == 1:                                 # TDI_XYZ
+            invC_shape = (int(nchannels), int(nchannels), Nf_active, Nt_active)
+        else:
+            invC_shape = (int(nchannels), Nf_active, Nt_active)
+        data_shape = (int(nchannels), Nf_active, Nt_active)
+        d_grid = self._reshape_active_band(data_d, data_shape)
+        c_grid = self._reshape_active_band(invC,   invC_shape)
         import jax.numpy as jnp
         d_h_a, d_h_r, aa, rr, ar = gb_wdm_het_swap_ll_jax(
             params_add=jnp.asarray(pa), params_rem=jnp.asarray(pr),
@@ -350,9 +435,12 @@ class GBComputationGroupWrapJAX:
             chunk_n_global_lo=jnp.asarray(np.asarray(chunk_n_global_lo)),
             source=source, orbits=cpp_orbits, tdi_config=cpp_tdi_config,
             wdm_window=jnp.asarray(np.asarray(wdm_window)),
-            Nf=int(Nf), Nt=int(Nt), Nt_sub=int(Nt_sub),
+            Nf=Nf, Nt=Nt, Nt_sub=int(Nt_sub),
             N_sparse=int(N_sparse),
             dt=float(dt), T_chunk=float(T_chunk),
+            ind_min_f=ind_min_f, ind_min_t=ind_min_t,
+            Nf_active=Nf_active, Nt_active=Nt_active,
+            tdi_type=tdi_type_int,
             tukey_alpha=float(tukey_alpha),
         )
         _copy_into(d_h_add_out,       d_h_a)
@@ -365,15 +453,17 @@ class GBComputationGroupWrapJAX:
         self,
         grad_out,
         cpp_orbits, cpp_tdi_config,
+        cpp_wdm_settings,
         params_in, data_index, noise_index,
         chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_lo,
         wdm_window,
         data_d, invC,
         n_chunks, num_bin, nparams,
-        Nf, Nt, Nt_sub, log2_Nt_sub,
+        Nt_sub, log2_Nt_sub,
         N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
         T_chunk, dt, T, t_ref,
+        tdi_type,
         tukey_alpha, grid_dim,
         N_cp_sig, N_cp_orbit,
         binary_perm, group_starts, group_ends,
@@ -383,8 +473,20 @@ class GBComputationGroupWrapJAX:
         from .heterodyne_kernels import gb_wdm_het_get_ll_grad_jax
         source = self._resolve_source(t_ref)
         p2d = self._reshape_params(params_in, num_bin, nparams)
-        d_grid = self._reshape_grid(data_d, nchannels, Nf, Nt)
-        c_grid = self._reshape_grid(invC,   nchannels, Nf, Nt)
+        Nf        = int(cpp_wdm_settings.Nf)
+        Nt        = int(cpp_wdm_settings.Nt)
+        ind_min_f = int(cpp_wdm_settings.ind_min_f)
+        ind_min_t = int(cpp_wdm_settings.ind_min_t)
+        Nf_active = int(cpp_wdm_settings.Nf_active)
+        Nt_active = int(cpp_wdm_settings.Nt_active)
+        tdi_type_int = int(tdi_type)
+        if tdi_type_int == 1:
+            invC_shape = (int(nchannels), int(nchannels), Nf_active, Nt_active)
+        else:
+            invC_shape = (int(nchannels), Nf_active, Nt_active)
+        data_shape = (int(nchannels), Nf_active, Nt_active)
+        d_grid = self._reshape_active_band(data_d, data_shape)
+        c_grid = self._reshape_active_band(invC,   invC_shape)
         import jax.numpy as jnp
         grad = gb_wdm_het_get_ll_grad_jax(
             params_batch=jnp.asarray(p2d),
@@ -395,9 +497,12 @@ class GBComputationGroupWrapJAX:
             chunk_n_global_lo=jnp.asarray(np.asarray(chunk_n_global_lo)),
             source=source, orbits=cpp_orbits, tdi_config=cpp_tdi_config,
             wdm_window=jnp.asarray(np.asarray(wdm_window)),
-            Nf=int(Nf), Nt=int(Nt), Nt_sub=int(Nt_sub),
+            Nf=Nf, Nt=Nt, Nt_sub=int(Nt_sub),
             N_sparse=int(N_sparse),
             dt=float(dt), T_chunk=float(T_chunk),
+            ind_min_f=ind_min_f, ind_min_t=ind_min_t,
+            Nf_active=Nf_active, Nt_active=Nt_active,
+            tdi_type=tdi_type_int,
             tukey_alpha=float(tukey_alpha),
         )
         _copy_into(grad_out, grad)
@@ -406,15 +511,17 @@ class GBComputationGroupWrapJAX:
         self,
         grad_add_out, grad_remove_out,
         cpp_orbits, cpp_tdi_config,
+        cpp_wdm_settings,
         params_add_in, params_remove_in, data_index, noise_index,
         chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_lo,
         wdm_window,
         data_d, invC,
         n_chunks, num_bin, nparams,
-        Nf, Nt, Nt_sub, log2_Nt_sub,
+        Nt_sub, log2_Nt_sub,
         N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
         T_chunk, dt, T, t_ref,
+        tdi_type,
         tukey_alpha, grid_dim,
         N_cp_sig, N_cp_orbit,
         binary_perm, group_starts, group_ends,
@@ -433,8 +540,20 @@ class GBComputationGroupWrapJAX:
         source = self._resolve_source(t_ref)
         pa = self._reshape_params(params_add_in,    num_bin, nparams)
         pr = self._reshape_params(params_remove_in, num_bin, nparams)
-        d_grid = self._reshape_grid(data_d, nchannels, Nf, Nt)
-        c_grid = self._reshape_grid(invC,   nchannels, Nf, Nt)
+        Nf        = int(cpp_wdm_settings.Nf)
+        Nt        = int(cpp_wdm_settings.Nt)
+        ind_min_f = int(cpp_wdm_settings.ind_min_f)
+        ind_min_t = int(cpp_wdm_settings.ind_min_t)
+        Nf_active = int(cpp_wdm_settings.Nf_active)
+        Nt_active = int(cpp_wdm_settings.Nt_active)
+        tdi_type_int = int(tdi_type)
+        if tdi_type_int == 1:
+            invC_shape = (int(nchannels), int(nchannels), Nf_active, Nt_active)
+        else:
+            invC_shape = (int(nchannels), Nf_active, Nt_active)
+        data_shape = (int(nchannels), Nf_active, Nt_active)
+        d_grid = self._reshape_active_band(data_d, data_shape)
+        c_grid = self._reshape_active_band(invC,   invC_shape)
         import jax.numpy as jnp
         common = dict(
             data_d=jnp.asarray(d_grid), invC=jnp.asarray(c_grid),
@@ -444,9 +563,12 @@ class GBComputationGroupWrapJAX:
             chunk_n_global_lo=jnp.asarray(np.asarray(chunk_n_global_lo)),
             source=source, orbits=cpp_orbits, tdi_config=cpp_tdi_config,
             wdm_window=jnp.asarray(np.asarray(wdm_window)),
-            Nf=int(Nf), Nt=int(Nt), Nt_sub=int(Nt_sub),
+            Nf=Nf, Nt=Nt, Nt_sub=int(Nt_sub),
             N_sparse=int(N_sparse),
             dt=float(dt), T_chunk=float(T_chunk),
+            ind_min_f=ind_min_f, ind_min_t=ind_min_t,
+            Nf_active=Nf_active, Nt_active=Nt_active,
+            tdi_type=tdi_type_int,
             tukey_alpha=float(tukey_alpha),
         )
         out_add = gb_wdm_het_swap_ll_grad_jax(

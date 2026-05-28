@@ -70,6 +70,7 @@ def _jax_methods_loader() -> FastLISAResponseBackendMethods:
         GBComputationGroupWrapJAX,
         SOBBHComputationGroupWrapJAX,
         WaveletLookupTableWrapJAX,
+        WDMSettingsWrapJAX,
         WDMDomainWrapJAX,
     )
     from lisatools.jax import OrbitsWrapJAX
@@ -103,6 +104,7 @@ def _jax_methods_loader() -> FastLISAResponseBackendMethods:
         TDIConfig=_unimplemented_slot("TDIConfig"),
         TDIConfigWrap=TDIConfigWrapJAX,
         CubicSplineWrap=CubicSplineWrapJAX,         # from gpubackendtools.jax
+        WDMSettingsWrap=WDMSettingsWrapJAX,
         WDMDomainWrap=WDMDomainWrapJAX,
         FDDomainWrap=_unimplemented_slot("FDDomainWrap"),
         WaveletLookupTableWrap=WaveletLookupTableWrapJAX,

@@ -7,6 +7,21 @@ becomes a ``jax.lax.scan`` over chunks (outer) and a ``jax.vmap`` over
 binaries (inner) -- functionally equivalent to the CUDA outer-block /
 inner-loop pattern, JIT-friendly, and ``jax.grad``-able.
 
+Per the sprint-wide rule "JAX may diverge internally, must match C++
+inner-product outputs": this file is not a literal translation of the
+CUDA kernels -- it follows the C++ output contract, not its code
+structure. Specifically:
+
+* ``data_d`` is taken at active-band layout ``(nchannels, Nf_active,
+  Nt_active)`` -- the same layout the C++ kernels now consume.
+* ``invC`` is taken at ``(nchannels, Nf_active, Nt_active)`` for
+  ``tdi_type == TDI_AET / TDI_AE`` (diagonal noise) and at
+  ``(nchannels, nchannels, Nf_active, Nt_active)`` for
+  ``tdi_type == TDI_XYZ`` (full cross-channel Hermitian Sigma^-1).
+* The inner product is dispatched on ``tdi_type``:
+  * AET / AE: ``sum_c d[c] * h[c] * invC[c]``
+  * XYZ:     ``sum_{c1,c2} d[c1] * h[c2] * invC[c1, c2]``
+
 Validated algorithm reference lives in ``check_shortened_wdm.py``
 (``chunked_get_ll_python_reference`` -> ``Test L`` passes to ~5e-16).
 """
@@ -27,6 +42,23 @@ from .fast_inner_heterodyne import (
     fast_wdm_inner_heterodyne_jax,
     gb_chunk_fd_to_wdm_jax,
 )
+
+# Mirror TDIonTheFly.hh:29-31.
+TDI_XYZ = 1
+TDI_AET = 2
+TDI_AE  = 3
+
+
+def _inner_product_diag(data_slab, w_keep, invC_slab):
+    """AET / AE diagonal inner product: sum_c d[c] * w[c] * invC[c]."""
+    return jnp.sum(data_slab * w_keep * invC_slab)
+
+
+def _inner_product_xyz(data_slab, w_keep, invC_slab):
+    """XYZ cross-channel inner product:
+    sum_{c1,c2,m,n} d[c1,m,n] * w[c2,m,n] * invC[c1,c2,m,n].
+    """
+    return jnp.einsum('imn,jmn,ijmn->', data_slab, w_keep, invC_slab)
 
 
 def _build_chunk_wdm(chunk_t_start, params, source, orbits, tdi_config,
@@ -59,6 +91,9 @@ def gb_wdm_het_fill_global_jax(
     dt: float, T_chunk: float,
     tukey_alpha: float = ALPHA_AUTO,
 ) -> jnp.ndarray:
+    """fill_global accumulates into the FULL ``(nch, Nf, Nt)`` template
+    (NOT active-band). The active-band layout only applies to data /
+    invC on the inner-product paths (``get_ll`` / ``swap_ll``)."""
     """Accumulate per-binary stitched WDM into a global template.
 
     Returns ``template`` of shape ``(nchannels, Nf, Nt)``.
@@ -123,7 +158,7 @@ def gb_wdm_het_fill_global_jax(
 
 def gb_wdm_het_get_ll_jax(
     params_batch: jnp.ndarray,                      # (num_bin, 9)
-    data_d: jnp.ndarray, invC: jnp.ndarray,         # (3, Nf, Nt) each
+    data_d: jnp.ndarray, invC: jnp.ndarray,         # active-band layout
     chunk_t_starts: jnp.ndarray,
     chunk_keep_lo: jnp.ndarray, chunk_keep_hi: jnp.ndarray,
     chunk_n_global_lo: jnp.ndarray,
@@ -131,20 +166,52 @@ def gb_wdm_het_get_ll_jax(
     wdm_window: jnp.ndarray,
     Nf: int, Nt: int, Nt_sub: int, N_sparse: int,
     dt: float, T_chunk: float,
+    ind_min_f: int, ind_min_t: int,
+    Nf_active: int, Nt_active: int,
+    tdi_type: int = TDI_XYZ,
     tukey_alpha: float = ALPHA_AUTO,
 ) -> Sequence[jnp.ndarray]:
     """Per-binary ``<d|h>``, ``<h|h>`` via chunked-heterodyne.
 
     Outer = chunks, inner = vmap over binaries. PSD + data slabs are
-    sliced once per chunk (the analogue of the CUDA shared-memory
-    load).
+    sliced once per chunk (the analogue of the CUDA shared-memory load).
+
+    Data / invC layout (matches the C++ contract -- ``AnalysisContainerArray``
+    natural output sliced to ``[ind_min_t, ind_max_t] x [ind_min_f,
+    ind_max_f]``):
+
+    * ``data_d`` : ``(nchannels, Nf_active, Nt_active)`` real.
+    * ``invC``   : ``(nchannels, nchannels, Nf_active, Nt_active)``
+      when ``tdi_type == TDI_XYZ`` (full Hermitian Sigma^-1 across
+      channels), else ``(nchannels, Nf_active, Nt_active)``
+      diagonal.
+
+    Pixels with (m, n) outside the active band are skipped automatically
+    by the mask -- they correspond to template energy in spectral tails
+    that the active band intentionally truncates (matches C++
+    behaviour exactly).
+
+    ``tdi_type`` is treated as static metadata; the dispatch happens at
+    trace time, so a JIT'd function specialises to one branch per
+    backend choice (just like the C++ ``#ifdef`` switch).
     """
     num_bin = params_batch.shape[0]
+    nchannels = data_d.shape[0]
     k_sky, u_sky, v_sky = jax.vmap(
         lambda p: get_sky_vectors(p, source)
     )(params_batch)
 
     n_local = jnp.arange(Nt_sub)
+    # Active-band frequency slice runs over [ind_min_f, ind_min_f +
+    # Nf_active). Done by static jnp.s_[]; w_chunk is built at full Nf.
+    f_start = int(ind_min_f)
+    f_stop  = int(ind_min_f) + int(Nf_active)
+
+    # Choose the inner-product reducer at trace time.
+    if int(tdi_type) == TDI_XYZ:
+        ip = _inner_product_xyz
+    else:
+        ip = _inner_product_diag
 
     def chunk_body(carry, j):
         d_h_acc, h_h_acc = carry
@@ -152,28 +219,49 @@ def gb_wdm_het_get_ll_jax(
         klo = chunk_keep_lo[j]
         khi = chunk_keep_hi[j]
         n_lo = chunk_n_global_lo[j]
-        mask = ((n_local >= klo) & (n_local < khi)).astype(d_h_acc.dtype)
-        mask_3d = mask[None, None, :]
-
-        # Per-chunk data + invC slabs at the FULL Nt_sub width, indexed
-        # at offset (n_lo - klo) so that local k=klo lines up with global
-        # k=n_lo. Cells outside [klo, khi) are gated by the mask.
-        offset = (n_lo - klo).astype(jnp.int32)
+        # Active-band offset: a local index k inside [klo, khi) maps to
+        # the global pixel g = (n_lo - klo) + k, which in active-band
+        # coords is a = g - ind_min_t = (n_lo - klo - ind_min_t) + k.
+        # The data / invC slab is sliced at offset
+        # (n_lo - klo - ind_min_t) and length Nt_sub; cells with a
+        # outside [0, Nt_active) are gated by the active mask.
+        offset = (n_lo - klo - jnp.int32(ind_min_t)).astype(jnp.int32)
         zero32 = jnp.int32(0)
-        data_slab = jax.lax.dynamic_slice(data_d, (zero32, zero32, offset),
-                                            (3, Nf, Nt_sub))
-        invC_slab = jax.lax.dynamic_slice(invC,   (zero32, zero32, offset),
-                                            (3, Nf, Nt_sub))
+        a_local = offset + n_local
+        active_mask = ((a_local >= 0) & (a_local < jnp.int32(Nt_active)))
+        keep_mask = (n_local >= klo) & (n_local < khi)
+        mask = (active_mask & keep_mask).astype(d_h_acc.dtype)
+        mask_3d = mask[None, None, :]                        # (1,1,Nt_sub)
+
+        if int(tdi_type) == TDI_XYZ:
+            invC_slab = jax.lax.dynamic_slice(
+                invC, (zero32, zero32, zero32, offset),
+                (nchannels, nchannels, Nf_active, Nt_sub),
+            )
+        else:
+            invC_slab = jax.lax.dynamic_slice(
+                invC, (zero32, zero32, offset),
+                (nchannels, Nf_active, Nt_sub),
+            )
+        data_slab = jax.lax.dynamic_slice(
+            data_d, (zero32, zero32, offset),
+            (nchannels, Nf_active, Nt_sub),
+        )
 
         def _one_bin(p, k_s, u_s, v_s):
             w_chunk = _build_chunk_wdm(
                 chunk_t_start, p, source, orbits, tdi_config,
                 k_s, u_s, v_s, T_chunk, N_sparse, Nf, Nt_sub, dt,
                 wdm_window, tukey_alpha,
+            )                                                # (nch, Nf, Nt_sub)
+            # Active-band slice in frequency (static start/stop).
+            w_active = jax.lax.dynamic_slice(
+                w_chunk, (zero32, jnp.int32(f_start), zero32),
+                (nchannels, Nf_active, Nt_sub),
             )
-            w_keep = w_chunk * mask_3d
-            dh = jnp.sum(data_slab * w_keep * invC_slab)
-            hh = jnp.sum(w_keep * w_keep * invC_slab)
+            w_keep = w_active * mask_3d
+            dh = ip(data_slab, w_keep, invC_slab)
+            hh = ip(w_keep,    w_keep, invC_slab)
             return dh, hh
         dh_arr, hh_arr = jax.vmap(_one_bin)(
             params_batch, k_sky, u_sky, v_sky,
@@ -196,14 +284,28 @@ def gb_wdm_het_swap_ll_jax(
     wdm_window: jnp.ndarray,
     Nf: int, Nt: int, Nt_sub: int, N_sparse: int,
     dt: float, T_chunk: float,
+    ind_min_f: int, ind_min_t: int,
+    Nf_active: int, Nt_active: int,
+    tdi_type: int = TDI_XYZ,
     tukey_alpha: float = ALPHA_AUTO,
 ) -> Sequence[jnp.ndarray]:
-    """5-way swap-ll accumulator (chunked-heterodyne)."""
+    """5-way swap-ll accumulator (chunked-heterodyne).
+
+    Same data / invC layout, ``tdi_type`` dispatch and active-band
+    handling as :func:`gb_wdm_het_get_ll_jax` -- see its docstring.
+    """
     num_bin = params_add.shape[0]
+    nchannels = data_d.shape[0]
     k_a, u_a, v_a = jax.vmap(lambda p: get_sky_vectors(p, source))(params_add)
     k_r, u_r, v_r = jax.vmap(lambda p: get_sky_vectors(p, source))(params_rem)
 
     n_local = jnp.arange(Nt_sub)
+    f_start = int(ind_min_f)
+
+    if int(tdi_type) == TDI_XYZ:
+        ip = _inner_product_xyz
+    else:
+        ip = _inner_product_diag
 
     def chunk_body(carry, j):
         d_h_a, d_h_r, aa, rr, ar = carry
@@ -211,14 +313,28 @@ def gb_wdm_het_swap_ll_jax(
         klo = chunk_keep_lo[j]
         khi = chunk_keep_hi[j]
         n_lo = chunk_n_global_lo[j]
-        mask = ((n_local >= klo) & (n_local < khi)).astype(d_h_a.dtype)
-        mask_3d = mask[None, None, :]
-        offset = (n_lo - klo).astype(jnp.int32)
+        offset = (n_lo - klo - jnp.int32(ind_min_t)).astype(jnp.int32)
         zero32 = jnp.int32(0)
-        data_slab = jax.lax.dynamic_slice(data_d, (zero32, zero32, offset),
-                                            (3, Nf, Nt_sub))
-        invC_slab = jax.lax.dynamic_slice(invC,   (zero32, zero32, offset),
-                                            (3, Nf, Nt_sub))
+        a_local = offset + n_local
+        active_mask = ((a_local >= 0) & (a_local < jnp.int32(Nt_active)))
+        keep_mask = (n_local >= klo) & (n_local < khi)
+        mask = (active_mask & keep_mask).astype(d_h_a.dtype)
+        mask_3d = mask[None, None, :]
+
+        if int(tdi_type) == TDI_XYZ:
+            invC_slab = jax.lax.dynamic_slice(
+                invC, (zero32, zero32, zero32, offset),
+                (nchannels, nchannels, Nf_active, Nt_sub),
+            )
+        else:
+            invC_slab = jax.lax.dynamic_slice(
+                invC, (zero32, zero32, offset),
+                (nchannels, Nf_active, Nt_sub),
+            )
+        data_slab = jax.lax.dynamic_slice(
+            data_d, (zero32, zero32, offset),
+            (nchannels, Nf_active, Nt_sub),
+        )
 
         def _one(p_a, p_r, ka, ua, va, kr, ur, vr):
             w_a = _build_chunk_wdm(chunk_t_start, p_a, source, orbits, tdi_config,
@@ -227,14 +343,22 @@ def gb_wdm_het_swap_ll_jax(
             w_r = _build_chunk_wdm(chunk_t_start, p_r, source, orbits, tdi_config,
                                     kr, ur, vr, T_chunk, N_sparse, Nf, Nt_sub,
                                     dt, wdm_window, tukey_alpha)
-            w_a = w_a * mask_3d
-            w_r = w_r * mask_3d
+            w_a_active = jax.lax.dynamic_slice(
+                w_a, (zero32, jnp.int32(f_start), zero32),
+                (nchannels, Nf_active, Nt_sub),
+            )
+            w_r_active = jax.lax.dynamic_slice(
+                w_r, (zero32, jnp.int32(f_start), zero32),
+                (nchannels, Nf_active, Nt_sub),
+            )
+            w_a_keep = w_a_active * mask_3d
+            w_r_keep = w_r_active * mask_3d
             return (
-                jnp.sum(data_slab * w_a * invC_slab),
-                jnp.sum(data_slab * w_r * invC_slab),
-                jnp.sum(w_a * w_a * invC_slab),
-                jnp.sum(w_r * w_r * invC_slab),
-                jnp.sum(w_a * w_r * invC_slab),
+                ip(data_slab, w_a_keep, invC_slab),
+                ip(data_slab, w_r_keep, invC_slab),
+                ip(w_a_keep,  w_a_keep, invC_slab),
+                ip(w_r_keep,  w_r_keep, invC_slab),
+                ip(w_a_keep,  w_r_keep, invC_slab),
             )
         dha, dhr, aa_v, rr_v, ar_v = jax.vmap(_one)(
             params_add, params_rem, k_a, u_a, v_a, k_r, u_r, v_r,
@@ -261,6 +385,9 @@ def gb_wdm_het_get_ll_grad_jax(
     wdm_window: jnp.ndarray,
     Nf: int, Nt: int, Nt_sub: int, N_sparse: int,
     dt: float, T_chunk: float,
+    ind_min_f: int, ind_min_t: int,
+    Nf_active: int, Nt_active: int,
+    tdi_type: int = TDI_XYZ,
     tukey_alpha: float = ALPHA_AUTO,
 ) -> jnp.ndarray:
     """JAX-autograd gradient of L = sum_i (<d|h_i> - 0.5 <h_i|h_i>)
@@ -279,7 +406,10 @@ def gb_wdm_het_get_ll_grad_jax(
             chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_lo,
             source, orbits, tdi_config, wdm_window,
             Nf=Nf, Nt=Nt, Nt_sub=Nt_sub, N_sparse=N_sparse,
-            dt=dt, T_chunk=T_chunk, tukey_alpha=tukey_alpha,
+            dt=dt, T_chunk=T_chunk,
+            ind_min_f=ind_min_f, ind_min_t=ind_min_t,
+            Nf_active=Nf_active, Nt_active=Nt_active,
+            tdi_type=tdi_type, tukey_alpha=tukey_alpha,
         )
         return jnp.sum(d_h - 0.5 * h_h)
     return jax.grad(scalar_loss)(params_batch)
@@ -295,6 +425,9 @@ def gb_wdm_het_swap_ll_grad_jax(
     wdm_window: jnp.ndarray,
     Nf: int, Nt: int, Nt_sub: int, N_sparse: int,
     dt: float, T_chunk: float,
+    ind_min_f: int, ind_min_t: int,
+    Nf_active: int, Nt_active: int,
+    tdi_type: int = TDI_XYZ,
     tukey_alpha: float = ALPHA_AUTO,
 ):
     """JAX-autograd gradients of all 5 swap_ll terms w.r.t. theta_add,
@@ -311,7 +444,10 @@ def gb_wdm_het_swap_ll_grad_jax(
     common_args = (data_d, invC, chunk_t_starts, chunk_keep_lo, chunk_keep_hi,
                     chunk_n_global_lo, source, orbits, tdi_config, wdm_window)
     common_kwargs = dict(Nf=Nf, Nt=Nt, Nt_sub=Nt_sub, N_sparse=N_sparse,
-                          dt=dt, T_chunk=T_chunk, tukey_alpha=tukey_alpha)
+                          dt=dt, T_chunk=T_chunk,
+                          ind_min_f=ind_min_f, ind_min_t=ind_min_t,
+                          Nf_active=Nf_active, Nt_active=Nt_active,
+                          tdi_type=tdi_type, tukey_alpha=tukey_alpha)
 
     def term_sum(p_add, term_index):
         """Return sum_i (term_index'th output of swap_ll_jax) -- scalar."""
@@ -341,6 +477,9 @@ def gb_wdm_het_hessian_jax(
     wdm_window: jnp.ndarray,
     Nf: int, Nt: int, Nt_sub: int, N_sparse: int,
     dt: float, T_chunk: float,
+    ind_min_f: int, ind_min_t: int,
+    Nf_active: int, Nt_active: int,
+    tdi_type: int = TDI_XYZ,
     tukey_alpha: float = ALPHA_AUTO,
 ) -> jnp.ndarray:
     """JAX-autograd per-binary Hessian of L_i = <d|h_i> - 0.5 <h_i|h_i>
@@ -358,7 +497,10 @@ def gb_wdm_het_hessian_jax(
             chunk_t_starts, chunk_keep_lo, chunk_keep_hi, chunk_n_global_lo,
             source, orbits, tdi_config, wdm_window,
             Nf=Nf, Nt=Nt, Nt_sub=Nt_sub, N_sparse=N_sparse,
-            dt=dt, T_chunk=T_chunk, tukey_alpha=tukey_alpha,
+            dt=dt, T_chunk=T_chunk,
+            ind_min_f=ind_min_f, ind_min_t=ind_min_t,
+            Nf_active=Nf_active, Nt_active=Nt_active,
+            tdi_type=tdi_type, tukey_alpha=tukey_alpha,
         )
         return (d_h[0] - 0.5 * h_h[0])
     return jax.vmap(jax.hessian(per_binary_loss))(params_batch)
