@@ -354,7 +354,7 @@ class GBWDMComputations(FastLISAResponseParallelModule):
                 data_index=data_index, noise_index=noise_index)
         else:
             groups = self._empty_groups(num_bin)
-        breakpoint()
+
         self._kernel("get_ll")(
             d_h_out, h_h_out,
             self.cpp_orbits, self.cpp_tdi_config,
@@ -371,6 +371,7 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             int(self.nchannels), int(self.n_rfft_chunk),
             float(self.T_chunk), float(self.dt),
             float(self.T), float(self.t_ref),
+            int(self.backend.TDITypeDict[self.tdi_type]),
             float(self.resolved_tukey_alpha), int(grid_dim),
             int(self.N_cp_sig), int(self.N_cp_orbit),
             self.xp.asarray(groups["binary_perm"],  dtype=np.int32),
@@ -463,6 +464,7 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             int(self.nchannels), int(self.n_rfft_chunk),
             float(self.T_chunk), float(self.dt),
             float(self.T), float(self.t_ref),
+            int(self.backend.TDITypeDict[self.tdi_type]),
             float(self.resolved_tukey_alpha), int(grid_dim),
             int(self.N_cp_sig), int(self.N_cp_orbit),
             np.asarray(groups["binary_perm"],  dtype=np.int32),
