@@ -19,6 +19,7 @@ project(fastlisaresponse VERSION ${SKBUILD_PROJECT_VERSION} LANGUAGES CXX Fortra
 # ---- Find required dependencies ----
 find_package(Python COMPONENTS Interpreter Development.Module NumPy REQUIRED)
 find_package(pybind11 CONFIG)
+find_package(LISAanalysistools REQUIRED)
 
 # This line defines the install directory variables
 include(GNUInstallDirs)

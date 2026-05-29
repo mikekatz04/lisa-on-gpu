@@ -158,7 +158,6 @@ get_lapacke()
 
 # II. Declare the CPU backend
 if(FASTLISA_WITH_CPU)
-
   add_custom_command(
     OUTPUT "LISAResponse.cxx"
     COMMENT "Copy LISAResponse.cu to LISAResponse.cxx"
@@ -167,33 +166,26 @@ if(FASTLISA_WITH_CPU)
     DEPENDS "LISAResponse.cu"
     VERBATIM)
 
-  add_custom_command(
-    OUTPUT "Detector.cxx"
-    COMMENT "Copy Detector.cu to Detector.cxx"
-    COMMAND ${CMAKE_COMMAND} -E copy "${LISATOOLS_DIR}/cutils/Detector.cu"
-            "${CMAKE_CURRENT_BINARY_DIR}/Detector.cxx"
-    DEPENDS "${LISATOOLS_DIR}/cutils/Detector.cu"
-    VERBATIM)
-
-  if(NOT EXISTS "${LISATOOLS_DIR}/cutils/binding.hpp")
-    message(FATAL_ERROR "${LISATOOLS_DIR}/cutils/binding.hpp does not exist.")
-  endif()
-
-  add_library(fastlisaresponse_cpu_response_static STATIC Detector.cxx LISAResponse.cxx)
+  # Removed Detector.cxx from this library to avoid duplicates
+  add_library(fastlisaresponse_cpu_response_static STATIC LISAResponse.cxx)
   apply_cpu_backend_common_options(response fastlisaresponse fastlisaresponse true )
   target_include_directories(fastlisaresponse_cpu_response_static PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})  
-  target_sources(fastlisaresponse_cpu_response_static PUBLIC FILE_SET HEADERS FILES
-                                        LISAResponse.hh)
+  target_sources(fastlisaresponse_cpu_response_static PUBLIC FILE_SET HEADERS FILES LISAResponse.hh)
 
   pybind11_add_module(fastlisaresponse_cpu_responselisa "${LISATOOLS_DIR}/cutils/binding.cxx" binding_flr.cxx)
   apply_cpu_backend_common_options(responselisa fastlisaresponse fastlisaresponse false)
   
-  # Link your target to the imported target name
-  target_link_libraries(fastlisaresponse_cpu_responselisa PUBLIC fastlisaresponse_cpu_response_static)
-  target_include_directories(fastlisaresponse_cpu_responselisa PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})  
-  target_sources(fastlisaresponse_cpu_responselisa PUBLIC FILE_SET HEADERS FILES
-                                          binding_flr.hpp)
+  # Properly link to local code AND the external LISAanalysistools library
+  target_link_libraries(fastlisaresponse_cpu_responselisa 
+                        PUBLIC fastlisaresponse_cpu_response_static
+                        PRIVATE LISAanalysistools::lisaanalysistools_cpu_detector_static)
 
+  target_include_directories(fastlisaresponse_cpu_responselisa PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})  
+  target_sources(fastlisaresponse_cpu_responselisa PUBLIC FILE_SET HEADERS FILES binding_flr.hpp)
+
+  # Set relative RPATH to find libdetector.so in neighbor directory
+  set_target_properties(fastlisaresponse_cpu_responselisa PROPERTIES 
+                        INSTALL_RPATH "$ORIGIN/../lisatools_backend_cpu")
 endif()
 
 # III. Declare the GPU backend
@@ -254,12 +246,11 @@ if(FASTLISA_WITH_CPU)
     DEPENDS "${GBT_DIR}/cutils/Interpolate.cu"
     VERBATIM)
 
-  add_library(fastlisaresponse_cpu_tdionthefly_static STATIC Interpolate.cxx Detector.cxx LISAResponse.cxx TDIonTheFly.cxx)
+  add_library(fastlisaresponse_cpu_tdionthefly_static STATIC Interpolate.cxx LISAResponse.cxx TDIonTheFly.cxx)
   apply_cpu_backend_common_options(tdionthefly fastlisaresponse fastlisaresponse true )
   message(STATUS "GBT_LAPACKE_INCLUDE_DIR: ${GBT_LAPACKE_INCLUDE_DIR}")
+  
   target_include_directories(fastlisaresponse_cpu_tdionthefly_static PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS} ${GBT_LAPACKE_INCLUDE_DIR})  
-  # target_link_libraries(fastlisaresponse_cpu_tdionthefly_static PUBLIC ${LISATOOLS_DETECTOR_STATIC_LIB_CPU})
-  # target_link_directories(fastlisaresponse_cpu_tdionthefly_static PUBLIC ${LISATOOLS_DETECTOR_CPU_DIR})
   target_sources(fastlisaresponse_cpu_tdionthefly_static PUBLIC FILE_SET HEADERS FILES
                                         TDIonTheFly.hh)
   target_link_libraries(fastlisaresponse_cpu_tdionthefly_static LINK_PUBLIC ${GBT_LAPACKE_LIBS}
@@ -268,8 +259,13 @@ if(FASTLISA_WITH_CPU)
   pybind11_add_module(fastlisaresponse_cpu_tdionthefly "${LISATOOLS_DIR}/cutils/binding.cxx" "${GBT_DIR}/cutils/gbt_binding.cxx" binding_flr.cxx binding_tof.cxx)
   apply_cpu_backend_common_options(tdionthefly fastlisaresponse fastlisaresponse false)
   
-  # Link your target to the imported target name
-  target_link_libraries(fastlisaresponse_cpu_tdionthefly PUBLIC fastlisaresponse_cpu_tdionthefly_static)  #  ${LISATOOLS_DETECTOR_STATIC_LIB_CPU})
+  target_link_libraries(fastlisaresponse_cpu_tdionthefly 
+                        PUBLIC fastlisaresponse_cpu_tdionthefly_static
+                        PRIVATE LISAanalysistools::lisaanalysistools_cpu_detector_static)
+
+  set_target_properties(fastlisaresponse_cpu_tdionthefly PROPERTIES 
+                        INSTALL_RPATH "\$ORIGIN/../lisatools_backend_cpu")
+  
   # target_link_directories(fastlisaresponse_cpu_tdionthefly PUBLIC ${LISATOOLS_DETECTOR_CPU_DIR})  
   target_include_directories(fastlisaresponse_cpu_tdionthefly PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS} ${GBT_LAPACKE_INCLUDE_DIR})  
   target_sources(fastlisaresponse_cpu_tdionthefly PUBLIC FILE_SET HEADERS FILES
