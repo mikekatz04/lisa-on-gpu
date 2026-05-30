@@ -2218,20 +2218,124 @@ inline void fast_wdm_inner_heterodyne(
 }
 
 
-// Kernel: dispatches one block per chunk for a single GB source. All
-// per-chunk workspaces live in shared memory (sized by the compile-time
-// maxima FAST_WDM_N_SPARSE_MAX / FAST_WDM_NCHANNELS_MAX). Stays under
-// ~40 KB shared per block. The only heap pointer the kernel needs is
-// ``get_tdi_scratch_all``: one slab of ``get_tdi_scratch_len_per_block``
-// bytes per block, for ``LISATDIonTheFly::get_tdi`` internal scratch.
+// ============================================================================
+// fast_wdm_inner_heterodyne_direct  --  pointwise direct heterodyne path
+// ----------------------------------------------------------------------------
+//
+// Mirrors fast_wdm_inner_heterodyne but skips the per-channel (amp, phase)
+// extract by calling ``get_tdi_Xf_single`` per sparse-time-point directly
+// into per-thread registers. The complex heterodyne factor
+// ``exp(-2*pi*i*f0_grid*tau)`` is applied via complex multiply, matching the
+// established direct pattern in the chunked-het XYZ kernel (where
+// new_extract_amplitude_and_phase reduces to ``slow = conj(M) * exp(-2pi i
+// f0 t)`` for pjump=0 / typical GB).
+//
+// Per-source shared workspace drops from
+//     t_sparse + tdi_amp + tdi_phase + phi_ref + tdi_channels + slow  (~80 KB)
+// to just
+//     slow                                                            (~24 KB)
+// at FAST_WDM_N_SPARSE_MAX=512, NCHANNELS_MAX=3. Sky vectors + link arrays
+// are computed once and passed in.
+// ============================================================================
+template <typename SourceT>
+CUDA_DEVICE
+inline void fast_wdm_inner_heterodyne_direct(
+    cmplx *chunk_fd_out,            // (nchannels * n_rfft_chunk); caller zero-inits
+    SourceT &src,
+    double *params, int bin_i, int carrier_index,
+    double chunk_t_start, double T_chunk,
+    int N_sparse, int log2_N_sparse,
+    int n_rfft_chunk, int nchannels, double tukey_alpha,
+    cmplx *slow_buf,                // (nchannels * N_sparse) -- FFT in/out
+    Vec k_sky, Vec u_sky, Vec v_sky,
+    int *link_sc_rec, int *link_sc_em)
+{
+    const double dt_sparse = T_chunk / (double) N_sparse;
+    const double f0        = params[carrier_index];
+    const double df_chunk  = 1.0 / T_chunk;
+    const int    k_f0      = (int) round(f0 / df_chunk);
+    const double f0_grid   = (double) k_f0 * df_chunk;
+    const int    half_Nsp  = N_sparse / 2;
+    const double scale_X   = 0.5 * dt_sparse;
+
+    double alpha_eff = tukey_alpha;
+    if (alpha_eff == FAST_WDM_TUKEY_ALPHA_AUTO) {
+        alpha_eff = (N_sparse >= 512)
+            ? FAST_WDM_TUKEY_ALPHA_HET_WIDE
+            : FAST_WDM_TUKEY_ALPHA_HET_NARROW;
+    }
+    const double n_taper = (alpha_eff > 0.0)
+        ? 0.5 * alpha_eff * (double) (N_sparse - 1)
+        : 0.0;
+
+    // ---- 1) build slow_buf = conj(tdi(t)) * exp(-2pi i f0_grid tau) * tukey
+    for (int i = THREAD_START_X; i < N_sparse; i += BLOCK_INCR_X) {
+        const double t   = chunk_t_start + (double) i * dt_sparse;
+        const double tau = (double) i * dt_sparse;
+
+        cmplx tdi_tmp[FAST_WDM_NCHANNELS_MAX];
+        src.get_tdi_Xf_single(&tdi_tmp[0], t, params,
+                               k_sky, u_sky, v_sky,
+                               link_sc_rec, link_sc_em, bin_i);
+
+        const double het_phase = -2.0 * M_PI * f0_grid * tau;
+        const cmplx  het_factor(cos(het_phase), sin(het_phase));
+
+        double w = 1.0;
+        if (n_taper > 0.0) {
+            const double di    = (double) i;
+            const double dlast = (double) (N_sparse - 1);
+            if (di < n_taper) {
+                const double xn = di / n_taper;
+                w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
+            } else if (di > dlast - n_taper) {
+                const double xn = (dlast - di) / n_taper;
+                w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
+            }
+        }
+
+        for (int c = 0; c < nchannels; ++c) {
+            cmplx s = gcmplx::conj(tdi_tmp[c]) * het_factor;
+            slow_buf[c * N_sparse + i] = cmplx(s.real() * w, s.imag() * w);
+        }
+    }
+    CUDA_SYNC_THREADS;
+
+    // ---- 2) FFT slow_buf in place, per channel ----------------------------
+    for (int c = 0; c < nchannels; ++c) {
+        wdm_spline_radix2_fft(&slow_buf[c * N_sparse],
+                              N_sparse, log2_N_sparse, /*inverse=*/false);
+        CUDA_SYNC_THREADS;
+    }
+
+    // ---- 3) Scale and place into chunk_fd_out at [k_f0 + fftfreq] --------
+    for (int c = 0; c < nchannels; ++c) {
+        for (int m_idx = THREAD_START_X; m_idx < N_sparse; m_idx += BLOCK_INCR_X) {
+            const int m = (m_idx < half_Nsp) ? m_idx : (m_idx - N_sparse);
+            const int kbin = k_f0 + m;
+            if (kbin >= 0 && kbin < n_rfft_chunk) {
+                const cmplx v = slow_buf[c * N_sparse + m_idx];
+                chunk_fd_out[c * n_rfft_chunk + kbin] =
+                    cmplx(v.real() * scale_X, v.imag() * scale_X);
+            }
+        }
+    }
+    CUDA_SYNC_THREADS;
+}
+
+
+// Kernel: dispatches one block per chunk for a single GB source. Now uses
+// the direct (pointwise get_tdi_Xf_single) inner path -- shared workspace
+// is just slow_buf (~24 KB) plus the small link-spacecraft arrays.
 //
 //   chunk_fd_all          (n_chunks, nchannels, n_rfft_chunk)  zero-init by host
 //   chunk_t_starts        (n_chunks,)
-//   get_tdi_scratch_all   (n_chunks * get_tdi_scratch_len_per_block bytes)
 //
-// NUM_THREADS may be < N_sparse: the FFT helper strides via
-// THREAD_START_X / BLOCK_INCR_X. On CPU GRID_INCR_X = 1 -> the for-loop runs
-// chunks serially.
+// get_tdi_scratch_all / get_tdi_scratch_len_per_block are kept in the
+// signature for Python-binding compat but unused by this kernel
+// (get_tdi_Xf_single does not allocate scratch).
+//
+// NUM_THREADS may be < N_sparse: THREAD_START_X / BLOCK_INCR_X stride.
 CUDA_KERNEL
 inline void fast_wdm_inner_heterodyne_kernel(
     cmplx *chunk_fd_all,            // (n_chunks, nchannels, n_rfft_chunk)
@@ -2245,32 +2349,32 @@ inline void fast_wdm_inner_heterodyne_kernel(
     int     get_tdi_scratch_len_per_block
 )
 {
+    (void) get_tdi_scratch_all;
+    (void) get_tdi_scratch_len_per_block;
+
     GBTDIonTheFly gb(orbits, tdi_config, T, t_ref);
 
-    // Per-block (= per-chunk) shared-memory workspace. Sized at the
-    // compile-time maxima so the kernel JITs once and dispatches against
-    // any (N_sparse, nchannels) pair within the bounds.
-    CUDA_SHARED double t_sparse_buf  [FAST_WDM_N_SPARSE_MAX];
-    CUDA_SHARED double tdi_amp_buf   [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
-    CUDA_SHARED double tdi_phase_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
-    CUDA_SHARED double phi_ref_buf   [FAST_WDM_N_SPARSE_MAX];
-    CUDA_SHARED cmplx  tdi_channels_buf[FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
-    CUDA_SHARED cmplx  slow_buf        [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+    // Per-block shared workspace -- just the FFT staging buffer now.
+    CUDA_SHARED cmplx slow_buf[FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+
+    // Sky vectors + link arrays: per-source, time-independent. Compute once.
+    CUDA_SHARED int link_sc_rec[NLINKS];
+    CUDA_SHARED int link_sc_em [NLINKS];
+    gb.fill_link_arrays(link_sc_rec, link_sc_em);
+
+    Vec k_sky(0.0, 0.0, 0.0), u_sky(0.0, 0.0, 0.0), v_sky(0.0, 0.0, 0.0);
+    gb.get_sky_vectors(&k_sky, &u_sky, &v_sky, params);
+    CUDA_SYNC_THREADS;
 
     for (int j = BLOCK_START_X; j < n_chunks; j += GRID_INCR_X) {
         cmplx *chunk_fd = &chunk_fd_all[j * nchannels * n_rfft_chunk];
-        void  *get_tdi_scratch = (char *) get_tdi_scratch_all
-            + (size_t) j * (size_t) get_tdi_scratch_len_per_block;
 
-        fast_wdm_inner_heterodyne(
-            chunk_fd, &gb, params, bin_i, gb.f0_index,
+        fast_wdm_inner_heterodyne_direct(
+            chunk_fd, gb, params, bin_i, gb.f0_index,
             chunk_t_starts[j], T_chunk,
             N_sparse, log2_N_sparse, n_rfft_chunk, nchannels, tukey_alpha,
-            t_sparse_buf, tdi_amp_buf, tdi_phase_buf, phi_ref_buf,
-            tdi_channels_buf, slow_buf,
-            get_tdi_scratch, get_tdi_scratch_len_per_block,
-            /*orbit_cache=*/nullptr
-        );
+            slow_buf, k_sky, u_sky, v_sky,
+            link_sc_rec, link_sc_em);
         CUDA_SYNC_THREADS;
     }
 }
