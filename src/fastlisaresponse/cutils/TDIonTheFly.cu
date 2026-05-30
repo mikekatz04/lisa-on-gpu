@@ -13,8 +13,17 @@
 // TODO: GET RID OF THIS ??!!!
 #define C_SI 299792458.;
 
+// NUM_THREADS_HERE = blockDim.x for all our CUDA kernels. Should be a
+// power of 2 and a multiple of 32 (warp size). At Nt_sub=256, this also
+// sets the per-thread iteration count for stride loops:
+//   K_PER_THREAD = ceil(Nt_sub / NUM_THREADS_HERE)
+// (64 -> 4 iters/thread, 128 -> 2 iters/thread, 256 -> 1 iter/thread).
+// Larger NUM_THREADS_HERE gives the FFT/iFFT more cooperative parallelism
+// per transform at the cost of per-SM block count (each block holds the
+// same shared mem regardless of thread count). 128 is the empirical
+// sweet spot on A100 for our shared-mem footprint.
 #ifdef __CUDACC__
-#define NUM_THREADS_HERE 64
+#define NUM_THREADS_HERE 128
 #else
 #define NUM_THREADS_HERE 1
 #endif
@@ -3985,11 +3994,12 @@ void wdm_het_get_ll_kernel(
             CUDA_SYNC_THREADS;
 
             // ---- 4) FFT per channel (in place in fd_chunk_buf) ----
+            // Per-channel forward FFT. wdm_spline_radix2_fft ends with a
+            // CUDA_SYNC_THREADS internally, so no inter-channel sync needed.
             for (int c = 0; c < nchannels; ++c) {
                 wdm_spline_radix2_fft(&fd_chunk_buf[c * N_sparse],
                                         N_sparse, log2_N_sparse,
                                         /*inverse=*/false);
-                CUDA_SYNC_THREADS;
             }
             // fd_chunk_buf now holds the chunk-FD; reuse for every m below.
 
@@ -4034,38 +4044,24 @@ void wdm_het_get_ll_kernel(
                 CUDA_SYNC_THREADS;
 
                 // ---- 6) iFFT per channel (in place in layer_buf, length Nt_sub) ----
+                // Per-channel iFFT (FFT helper has its own trailing sync).
                 for (int c = 0; c < nchannels; ++c) {
                     wdm_spline_radix2_fft(&layer_buf[c * Nt_sub],
                                             Nt_sub, log2_Nt_sub,
                                             /*inverse=*/true);
-                    CUDA_SYNC_THREADS;
                 }
 
-                // ---- 7) parity factor (sign + real/imag pick) per (c, n) ----
+                // ---- 7+8) FUSED parity + inner-product accumulator ----
                 //
-                // For layer m and n in [0, Nt_sub):
-                //   parity_even = ((m + n) & 1) == 0
-                //   sign        = ((m + 1) * n) is even ? +1 : -1
-                //   val         = kappa * sign * (parity_even ? z.real() : z.imag())
-                //   (m == 0 or m == Nf are boundary fold cases; we already
-                //    clipped m to the active band which excludes them in the
-                //    typical narrow-band setup, so we treat all m as interior.)
+                // For layer m and n_loc:
+                //   parity_even = ((m + n_loc) & 1) == 0
+                //   sign        = ((m + 1) * n_loc) is even ? +1 : -1
+                //   w_arr[c]    = kappa * sign * (parity_even ? z.real() : z.imag())
+                // We compute w_arr in registers directly from layer_buf and
+                // immediately accumulate against global data/invC -- no
+                // separate write-back to shared memory. Skip n_locs outside
+                // the active time range.
                 const double kappa = 2.0 * sqrt(M_PI * dt) / (double) Nf;
-                for (int n_loc = THREAD_START_X; n_loc < Nt_sub;
-                     n_loc += BLOCK_INCR_X) {
-                    const bool parity_even = (((m + n_loc) & 1) == 0);
-                    const double sign      = ((((m + 1) * n_loc) & 1) == 0)
-                                              ? 1.0 : -1.0;
-                    for (int c = 0; c < nchannels; ++c) {
-                        const cmplx z = layer_buf[c * Nt_sub + n_loc];
-                        const double real_part = parity_even ? z.real() : z.imag();
-                        const double w = kappa * sign * real_part;
-                        layer_buf[c * Nt_sub + n_loc] = cmplx(w, 0.0);
-                    }
-                }
-                CUDA_SYNC_THREADS;
-
-                // ---- 8) inner-product accumulator against global data/invC --
                 const int ind_max_t_excl = ind_min_t + Nt_active;
                 for (int n_loc = keep_lo + THREAD_START_X; n_loc < keep_hi;
                      n_loc += BLOCK_INCR_X) {
@@ -4073,23 +4069,45 @@ void wdm_het_get_ll_kernel(
                     if (n_glob < ind_min_t || n_glob >= ind_max_t_excl) continue;
                     const int n_act = n_glob - ind_min_t;
 
+                    const bool parity_even = (((m + n_loc) & 1) == 0);
+                    const double sign      = ((((m + 1) * n_loc) & 1) == 0)
+                                              ? 1.0 : -1.0;
+                    const double psign     = kappa * sign;
+
                     double w_arr[FAST_WDM_NCHANNELS_MAX] = {0.};
                     double d_arr[FAST_WDM_NCHANNELS_MAX] = {0.};
                     for (int c = 0; c < nchannels; ++c) {
-                        w_arr[c] = layer_buf[c * Nt_sub + n_loc].real();
+                        const cmplx z = layer_buf[c * Nt_sub + n_loc];
+                        const double rp = parity_even ? z.real() : z.imag();
+                        w_arr[c] = psign * rp;
                         const size_t g_d = ((size_t) c * Nf_active + m_act)
                                             * Nt_active + n_act;
                         d_arr[c] = data_d[g_d];
                     }
                     if (tdi_type == TDI_XYZ) {
-                        for (int c1 = 0; c1 < nchannels; ++c1) {
-                            for (int c2 = 0; c2 < nchannels; ++c2) {
+                        // invC is Hermitian (and real): 3 diag + 3 off-diag
+                        // unique reads. Each off-diag pair (c1, c2) with
+                        // c1<c2 contributes BOTH (c1,c2) and (c2,c1) terms.
+                        //   2D->2F: 3 + 3 = 6 reads instead of 9
+                        //   tmp_dh: (c1,c2) + (c2,c1) = d[c1]*w[c2] + d[c2]*w[c1]
+                        //   tmp_hh: w[c1]*w[c2] symmetric -> 2 * w[c1]*w[c2]
+                        for (int c = 0; c < nchannels; ++c) {
+                            const size_t g_inv =
+                                (((size_t) c * nchannels + c)
+                                   * Nf_active + m_act) * Nt_active + n_act;
+                            const double inv = invC[g_inv];
+                            tmp_dh += d_arr[c] * w_arr[c] * inv;
+                            tmp_hh += w_arr[c] * w_arr[c] * inv;
+                        }
+                        for (int c1 = 0; c1 < nchannels - 1; ++c1) {
+                            for (int c2 = c1 + 1; c2 < nchannels; ++c2) {
                                 const size_t g_inv =
                                     (((size_t) c1 * nchannels + c2)
                                        * Nf_active + m_act) * Nt_active + n_act;
                                 const double inv = invC[g_inv];
-                                tmp_dh += d_arr[c1] * w_arr[c2] * inv;
-                                tmp_hh += w_arr[c1] * w_arr[c2] * inv;
+                                tmp_dh += (d_arr[c1] * w_arr[c2]
+                                            + d_arr[c2] * w_arr[c1]) * inv;
+                                tmp_hh += 2.0 * w_arr[c1] * w_arr[c2] * inv;
                             }
                         }
                     } else {
@@ -4270,11 +4288,12 @@ void wdm_het_fill_global_kernel(
             CUDA_SYNC_THREADS;
 
             // ---- 4) FFT length N_sparse per channel (in place) ----
+            // Per-channel forward FFT. wdm_spline_radix2_fft ends with a
+            // CUDA_SYNC_THREADS internally, so no inter-channel sync needed.
             for (int c = 0; c < nchannels; ++c) {
                 wdm_spline_radix2_fft(&fd_chunk_buf[c * N_sparse],
                                         N_sparse, log2_N_sparse,
                                         /*inverse=*/false);
-                CUDA_SYNC_THREADS;
             }
             // fd_chunk_buf now holds the chunk-FD; reuse below.
 
@@ -4306,11 +4325,11 @@ void wdm_het_fill_global_kernel(
                 CUDA_SYNC_THREADS;
 
                 // ---- 6) iFFT length Nt_sub per channel (in place in layer_buf) ----
+                // Per-channel iFFT (FFT helper has its own trailing sync).
                 for (int c = 0; c < nchannels; ++c) {
                     wdm_spline_radix2_fft(&layer_buf[c * Nt_sub],
                                             Nt_sub, log2_Nt_sub,
                                             /*inverse=*/true);
-                    CUDA_SYNC_THREADS;
                 }
 
                 // ---- 7) parity factor + atomicAdd into template_fill ----
@@ -4512,11 +4531,11 @@ void wdm_het_swap_ll_kernel(
                 fd_chunk_buf_a[idx] = s;
             }
             CUDA_SYNC_THREADS;
+            // Per-channel forward FFT for ADD (helper has trailing sync).
             for (int c = 0; c < nchannels; ++c) {
                 wdm_spline_radix2_fft(&fd_chunk_buf_a[c * N_sparse],
                                         N_sparse, log2_N_sparse,
                                         /*inverse=*/false);
-                CUDA_SYNC_THREADS;
             }
 
             // ---- Build REM chunk-FD into fd_chunk_buf_r ----
@@ -4564,11 +4583,11 @@ void wdm_het_swap_ll_kernel(
                 fd_chunk_buf_r[idx] = s;
             }
             CUDA_SYNC_THREADS;
+            // Per-channel forward FFT for REM (helper has trailing sync).
             for (int c = 0; c < nchannels; ++c) {
                 wdm_spline_radix2_fft(&fd_chunk_buf_r[c * N_sparse],
                                         N_sparse, log2_N_sparse,
                                         /*inverse=*/false);
-                CUDA_SYNC_THREADS;
             }
 
             // ============================================================
@@ -4604,11 +4623,11 @@ void wdm_het_swap_ll_kernel(
                     }
                 }
                 CUDA_SYNC_THREADS;
+                // Per-channel iFFT (FFT helper has its own trailing sync).
                 for (int c = 0; c < nchannels; ++c) {
                     wdm_spline_radix2_fft(&layer_buf[c * Nt_sub],
                                             Nt_sub, log2_Nt_sub,
                                             /*inverse=*/true);
-                    CUDA_SYNC_THREADS;
                 }
                 double w_add_reg[FAST_WDM_NCHANNELS_MAX * K_MAX_REG];
                 {
@@ -4645,11 +4664,11 @@ void wdm_het_swap_ll_kernel(
                     }
                 }
                 CUDA_SYNC_THREADS;
+                // Per-channel iFFT (FFT helper has its own trailing sync).
                 for (int c = 0; c < nchannels; ++c) {
                     wdm_spline_radix2_fft(&layer_buf[c * Nt_sub],
                                             Nt_sub, log2_Nt_sub,
                                             /*inverse=*/true);
-                    CUDA_SYNC_THREADS;
                 }
 
                 // ---- Accumulate 5 partials using w_add_reg + freshly-parity'd w_r ----
@@ -4677,18 +4696,36 @@ void wdm_het_swap_ll_kernel(
                                 d_arr[c] = data_d[g_d];
                             }
                             if (tdi_type == TDI_XYZ) {
-                                for (int c1 = 0; c1 < nchannels; ++c1) {
-                                    for (int c2 = 0; c2 < nchannels; ++c2) {
+                                // Symmetric invC: 3 diag + 3 off-diag reads.
+                                // tmp_ar is non-symmetric in (a, r) so we
+                                // sum both (c1,c2) and (c2,c1) contributions.
+                                for (int c = 0; c < nchannels; ++c) {
+                                    const size_t g_inv =
+                                        (((size_t) c * nchannels + c)
+                                          * Nf_active + m_act)
+                                          * Nt_active + n_act;
+                                    const double inv = invC[g_inv];
+                                    tmp_dh_a += d_arr[c]   * w_a_arr[c] * inv;
+                                    tmp_dh_r += d_arr[c]   * w_r_arr[c] * inv;
+                                    tmp_aa   += w_a_arr[c] * w_a_arr[c] * inv;
+                                    tmp_rr   += w_r_arr[c] * w_r_arr[c] * inv;
+                                    tmp_ar   += w_a_arr[c] * w_r_arr[c] * inv;
+                                }
+                                for (int c1 = 0; c1 < nchannels - 1; ++c1) {
+                                    for (int c2 = c1 + 1; c2 < nchannels; ++c2) {
                                         const size_t g_inv =
                                             (((size_t) c1 * nchannels + c2)
                                               * Nf_active + m_act)
                                               * Nt_active + n_act;
                                         const double inv = invC[g_inv];
-                                        tmp_dh_a += d_arr[c1]   * w_a_arr[c2] * inv;
-                                        tmp_dh_r += d_arr[c1]   * w_r_arr[c2] * inv;
-                                        tmp_aa   += w_a_arr[c1] * w_a_arr[c2] * inv;
-                                        tmp_rr   += w_r_arr[c1] * w_r_arr[c2] * inv;
-                                        tmp_ar   += w_a_arr[c1] * w_r_arr[c2] * inv;
+                                        tmp_dh_a += (d_arr[c1]   * w_a_arr[c2]
+                                                      + d_arr[c2]   * w_a_arr[c1]) * inv;
+                                        tmp_dh_r += (d_arr[c1]   * w_r_arr[c2]
+                                                      + d_arr[c2]   * w_r_arr[c1]) * inv;
+                                        tmp_aa   += 2.0 * w_a_arr[c1] * w_a_arr[c2] * inv;
+                                        tmp_rr   += 2.0 * w_r_arr[c1] * w_r_arr[c2] * inv;
+                                        tmp_ar   += (w_a_arr[c1] * w_r_arr[c2]
+                                                      + w_a_arr[c2] * w_r_arr[c1]) * inv;
                                     }
                                 }
                             } else {
@@ -4951,12 +4988,11 @@ void wdm_het_get_fstat_ll_kernel(
                 }
                 CUDA_SYNC_THREADS;
 
-                // ---- 3) FFT length N_sparse per channel ----
+                // ---- 3) FFT length N_sparse per channel (helper has trailing sync) ----
                 for (int c = 0; c < nchannels; ++c) {
                     wdm_spline_radix2_fft(&fd_chunk_buf[fi_b][c * N_sparse],
                                             N_sparse, log2_N_sparse,
                                             /*inverse=*/false);
-                    CUDA_SYNC_THREADS;
                 }
             } // end build-FD per filter
             // All 4 chunk-FDs now resident in shared mem; reuse across m below.
@@ -4996,12 +5032,11 @@ void wdm_het_get_fstat_ll_kernel(
                     }
                     CUDA_SYNC_THREADS;
 
-                    // ---- 5) iFFT length Nt_sub per channel (in place in layer_buf) ----
+                    // ---- 5) iFFT length Nt_sub per channel (helper has trailing sync) ----
                     for (int c = 0; c < nchannels; ++c) {
                         wdm_spline_radix2_fft(&layer_buf[c * Nt_sub],
                                                 Nt_sub, log2_Nt_sub,
                                                 /*inverse=*/true);
-                        CUDA_SYNC_THREADS;
                     }
 
                     // ---- 6) parity factor; stage w_i[c, n_loc] in regs ----
@@ -5042,18 +5077,36 @@ void wdm_het_get_fstat_ll_kernel(
                             for (int fi = 0; fi < N_FILTERS; ++fi) {
                                 double sum_dh = 0.0;
                                 if (tdi_type == TDI_XYZ) {
-                                    for (int c1 = 0; c1 < nchannels; ++c1) {
-                                        for (int c2 = 0; c2 < nchannels; ++c2) {
+                                    // Symmetric invC: 3 diag + 3 off-diag reads.
+                                    for (int c = 0; c < nchannels; ++c) {
+                                        const size_t g_inv =
+                                            (((size_t) c * nchannels + c)
+                                              * Nf_active + m_act)
+                                              * Nt_active + n_act;
+                                        const double inv = invC[g_inv];
+                                        const double w_i =
+                                            w_basis_reg[(fi * nchannels + c)
+                                                          * K_MAX_REG
+                                                          + k_idx_reg];
+                                        sum_dh += d_arr[c] * w_i * inv;
+                                    }
+                                    for (int c1 = 0; c1 < nchannels - 1; ++c1) {
+                                        for (int c2 = c1 + 1; c2 < nchannels; ++c2) {
                                             const size_t g_inv =
                                                 (((size_t) c1 * nchannels + c2)
                                                   * Nf_active + m_act)
                                                   * Nt_active + n_act;
                                             const double inv = invC[g_inv];
-                                            const double w_i =
+                                            const double w_c1 =
+                                                w_basis_reg[(fi * nchannels + c1)
+                                                              * K_MAX_REG
+                                                              + k_idx_reg];
+                                            const double w_c2 =
                                                 w_basis_reg[(fi * nchannels + c2)
                                                               * K_MAX_REG
                                                               + k_idx_reg];
-                                            sum_dh += d_arr[c1] * w_i * inv;
+                                            sum_dh += (d_arr[c1] * w_c2
+                                                        + d_arr[c2] * w_c1) * inv;
                                         }
                                     }
                                 } else {
@@ -5076,22 +5129,51 @@ void wdm_het_get_fstat_ll_kernel(
                                 for (int fj = fi; fj < N_FILTERS; ++fj) {
                                     double sum_hh = 0.0;
                                     if (tdi_type == TDI_XYZ) {
-                                        for (int c1 = 0; c1 < nchannels; ++c1) {
-                                            for (int c2 = 0; c2 < nchannels; ++c2) {
+                                        // Symmetric invC. Note: w_i (filter fi)
+                                        // and w_j (filter fj) are NOT
+                                        // interchangeable when fi != fj, so
+                                        // off-diag terms sum both orderings.
+                                        for (int c = 0; c < nchannels; ++c) {
+                                            const size_t g_inv =
+                                                (((size_t) c * nchannels + c)
+                                                  * Nf_active + m_act)
+                                                  * Nt_active + n_act;
+                                            const double inv = invC[g_inv];
+                                            const double w_i =
+                                                w_basis_reg[(fi * nchannels + c)
+                                                              * K_MAX_REG
+                                                              + k_idx_reg];
+                                            const double w_j =
+                                                w_basis_reg[(fj * nchannels + c)
+                                                              * K_MAX_REG
+                                                              + k_idx_reg];
+                                            sum_hh += w_i * w_j * inv;
+                                        }
+                                        for (int c1 = 0; c1 < nchannels - 1; ++c1) {
+                                            for (int c2 = c1 + 1; c2 < nchannels; ++c2) {
                                                 const size_t g_inv =
                                                     (((size_t) c1 * nchannels + c2)
                                                       * Nf_active + m_act)
                                                       * Nt_active + n_act;
                                                 const double inv = invC[g_inv];
-                                                const double w_i =
+                                                const double w_i_c1 =
                                                     w_basis_reg[(fi * nchannels + c1)
                                                                   * K_MAX_REG
                                                                   + k_idx_reg];
-                                                const double w_j =
+                                                const double w_i_c2 =
+                                                    w_basis_reg[(fi * nchannels + c2)
+                                                                  * K_MAX_REG
+                                                                  + k_idx_reg];
+                                                const double w_j_c1 =
+                                                    w_basis_reg[(fj * nchannels + c1)
+                                                                  * K_MAX_REG
+                                                                  + k_idx_reg];
+                                                const double w_j_c2 =
                                                     w_basis_reg[(fj * nchannels + c2)
                                                                   * K_MAX_REG
                                                                   + k_idx_reg];
-                                                sum_hh += w_i * w_j * inv;
+                                                sum_hh += (w_i_c1 * w_j_c2
+                                                            + w_i_c2 * w_j_c1) * inv;
                                             }
                                         }
                                     } else {
