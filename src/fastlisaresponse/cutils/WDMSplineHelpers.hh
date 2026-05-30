@@ -543,7 +543,6 @@ constexpr size_t wdm_cufftdx_max_scratch() {
     s = std::max(s, wdm_cufftdx_fft_scratch<128>::value);
     s = std::max(s, wdm_cufftdx_fft_scratch<256>::value);
     s = std::max(s, wdm_cufftdx_fft_scratch<512>::value);
-    s = std::max(s, wdm_cufftdx_fft_scratch<1024>::value);
     return s;
 }
 
@@ -585,7 +584,7 @@ inline void wdm_fft_dispatch(cmplx *a, int N, int log2N, bool inverse,
             else         cufftdx_block_fft<512, false>(a, fft_scratch);
             return;
         default:
-            break;  // fall through to radix-2 fallback
+            break;  // N=1024 and larger fall through to radix-2 fallback
     }
 #endif
     (void) fft_scratch;

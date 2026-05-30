@@ -696,7 +696,7 @@ class GBWDMComputations(FastLISAResponseParallelModule):
                         convert_to_ra_dec: bool = True,
                         data_index=None, factors=None,
                         grid_dim: int = 0,
-                        m_band_half_width: int = 3):
+                        m_band_half_width: int = 1):
         """Scatter per-source chunked-heterodyne WDM templates into a global buffer.
 
         Argument order matches the other ``*_wdm`` methods on this
