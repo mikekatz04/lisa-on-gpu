@@ -64,6 +64,7 @@ echo "[build_and_run] CUDA build via ${NVCC} (-arch=${SM_ARCH})"
     "${DET_SRC}" \
     "${LRP_SRC}" \
     "${INT_SRC}" \
+    -lcusparse -lcublas -lcusolver -lcufft \
     ${LAPACK_LDLIBS} \
     -o "${BIN}"
 

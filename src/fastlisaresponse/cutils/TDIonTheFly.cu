@@ -1553,6 +1553,17 @@ CUDA_SYNC_THREADS;
 #define FAST_WDM_NT_SUB_MAX  4096
 #endif
 
+// Upper bound on the number of thread-strided iterations any per-thread
+// register array sees when sweeping [0, Nt_sub) at blockDim.x =
+// NUM_THREADS_HERE. Compile-time so it can size constexpr arrays.
+//   GPU: ceil(256 / 64) = 4   -> arrays stay in registers
+//   CPU: ceil(4096 / 1) = 4096 (CPU has one virtual thread iterating fully)
+// The previous formula ``FAST_WDM_NT_SUB_MAX / FAST_WDM_NCHANNELS_MAX``
+// produced 85 on GPU which spilled the register arrays to local memory
+// (the divisor should be the thread stride, not channel count).
+#define FAST_WDM_K_PER_THREAD_MAX \
+    ((FAST_WDM_NT_SUB_MAX + NUM_THREADS_HERE - 1) / NUM_THREADS_HERE)
+
 // Source-signal spline cache (within-(chunk, binary) optimization).
 // Selected at RUNTIME per kernel call via the ``N_cp_sig`` parameter:
 //   N_cp_sig <= 0  -> direct path: source->get_tdi at all N_sparse points.
@@ -4034,8 +4045,7 @@ void wdm_het_get_ll_kernel(
                 for (int c = 0; c < nchannels; ++c) {
                     // Per-thread register staging: at blockDim.x = 64 and
                     // Nt_sub = 256, each thread handles 4 k_idx values.
-                    constexpr int K_MAX = FAST_WDM_NT_SUB_MAX
-                                            / FAST_WDM_NCHANNELS_MAX; // upper bound
+                    constexpr int K_MAX = FAST_WDM_K_PER_THREAD_MAX;
                     cmplx my_stage[K_MAX];
                     int   my_n = 0;
                     for (int k_idx = THREAD_START_X; k_idx < Nt_sub;
@@ -4318,7 +4328,7 @@ void wdm_het_fill_global_kernel(
                 const int    half_Nsp     = N_sparse / 2;
                 const int    fft_offset   = m * half_Nt_sub - half_Nt_sub - k_f0;
                 for (int c = 0; c < nchannels; ++c) {
-                    constexpr int K_MAX = FAST_WDM_NT_SUB_MAX / FAST_WDM_NCHANNELS_MAX;
+                    constexpr int K_MAX = FAST_WDM_K_PER_THREAD_MAX;
                     cmplx my_stage[K_MAX];
                     int   my_n = 0;
                     for (int k_idx = THREAD_START_X; k_idx < Nt_sub;
@@ -4563,7 +4573,7 @@ void wdm_het_swap_ll_kernel(
                 const int    half_Nsp     = N_sparse / 2;
                 const int    fft_offset_a = m * half_Nt_sub - half_Nt_sub - k_f0_a;
                 for (int c = 0; c < nchannels; ++c) {
-                    constexpr int K_MAX = FAST_WDM_NT_SUB_MAX / FAST_WDM_NCHANNELS_MAX;
+                    constexpr int K_MAX = FAST_WDM_K_PER_THREAD_MAX;
                     cmplx my_stage[K_MAX];
                     int   my_n = 0;
                     for (int k_idx = THREAD_START_X; k_idx < Nt_sub;
@@ -4600,8 +4610,7 @@ void wdm_het_swap_ll_kernel(
                 //
                 // After this pass each thread's w_add_reg[c * K_MAX + k] holds
                 // w_add[c, n_loc] for its k-th n_loc in the accumulator stride.
-                constexpr int K_MAX_REG = FAST_WDM_NT_SUB_MAX
-                                            / FAST_WDM_NCHANNELS_MAX;
+                constexpr int K_MAX_REG = FAST_WDM_K_PER_THREAD_MAX;
                 double w_add_reg[FAST_WDM_NCHANNELS_MAX * K_MAX_REG];
                 const double kappa = 2.0 * sqrt(M_PI * dt) / (double) Nf;
                 {
@@ -4685,7 +4694,7 @@ void wdm_het_swap_ll_kernel(
                 // ---- 2d) window + rearrange for layer m, in place ----
                 const int fft_offset_r = m * half_Nt_sub - half_Nt_sub - k_f0_r;
                 for (int c = 0; c < nchannels; ++c) {
-                    constexpr int K_MAX = FAST_WDM_NT_SUB_MAX / FAST_WDM_NCHANNELS_MAX;
+                    constexpr int K_MAX = FAST_WDM_K_PER_THREAD_MAX;
                     cmplx my_stage[K_MAX];
                     int   my_n = 0;
                     for (int k_idx = THREAD_START_X; k_idx < Nt_sub;
@@ -4948,8 +4957,7 @@ void wdm_het_get_fstat_ll_kernel(
                 // Per-thread storage for the 4 basis WDM coefs at this
                 // (chunk, m_layer) and the thread's stride-owned n_loc values.
                 //   w_basis_reg[filter_i * nchannels * K_MAX + c * K_MAX + k]
-                constexpr int K_MAX_REG = FAST_WDM_NT_SUB_MAX
-                                            / FAST_WDM_NCHANNELS_MAX;
+                constexpr int K_MAX_REG = FAST_WDM_K_PER_THREAD_MAX;
                 double w_basis_reg[N_FILTERS * FAST_WDM_NCHANNELS_MAX * K_MAX_REG];
 
                 // Build each of the 4 basis waveforms in turn.
@@ -5028,8 +5036,7 @@ void wdm_het_get_fstat_ll_kernel(
                     const int    half_Nsp     = N_sparse / 2;
                     const int    fft_offset   = m * half_Nt_sub - half_Nt_sub - k_f0;
                     for (int c = 0; c < nchannels; ++c) {
-                        constexpr int K_MAX = FAST_WDM_NT_SUB_MAX
-                                                / FAST_WDM_NCHANNELS_MAX;
+                        constexpr int K_MAX = FAST_WDM_K_PER_THREAD_MAX;
                         cmplx my_stage[K_MAX];
                         int   my_n = 0;
                         for (int k_idx = THREAD_START_X; k_idx < Nt_sub;
@@ -11564,7 +11571,11 @@ static void wdm_het_fill_global_impl(
     // launch); default = num_bin (one block per binary).
     (void) N_cp_sig; (void) N_cp_orbit;
 #ifdef __CUDACC__
-    const int gd_x = (grid_dim > 0) ? grid_dim : num_bin;
+    // One binary per block on grid.X (always). The grid_dim arg is
+    // vestigial -- kept in the signature for ABI stability with the
+    // older callers, but the kernel does not grid-stride over binaries.
+    (void) grid_dim;
+    const int gd_x = num_bin;
     // Shared-mem layout (must match wdm_het_fill_global_kernel):
     //   tdi_channel_buf[nchannels * Nt_sub] cmplx
     // (no per-thread partials -- fill_global writes directly via atomicAdd.
@@ -11642,7 +11653,11 @@ static void wdm_het_get_ll_impl(
     (void) binary_perm; (void) group_starts; (void) group_ends;
     (void) group_m_lo; (void) group_m_hi; (void) n_groups;
 #ifdef __CUDACC__
-    const int gd_x = (grid_dim > 0) ? grid_dim : num_bin;
+    // One binary per block on grid.X (always). The grid_dim arg is
+    // vestigial -- kept in the signature for ABI stability with the
+    // older callers, but the kernel does not grid-stride over binaries.
+    (void) grid_dim;
+    const int gd_x = num_bin;
     // Shared-mem layout (must match wdm_het_get_ll_kernel):
     //   tdi_channel_buf[nchannels * Nt_sub] cmplx
     //   partial_dh     [blockDim.x]         double
@@ -11719,7 +11734,11 @@ static void wdm_het_swap_ll_impl(
     (void) group_m_lo; (void) group_m_hi; (void) n_groups;
     (void) pair_m_lo_b; (void) pair_m_hi_b;
 #ifdef __CUDACC__
-    const int gd_x = (grid_dim > 0) ? grid_dim : num_bin;
+    // One binary per block on grid.X (always). The grid_dim arg is
+    // vestigial -- kept in the signature for ABI stability with the
+    // older callers, but the kernel does not grid-stride over binaries.
+    (void) grid_dim;
+    const int gd_x = num_bin;
     // Shared-mem layout (must match wdm_het_swap_ll_kernel):
     //   tdi_channel_buf[nchannels * Nt_sub] cmplx
     //   5 * blockDim.x doubles (dh_a, dh_r, aa, rr, ar partial-sum buffers)
@@ -11791,7 +11810,11 @@ static void wdm_het_get_fstat_ll_impl(
     int m_band_half_width)
 {
 #ifdef __CUDACC__
-    const int gd_x = (grid_dim > 0) ? grid_dim : num_bin;
+    // One binary per block on grid.X (always). The grid_dim arg is
+    // vestigial -- kept in the signature for ABI stability with the
+    // older callers, but the kernel does not grid-stride over binaries.
+    (void) grid_dim;
+    const int gd_x = num_bin;
     // Shared-mem layout (must match wdm_het_get_fstat_ll_kernel):
     //   tdi_channel_buf[nchannels * Nt_sub] cmplx
     //   partial_N      [ 4 * blockDim.x]    double  (4 basis filters)
