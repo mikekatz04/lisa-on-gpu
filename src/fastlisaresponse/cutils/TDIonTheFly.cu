@@ -3839,41 +3839,44 @@ void wdm_het_get_ll_kernel(
     (void) Nt;  // unused in get_ll (kept for layout parity with the OLD kernel)
 
     // Dynamic shared-memory layout (set by ``shared_bytes`` at kernel launch).
-    // Per (chunk, m_layer) we reuse ``tdi_channel_buf`` for: heterodyned slow
-    // signal -> FFT -> windowed iFFT input -> iFFT -> WDM coefficients. The
-    // FFT is length N_sparse, the iFFT is length Nt_sub; today we require
-    // N_sparse == Nt_sub (the chunk-FD indexing in step 5 wraps to N_sparse
-    // and the FFT and iFFT both stride at ``c * Nt_sub``).
+    // Two cmplx buffers per (chunk, binary):
     //
-    //   tdi_channel_buf[nchannels * Nt_sub] cmplx  (~12 KB at Nt_sub=256)
-    //   partial_dh     [blockDim.x]         double (~ 0.5 KB at blockDim.x=64)
-    //   partial_hh     [blockDim.x]         double
+    //   fd_chunk_buf   [nchannels * N_sparse] cmplx  -- HOLDS the chunk-FD
+    //                                                   (TD build -> heterodyne
+    //                                                   -> Tukey -> FFT, done
+    //                                                   ONCE per chunk).
+    //   layer_buf      [nchannels * Nt_sub]   cmplx  -- per-m_layer scratch
+    //                                                   (window+rearrange ->
+    //                                                   iFFT -> parity ->
+    //                                                   accumulate).
+    //   partial_dh     [blockDim.x]           double
+    //   partial_hh     [blockDim.x]           double
     //
-    // Total ~13 KB; well under the 48 KB default on A100. The sparse time
-    // grid is computed on the fly inside the get_tdi_Xf_single loop, so we
-    // do not need a separate ``t_arr_buf`` slot.
+    // At Nt_sub=N_sparse=256, total ~25 KB (well under 48 KB default on A100).
+    // The chunk-FD is computed ONCE per chunk and reused for every m_layer in
+    // the binary's band -- previously we did the full TD-build+FFT per m,
+    // wasting (m_band_width - 1) x n_chunks worth of FFT work per binary.
     //
-    // TODO(N_sparse != Nt_sub): allow distinct forward-FFT (N_sparse) and
-    // inverse-FFT (Nt_sub) widths while reusing a single buffer sized at
-    // ``max(N_sparse, Nt_sub)``. Today the per-channel stride is hard-wired
-    // at ``c * Nt_sub`` (which matches ``c * N_sparse`` only when the two
-    // are equal). Generalising would mean: size buf at ``nchannels *
-    // max(N_sparse, Nt_sub)``, stride writes at ``c * N_sparse`` through
-    // step 4 (FFT), step 5's permutation reads from ``c * N_sparse`` and
-    // writes ``c * Nt_sub``, then step 6 (iFFT) and downstream stride at
-    // ``c * Nt_sub``. Useful when we want a finer chunk-FD bin spacing
-    // (larger N_sparse) than the WDM time grid (Nt_sub) supports.
+    // N_sparse and Nt_sub may differ: fd_chunk_buf is sized by N_sparse
+    // (forward-FFT length) and layer_buf is sized by Nt_sub (iFFT length).
+    // Step 5 maps from one to the other -- bins of the wider layer that
+    // fall outside the narrower FD window get zero-filled by the
+    // ``if (fft_bin >= -half_Nsp && fft_bin < half_Nsp)`` guard. Useful
+    // when a narrowband source only needs a smaller chunk-FD window.
 #ifdef __CUDACC__
     extern CUDA_SHARED char shared_mem[];
-    cmplx  *tdi_channel_buf = (cmplx *) shared_mem;
-    double *partial_dh      = (double *) &tdi_channel_buf[(size_t) nchannels * Nt_sub];
+    cmplx  *fd_chunk_buf    = (cmplx *) shared_mem;
+    cmplx  *layer_buf       = &fd_chunk_buf[(size_t) nchannels * N_sparse];
+    double *partial_dh      = (double *) &layer_buf[(size_t) nchannels * Nt_sub];
     double *partial_hh      = &partial_dh[NUM_THREADS_HERE];
 #else
     // CPU stubs: stack arrays sized at the compile-time maxima.
-    cmplx  tdi_channel_buf_cpu[FAST_WDM_NCHANNELS_MAX * FAST_WDM_NT_SUB_MAX];
-    double partial_dh_cpu     [1];
-    double partial_hh_cpu     [1];
-    cmplx  *tdi_channel_buf = tdi_channel_buf_cpu;
+    cmplx  fd_chunk_buf_cpu [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+    cmplx  layer_buf_cpu    [FAST_WDM_NCHANNELS_MAX * FAST_WDM_NT_SUB_MAX];
+    double partial_dh_cpu   [1];
+    double partial_hh_cpu   [1];
+    cmplx  *fd_chunk_buf    = fd_chunk_buf_cpu;
+    cmplx  *layer_buf       = layer_buf_cpu;
     double *partial_dh      = partial_dh_cpu;
     double *partial_hh      = partial_hh_cpu;
 #endif
@@ -3925,157 +3928,114 @@ void wdm_het_get_ll_kernel(
             const double chunk_t0    = chunk_t_starts[j];
             const double dt_sparse   = T_chunk / (double) N_sparse;
 
-            // Per m_layer in this binary's band:
-            //   1. tdi_channel(t) computed for all (c, i) into tdi_channel_buf
-            //   2. heterodyne in time domain: tdi_channel(t) *= exp(-i 2pi f0 t)
-            //   3. Tukey window (chunk edges only)
-            //   4. FFT length N_sparse per channel  (in place)
-            //   5. window + rearrange for layer m  (in-place via per-thread
-            //      register stage; each thread reads exactly one source bin
-            //      and writes exactly one dest bin, then sync)
-            //   6. iFFT length Nt_sub per channel  (in place)
-            //   7. parity factor -> WDM coefficient per (c, n_loc)
-            //   8. per-thread inner-product against data_d / invC from global
+            // ============================================================
+            // Steps 1-4 are CHUNK-LEVEL: TD-build -> heterodyne -> Tukey
+            // -> FFT into fd_chunk_buf. They do NOT depend on m, so we
+            // compute them ONCE per chunk and reuse across all m_layers.
+            // ============================================================
+
+            // ---- 1) compute tdi_channel(t) into fd_chunk_buf ----
+            // Thread-stride over i; compute t inline as a linear ramp.
+            // Writes raw complex TDI values into fd_chunk_buf with layout
+            // [c * N_sparse + i].
+            for (int i = THREAD_START_X; i < N_sparse; i += BLOCK_INCR_X) {
+                const double t = chunk_t0 + (double) i * dt_sparse;
+                cmplx tdi_tmp[3];
+                src.get_tdi_Xf_single(&tdi_tmp[0], t, params,
+                                      k_sky, u_sky, v_sky,
+                                      link_sc_rec, link_sc_em, bin_i);
+                for (int c = 0; c < nchannels; ++c)
+                    fd_chunk_buf[c * N_sparse + i] = tdi_tmp[c];
+            }
+            CUDA_SYNC_THREADS;
+
+            // ---- 2) time-domain heterodyne + 3) Tukey window (in place) ----
+            // See per-step derivation comments below the loop.
+            const double n_taper = (tukey_alpha > 0.0)
+                ? 0.5 * tukey_alpha * (double) (N_sparse - 1)
+                : 0.0;
+            for (int idx = THREAD_START_X; idx < nchannels * N_sparse;
+                 idx += BLOCK_INCR_X) {
+                const int c = idx / N_sparse;
+                const int i = idx - c * N_sparse;
+                const double tau = (double) i * dt_sparse;
+                // Original fast_wdm_inner_heterodyne routes raw cmplx TDI
+                // through new_extract_amplitude_and_phase to produce
+                //   slow = conj(M) * exp(I*pjump) * exp(-I 2pi f0 t)
+                // For typical GB pjump=0; replicate by conjugating the
+                // get_tdi_Xf output before the heterodyne multiply.
+                const double het_phase = -2.0 * M_PI * f0_grid * tau;
+                const cmplx  het_factor(cos(het_phase), sin(het_phase));
+                cmplx s = gcmplx::conj(fd_chunk_buf[idx]) * het_factor;
+                if (n_taper > 0.0) {
+                    double w = 1.0;
+                    const double di    = (double) i;
+                    const double dlast = (double) (N_sparse - 1);
+                    if (di < n_taper) {
+                        const double xn = di / n_taper;
+                        w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
+                    } else if (di > dlast - n_taper) {
+                        const double xn = (dlast - di) / n_taper;
+                        w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
+                    }
+                    s = cmplx(s.real() * w, s.imag() * w);
+                }
+                fd_chunk_buf[idx] = s;
+            }
+            CUDA_SYNC_THREADS;
+
+            // ---- 4) FFT per channel (in place in fd_chunk_buf) ----
+            for (int c = 0; c < nchannels; ++c) {
+                wdm_spline_radix2_fft(&fd_chunk_buf[c * N_sparse],
+                                        N_sparse, log2_N_sparse,
+                                        /*inverse=*/false);
+                CUDA_SYNC_THREADS;
+            }
+            // fd_chunk_buf now holds the chunk-FD; reuse for every m below.
+
+            // ============================================================
+            // Steps 5-8 are PER M_LAYER: read fd_chunk_buf, window/rearrange
+            // into layer_buf, iFFT, parity, accumulate.
+            // ============================================================
+            const double scale_fd     = 0.5 * dt_sparse / dt;
             for (int m = m_lo; m < m_hi; ++m) {
                 const int m_act = m - ind_min_f;
 
-                // ---- 1) compute tdi_channel(t) into tdi_channel_buf ----
-                // Thread-stride over i; compute t inline as a linear ramp
-                // (chunk_t0 + i * dt_sparse) instead of staging a shared
-                // ``t_arr_buf``. Writes the raw complex TDI values into
-                // tdi_channel_buf with layout [c * N_sparse + i].
-                {
-                    for (int i = THREAD_START_X; i < N_sparse;
-                         i += BLOCK_INCR_X) {
-                        const double t = chunk_t0 + (double) i * dt_sparse;
-                        cmplx tdi_tmp[3];
-                        src.get_tdi_Xf_single(&tdi_tmp[0], t, params,
-                                              k_sky, u_sky, v_sky,
-                                              link_sc_rec, link_sc_em, bin_i);
-                        for (int c = 0; c < nchannels; ++c)
-                            tdi_channel_buf[c * N_sparse + i] = tdi_tmp[c];
-                    }
-                    CUDA_SYNC_THREADS;
-                }
-
-                // ---- 2) time-domain heterodyne + 3) Tukey window ----
-                // Tukey alpha-fraction at each end (matches existing
-                // ``fast_wdm_inner_heterodyne`` convention). alpha<=0 = rect.
-                const double n_taper = (tukey_alpha > 0.0)
-                    ? 0.5 * tukey_alpha * (double) (N_sparse - 1)
-                    : 0.0;
-                for (int idx = THREAD_START_X; idx < nchannels * N_sparse;
-                     idx += BLOCK_INCR_X) {
-                    const int c = idx / N_sparse;
-                    const int i = idx - c * N_sparse;
-                    const double tau = (double) i * dt_sparse;
-                    // The original ``fast_wdm_inner_heterodyne`` routes the
-                    // raw complex TDI sample through
-                    // ``new_extract_amplitude_and_phase`` to produce
-                    // ``Dphi = -arg(M) + pjump - remainder(phi_ref, 2pi)``;
-                    // the downstream slow signal is then
-                    //   slow = |M| * exp(I * (Dphi + phi_ref - 2pi f0 t))
-                    //        = conj(M) * exp(I * pjump) * exp(-I 2pi f0 t)
-                    // (using `phi_ref - remainder(phi_ref, 2pi) = 2pi*int`
-                    // which contributes a factor of 1). For typical GB
-                    // signals pjump = 0 (no amplitude sign flips), so the
-                    // net slow signal is just ``conj(M) * exp(-I 2pi f0 t)``.
-                    // We replicate that here directly -- conjugating the raw
-                    // get_tdi_Xf output before the heterodyne multiplication.
-                    const double het_phase = -2.0 * M_PI * f0_grid * tau;
-                    const cmplx  het_factor(cos(het_phase), sin(het_phase));
-                    cmplx s = gcmplx::conj(tdi_channel_buf[idx]) * het_factor;
-                    // Tukey window
-                    if (n_taper > 0.0) {
-                        double w = 1.0;
-                        const double di    = (double) i;
-                        const double dlast = (double) (N_sparse - 1);
-                        if (di < n_taper) {
-                            const double xn = di / n_taper;
-                            w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
-                        } else if (di > dlast - n_taper) {
-                            const double xn = (dlast - di) / n_taper;
-                            w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
-                        }
-                        s = cmplx(s.real() * w, s.imag() * w);
-                    }
-                    tdi_channel_buf[idx] = s;
-                }
-                CUDA_SYNC_THREADS;
-
-                // ---- 4) FFT per channel (in place, length N_sparse) ----
-                for (int c = 0; c < nchannels; ++c) {
-                    wdm_spline_radix2_fft(&tdi_channel_buf[c * Nt_sub],
-                                            N_sparse, log2_N_sparse,
-                                            /*inverse=*/false);
-                    CUDA_SYNC_THREADS;
-                }
-
-                // ---- 5) window + rearrange for layer m, in place ----
+                // ---- 5) window + rearrange for layer m: fd_chunk_buf -> layer_buf ----
                 //
-                // After the FFT, tdi_channel_buf[c, k] holds the FFT output bin
-                // k in fftfreq order: bins [0, N_sparse/2) are positive
-                // frequencies, [N_sparse/2, N_sparse) are negative. The
-                // absolute chunk_fd bin corresponding to FFT bin k is
-                // k_global = k_f0 + (k < N_sparse/2 ? k : k - N_sparse).
+                // Since fd_chunk_buf and layer_buf are separate buffers,
+                // no per-thread register staging is needed -- each thread
+                // reads its source bin from fd_chunk_buf and writes its
+                // destination bin in layer_buf with a single sync at the
+                // end (before iFFT).
                 //
-                // For WDM layer m we want chunk_fd at global bin
-                //   k_global(m, k_idx) = m * (Nt_sub/2) + (k_idx - Nt_sub/2)
-                // for k_idx in [0, Nt_sub). Inverting:
-                //   fft_bin = k_global - k_f0
-                //          = (m * (Nt_sub/2) - k_f0 - Nt_sub/2) + k_idx
-                //   With Nt_sub == N_sparse the wrap is to N_sparse;
-                //   constraint enforced at host-side WDMSettings construction.
-                //
-                // Each thread reads its source bin into a register, syncs,
-                // writes its destination bin -- the map is a permutation +
-                // multiplicative window so there are no read/write races as
-                // long as we sync between the two passes.
-                // Combined heterodyne place + WDM-read scaling:
-                //   chunk_fd  = fft_output * (0.5 * dt_sparse)        // heterodyne
-                //   layer_fd  = chunk_fd / data_dt * wdm_window[k]    // WDM xform
-                // -> applied here as a single factor on the FFT output:
-                //      v *= 0.5 * dt_sparse / dt
-                // The original separated the two scales (place + read);
-                // the inner-product output is identical either way.
-                const double scale_fd     = 0.5 * dt_sparse / dt;
+                // Combined heterodyne-place + WDM-read scaling:
+                //   chunk_fd  = fft_output * (0.5 * dt_sparse)
+                //   layer_fd  = chunk_fd / data_dt * wdm_window[k]
+                // -> applied here as one factor: v *= 0.5 * dt_sparse / dt.
                 const int    half_Nt_sub  = Nt_sub / 2;
                 const int    half_Nsp     = N_sparse / 2;
                 const int    fft_offset   = m * half_Nt_sub - half_Nt_sub - k_f0;
                 for (int c = 0; c < nchannels; ++c) {
-                    // Per-thread register staging: at blockDim.x = 64 and
-                    // Nt_sub = 256, each thread handles 4 k_idx values.
-                    constexpr int K_MAX = FAST_WDM_K_PER_THREAD_MAX;
-                    cmplx my_stage[K_MAX];
-                    int   my_n = 0;
                     for (int k_idx = THREAD_START_X; k_idx < Nt_sub;
                          k_idx += BLOCK_INCR_X) {
                         int fft_bin = fft_offset + k_idx;
                         cmplx v(0.0, 0.0);
                         if (fft_bin >= -half_Nsp && fft_bin < half_Nsp) {
                             int read_bin = (fft_bin + N_sparse) % N_sparse;
-                            v = tdi_channel_buf[c * Nt_sub + read_bin];
-                            // scale by 0.5 * dt_sparse (matches existing
-                            // fast_wdm_inner_heterodyne "scale_X" prefactor)
+                            v = fd_chunk_buf[c * N_sparse + read_bin];
                             v = cmplx(v.real() * scale_fd, v.imag() * scale_fd);
-                            // multiply by WDM window for this bin
                             const double w = wdm_window[k_idx];
                             v = cmplx(v.real() * w, v.imag() * w);
                         }
-                        my_stage[my_n++] = v;
+                        layer_buf[c * Nt_sub + k_idx] = v;
                     }
-                    CUDA_SYNC_THREADS;
-                    my_n = 0;
-                    for (int k_idx = THREAD_START_X; k_idx < Nt_sub;
-                         k_idx += BLOCK_INCR_X) {
-                        tdi_channel_buf[c * Nt_sub + k_idx] = my_stage[my_n++];
-                    }
-                    CUDA_SYNC_THREADS;
                 }
+                CUDA_SYNC_THREADS;
 
-                // ---- 6) iFFT per channel (in place, length Nt_sub) ----
+                // ---- 6) iFFT per channel (in place in layer_buf, length Nt_sub) ----
                 for (int c = 0; c < nchannels; ++c) {
-                    wdm_spline_radix2_fft(&tdi_channel_buf[c * Nt_sub],
+                    wdm_spline_radix2_fft(&layer_buf[c * Nt_sub],
                                             Nt_sub, log2_Nt_sub,
                                             /*inverse=*/true);
                     CUDA_SYNC_THREADS;
@@ -4097,27 +4057,15 @@ void wdm_het_get_ll_kernel(
                     const double sign      = ((((m + 1) * n_loc) & 1) == 0)
                                               ? 1.0 : -1.0;
                     for (int c = 0; c < nchannels; ++c) {
-                        const cmplx z = tdi_channel_buf[c * Nt_sub + n_loc];
+                        const cmplx z = layer_buf[c * Nt_sub + n_loc];
                         const double real_part = parity_even ? z.real() : z.imag();
                         const double w = kappa * sign * real_part;
-                        // Store back into buffer as a real value packed into the
-                        // .real() slot for the per-thread accumulator below.
-                        tdi_channel_buf[c * Nt_sub + n_loc] = cmplx(w, 0.0);
+                        layer_buf[c * Nt_sub + n_loc] = cmplx(w, 0.0);
                     }
                 }
                 CUDA_SYNC_THREADS;
 
                 // ---- 8) inner-product accumulator against global data/invC --
-                //
-                // Each thread takes its n_loc, reads (data, invC) from global
-                // memory at the active-band index (m_act, n_act), accumulates
-                // into the per-thread tmp_dh / tmp_hh.
-                //
-                // Coalesced memory access: adjacent threads have adjacent
-                // n_loc values -> their n_act values are adjacent -> their
-                // data_d / invC reads hit adjacent addresses (cache-line
-                // friendly for the standard (nch, Nf_active, Nt_active)
-                // layout where the last dimension is contiguous).
                 const int ind_max_t_excl = ind_min_t + Nt_active;
                 for (int n_loc = keep_lo + THREAD_START_X; n_loc < keep_hi;
                      n_loc += BLOCK_INCR_X) {
@@ -4128,7 +4076,7 @@ void wdm_het_get_ll_kernel(
                     double w_arr[FAST_WDM_NCHANNELS_MAX] = {0.};
                     double d_arr[FAST_WDM_NCHANNELS_MAX] = {0.};
                     for (int c = 0; c < nchannels; ++c) {
-                        w_arr[c] = tdi_channel_buf[c * Nt_sub + n_loc].real();
+                        w_arr[c] = layer_buf[c * Nt_sub + n_loc].real();
                         const size_t g_d = ((size_t) c * Nf_active + m_act)
                                             * Nt_active + n_act;
                         d_arr[c] = data_d[g_d];
@@ -4228,15 +4176,18 @@ void wdm_het_fill_global_kernel(
     const int Nt = wdm_settings->Nt;
 
     // Dynamic shared-memory layout (set by ``shared_bytes`` at kernel launch):
-    //   tdi_channel_buf[nchannels * Nt_sub] cmplx
-    // (no per-thread partials; fill_global writes via atomicAdd. The sparse
-    // time grid is computed on the fly inside the get_tdi_Xf_single loop.)
+    //   fd_chunk_buf [nchannels * N_sparse] cmplx  -- chunk-FD (built ONCE per chunk)
+    //   layer_buf    [nchannels * Nt_sub]   cmplx  -- per-m_layer scratch
+    // (no per-thread partials; fill_global writes via atomicAdd.)
 #ifdef __CUDACC__
     extern CUDA_SHARED char shared_mem[];
-    cmplx  *tdi_channel_buf = (cmplx *) shared_mem;
+    cmplx  *fd_chunk_buf = (cmplx *) shared_mem;
+    cmplx  *layer_buf    = &fd_chunk_buf[(size_t) nchannels * N_sparse];
 #else
-    cmplx  tdi_channel_buf_cpu[FAST_WDM_NCHANNELS_MAX * FAST_WDM_NT_SUB_MAX];
-    cmplx  *tdi_channel_buf = tdi_channel_buf_cpu;
+    cmplx  fd_chunk_buf_cpu[FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+    cmplx  layer_buf_cpu   [FAST_WDM_NCHANNELS_MAX * FAST_WDM_NT_SUB_MAX];
+    cmplx  *fd_chunk_buf = fd_chunk_buf_cpu;
+    cmplx  *layer_buf    = layer_buf_cpu;
 #endif
 
     const double layer_df = 1.0 / (2.0 * (double) Nf * dt);
@@ -4262,113 +4213,109 @@ void wdm_het_fill_global_kernel(
             const double chunk_t0    = chunk_t_starts[j];
             const double dt_sparse   = T_chunk / (double) N_sparse;
 
-            for (int m = m_lo; m < m_hi; ++m) {
-                // ---- 1) tdi_channel(t) -> tdi_channel_buf ----
-                {
-                    CUDA_SHARED int link_sc_rec[NLINKS];
-                    CUDA_SHARED int link_sc_em [NLINKS];
-                    src.fill_link_arrays(link_sc_rec, link_sc_em);
-                    CUDA_SYNC_THREADS;
-                    Vec k_sky(0.0, 0.0, 0.0);
-                    Vec u_sky(0.0, 0.0, 0.0);
-                    Vec v_sky(0.0, 0.0, 0.0);
-                    src.get_sky_vectors(&k_sky, &u_sky, &v_sky, params);
-                    for (int i = THREAD_START_X; i < N_sparse;
-                         i += BLOCK_INCR_X) {
-                        const double t = chunk_t0 + (double) i * dt_sparse;
-                        cmplx tdi_tmp[3];
-                        src.get_tdi_Xf_single(&tdi_tmp[0], t, params,
-                                              k_sky, u_sky, v_sky,
-                                              link_sc_rec, link_sc_em, bin_i);
-                        for (int c = 0; c < nchannels; ++c)
-                            tdi_channel_buf[c * N_sparse + i] = tdi_tmp[c];
-                    }
-                    CUDA_SYNC_THREADS;
-                }
+            // ============================================================
+            // Steps 1-4 are CHUNK-LEVEL (no m dependence): TD-build,
+            // heterodyne, Tukey, forward FFT into fd_chunk_buf. Compute
+            // ONCE and reuse across every m_layer below.
+            // ============================================================
+            {
+                CUDA_SHARED int link_sc_rec[NLINKS];
+                CUDA_SHARED int link_sc_em [NLINKS];
+                src.fill_link_arrays(link_sc_rec, link_sc_em);
+                CUDA_SYNC_THREADS;
+                Vec k_sky(0.0, 0.0, 0.0);
+                Vec u_sky(0.0, 0.0, 0.0);
+                Vec v_sky(0.0, 0.0, 0.0);
+                src.get_sky_vectors(&k_sky, &u_sky, &v_sky, params);
 
-                // ---- 2) time-domain heterodyne (conj + exp) + 3) Tukey ----
-                const double n_taper = (tukey_alpha > 0.0)
-                    ? 0.5 * tukey_alpha * (double) (N_sparse - 1) : 0.0;
-                for (int idx = THREAD_START_X; idx < nchannels * N_sparse;
-                     idx += BLOCK_INCR_X) {
-                    const int i = idx - (idx / N_sparse) * N_sparse;
-                    const double tau = (double) i * dt_sparse;
-                    const double het_phase = -2.0 * M_PI * f0_grid * tau;
-                    const cmplx  het_factor(cos(het_phase), sin(het_phase));
-                    // conj(M) * exp(-i 2pi f0 t)  (see get_ll comment for derivation)
-                    cmplx s = gcmplx::conj(tdi_channel_buf[idx]) * het_factor;
-                    if (n_taper > 0.0) {
-                        double w = 1.0;
-                        const double di    = (double) i;
-                        const double dlast = (double) (N_sparse - 1);
-                        if (di < n_taper) {
-                            const double xn = di / n_taper;
-                            w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
-                        } else if (di > dlast - n_taper) {
-                            const double xn = (dlast - di) / n_taper;
-                            w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
-                        }
-                        s = cmplx(s.real() * w, s.imag() * w);
-                    }
-                    tdi_channel_buf[idx] = s;
+                // ---- 1) tdi_channel(t) -> fd_chunk_buf ----
+                for (int i = THREAD_START_X; i < N_sparse;
+                     i += BLOCK_INCR_X) {
+                    const double t = chunk_t0 + (double) i * dt_sparse;
+                    cmplx tdi_tmp[3];
+                    src.get_tdi_Xf_single(&tdi_tmp[0], t, params,
+                                          k_sky, u_sky, v_sky,
+                                          link_sc_rec, link_sc_em, bin_i);
+                    for (int c = 0; c < nchannels; ++c)
+                        fd_chunk_buf[c * N_sparse + i] = tdi_tmp[c];
                 }
                 CUDA_SYNC_THREADS;
+            }
 
-                // ---- 4) FFT length N_sparse per channel ----
-                for (int c = 0; c < nchannels; ++c) {
-                    wdm_spline_radix2_fft(&tdi_channel_buf[c * Nt_sub],
-                                            N_sparse, log2_N_sparse,
-                                            /*inverse=*/false);
-                    CUDA_SYNC_THREADS;
+            // ---- 2) heterodyne + 3) Tukey (in place in fd_chunk_buf) ----
+            const double n_taper = (tukey_alpha > 0.0)
+                ? 0.5 * tukey_alpha * (double) (N_sparse - 1) : 0.0;
+            for (int idx = THREAD_START_X; idx < nchannels * N_sparse;
+                 idx += BLOCK_INCR_X) {
+                const int i = idx - (idx / N_sparse) * N_sparse;
+                const double tau = (double) i * dt_sparse;
+                const double het_phase = -2.0 * M_PI * f0_grid * tau;
+                const cmplx  het_factor(cos(het_phase), sin(het_phase));
+                cmplx s = gcmplx::conj(fd_chunk_buf[idx]) * het_factor;
+                if (n_taper > 0.0) {
+                    double w = 1.0;
+                    const double di    = (double) i;
+                    const double dlast = (double) (N_sparse - 1);
+                    if (di < n_taper) {
+                        const double xn = di / n_taper;
+                        w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
+                    } else if (di > dlast - n_taper) {
+                        const double xn = (dlast - di) / n_taper;
+                        w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
+                    }
+                    s = cmplx(s.real() * w, s.imag() * w);
                 }
+                fd_chunk_buf[idx] = s;
+            }
+            CUDA_SYNC_THREADS;
 
-                // ---- 5) window + rearrange for layer m, in place ----
-                const double scale_fd     = 0.5 * dt_sparse / dt;
+            // ---- 4) FFT length N_sparse per channel (in place) ----
+            for (int c = 0; c < nchannels; ++c) {
+                wdm_spline_radix2_fft(&fd_chunk_buf[c * N_sparse],
+                                        N_sparse, log2_N_sparse,
+                                        /*inverse=*/false);
+                CUDA_SYNC_THREADS;
+            }
+            // fd_chunk_buf now holds the chunk-FD; reuse below.
+
+            // ============================================================
+            // Steps 5-7 per m_layer: window+rearrange -> iFFT -> parity
+            //                        -> atomicAdd into template_fill.
+            // ============================================================
+            const double scale_fd     = 0.5 * dt_sparse / dt;
+            for (int m = m_lo; m < m_hi; ++m) {
+                // ---- 5) window + rearrange: fd_chunk_buf -> layer_buf ----
                 const int    half_Nt_sub  = Nt_sub / 2;
                 const int    half_Nsp     = N_sparse / 2;
                 const int    fft_offset   = m * half_Nt_sub - half_Nt_sub - k_f0;
                 for (int c = 0; c < nchannels; ++c) {
-                    constexpr int K_MAX = FAST_WDM_K_PER_THREAD_MAX;
-                    cmplx my_stage[K_MAX];
-                    int   my_n = 0;
                     for (int k_idx = THREAD_START_X; k_idx < Nt_sub;
                          k_idx += BLOCK_INCR_X) {
                         int fft_bin = fft_offset + k_idx;
                         cmplx v(0.0, 0.0);
                         if (fft_bin >= -half_Nsp && fft_bin < half_Nsp) {
                             int read_bin = (fft_bin + N_sparse) % N_sparse;
-                            v = tdi_channel_buf[c * Nt_sub + read_bin];
+                            v = fd_chunk_buf[c * N_sparse + read_bin];
                             v = cmplx(v.real() * scale_fd, v.imag() * scale_fd);
                             const double w = wdm_window[k_idx];
                             v = cmplx(v.real() * w, v.imag() * w);
                         }
-                        my_stage[my_n++] = v;
+                        layer_buf[c * Nt_sub + k_idx] = v;
                     }
-                    CUDA_SYNC_THREADS;
-                    my_n = 0;
-                    for (int k_idx = THREAD_START_X; k_idx < Nt_sub;
-                         k_idx += BLOCK_INCR_X) {
-                        tdi_channel_buf[c * Nt_sub + k_idx] = my_stage[my_n++];
-                    }
-                    CUDA_SYNC_THREADS;
                 }
+                CUDA_SYNC_THREADS;
 
-                // ---- 6) iFFT length Nt_sub per channel ----
+                // ---- 6) iFFT length Nt_sub per channel (in place in layer_buf) ----
                 for (int c = 0; c < nchannels; ++c) {
-                    wdm_spline_radix2_fft(&tdi_channel_buf[c * Nt_sub],
+                    wdm_spline_radix2_fft(&layer_buf[c * Nt_sub],
                                             Nt_sub, log2_Nt_sub,
                                             /*inverse=*/true);
                     CUDA_SYNC_THREADS;
                 }
 
                 // ---- 7) parity factor + atomicAdd into template_fill ----
-                //
-                // Unlike get_ll / swap_ll / fstat (each binary writes to its
-                // own per-binary output slot, so the within-block sequential
-                // chunk loop has no cross-block race), fill_global accumulates
-                // into a SHARED global template_fill -- different binaries
-                // with overlapping (m, n_glob) pixels write to the same cell.
-                // atomicAdd is required regardless of the chunk-grid layout.
+                // atomicAdd required: different binaries with overlapping
+                // (m, n_glob) pixels write to the same global cell.
                 const double kappa = 2.0 * sqrt(M_PI * dt) / (double) Nf;
                 for (int n_loc = keep_lo + THREAD_START_X; n_loc < keep_hi;
                      n_loc += BLOCK_INCR_X) {
@@ -4377,7 +4324,7 @@ void wdm_het_fill_global_kernel(
                     const double sign       = ((((m + 1) * n_loc) & 1) == 0)
                                                 ? 1.0 : -1.0;
                     for (int c = 0; c < nchannels; ++c) {
-                        const cmplx z      = tdi_channel_buf[c * Nt_sub + n_loc];
+                        const cmplx z      = layer_buf[c * Nt_sub + n_loc];
                         const double real_part = parity_even ? z.real() : z.imag();
                         const double w     = factor * kappa * sign * real_part;
                         const size_t dst   = ((size_t) c * Nf + m) * Nt + n_glob;
@@ -4442,23 +4389,33 @@ void wdm_het_swap_ll_kernel(
     const int Nt_active  = wdm_settings->Nt_active;
 
     // Dynamic shared-memory layout (must match shared_bytes at launch):
-    //   tdi_channel_buf[nchannels * Nt_sub] cmplx
+    //   fd_chunk_buf_a [nchannels * N_sparse] cmplx  -- add chunk-FD (built ONCE per chunk)
+    //   fd_chunk_buf_r [nchannels * N_sparse] cmplx  -- rem chunk-FD (built ONCE per chunk)
+    //   layer_buf      [nchannels * Nt_sub]   cmplx  -- per-m scratch (reused for add + rem)
     //   partial_dh_a / partial_dh_r / partial_aa / partial_rr / partial_ar
     //     each [blockDim.x] double
-    // (Sparse time grid is computed inline; no shared ``t_arr_buf`` slot.)
+    // ~38.5 KB at Nt_sub=N_sparse=256, blockDim=64 -- 4 blocks/SM on A100.
+    // The add and rem chunk-FDs are computed ONCE per chunk and reused
+    // for every m_layer in the (union of) bands.
 #ifdef __CUDACC__
     extern CUDA_SHARED char shared_mem[];
-    cmplx  *tdi_channel_buf = (cmplx *) shared_mem;
-    double *partial_dh_a    = (double *) &tdi_channel_buf[(size_t) nchannels * Nt_sub];
+    cmplx  *fd_chunk_buf_a  = (cmplx *) shared_mem;
+    cmplx  *fd_chunk_buf_r  = &fd_chunk_buf_a[(size_t) nchannels * N_sparse];
+    cmplx  *layer_buf       = &fd_chunk_buf_r[(size_t) nchannels * N_sparse];
+    double *partial_dh_a    = (double *) &layer_buf[(size_t) nchannels * Nt_sub];
     double *partial_dh_r    = &partial_dh_a[NUM_THREADS_HERE];
     double *partial_aa      = &partial_dh_r[NUM_THREADS_HERE];
     double *partial_rr      = &partial_aa  [NUM_THREADS_HERE];
     double *partial_ar      = &partial_rr  [NUM_THREADS_HERE];
 #else
-    cmplx  tdi_channel_buf_cpu[FAST_WDM_NCHANNELS_MAX * FAST_WDM_NT_SUB_MAX];
+    cmplx  fd_chunk_buf_a_cpu[FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+    cmplx  fd_chunk_buf_r_cpu[FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+    cmplx  layer_buf_cpu     [FAST_WDM_NCHANNELS_MAX * FAST_WDM_NT_SUB_MAX];
     double partial_dh_a_cpu[1], partial_dh_r_cpu[1];
     double partial_aa_cpu  [1], partial_rr_cpu  [1], partial_ar_cpu[1];
-    cmplx  *tdi_channel_buf = tdi_channel_buf_cpu;
+    cmplx  *fd_chunk_buf_a  = fd_chunk_buf_a_cpu;
+    cmplx  *fd_chunk_buf_r  = fd_chunk_buf_r_cpu;
+    cmplx  *layer_buf       = layer_buf_cpu;
     double *partial_dh_a    = partial_dh_a_cpu;
     double *partial_dh_r    = partial_dh_r_cpu;
     double *partial_aa      = partial_aa_cpu;
@@ -4501,118 +4458,159 @@ void wdm_het_swap_ll_kernel(
             const double chunk_t0    = chunk_t_starts[j];
             const double dt_sparse   = T_chunk / (double) N_sparse;
 
-            for (int m = m_lo; m < m_hi; ++m) {
-                const int m_act = m - ind_min_f;
+            // ============================================================
+            // CHUNK-LEVEL: build the TWO chunk-FD buffers (add + rem) ONCE
+            // per chunk. None of steps 1-4 (TD-build, heterodyne, Tukey,
+            // forward FFT) depend on m, so the m loop below only does the
+            // per-m work (window+rearrange + iFFT + parity + accumulate).
+            // ============================================================
+            const double n_taper = (tukey_alpha > 0.0)
+                ? 0.5 * tukey_alpha * (double) (N_sparse - 1) : 0.0;
 
-                // =========================================================
-                // PHASE 1: build w_add for this (chunk, m_layer) into
-                // tdi_channel_buf. After this loop's "store" pass each
-                // thread holds its (c, n_loc) w_add values in w_add_reg.
-                // =========================================================
-                // ---- 1a) tdi_channel(t) for add ----
-                {
-                    CUDA_SHARED int link_sc_rec[NLINKS];
-                    CUDA_SHARED int link_sc_em [NLINKS];
-                    src.fill_link_arrays(link_sc_rec, link_sc_em);
-                    CUDA_SYNC_THREADS;
-                    Vec k_sky(0.0, 0.0, 0.0);
-                    Vec u_sky(0.0, 0.0, 0.0);
-                    Vec v_sky(0.0, 0.0, 0.0);
-                    src.get_sky_vectors(&k_sky, &u_sky, &v_sky, p_add);
-                    for (int i = THREAD_START_X; i < N_sparse;
-                         i += BLOCK_INCR_X) {
-                        const double t = chunk_t0 + (double) i * dt_sparse;
-                        cmplx tdi_tmp[3];
-                        src.get_tdi_Xf_single(&tdi_tmp[0], t, p_add,
-                                              k_sky, u_sky, v_sky,
-                                              link_sc_rec, link_sc_em, bin_i);
-                        for (int c = 0; c < nchannels; ++c)
-                            tdi_channel_buf[c * N_sparse + i] = tdi_tmp[c];
-                    }
-                    CUDA_SYNC_THREADS;
-                }
-
-                // ---- 1b) heterodyne + Tukey ----
-                const double n_taper = (tukey_alpha > 0.0)
-                    ? 0.5 * tukey_alpha * (double) (N_sparse - 1) : 0.0;
-                for (int idx = THREAD_START_X; idx < nchannels * N_sparse;
-                     idx += BLOCK_INCR_X) {
-                    const int i = idx - (idx / N_sparse) * N_sparse;
-                    const double tau = (double) i * dt_sparse;
-                    const double het_phase = -2.0 * M_PI * f0g_a * tau;
-                    const cmplx  het_factor(cos(het_phase), sin(het_phase));
-                    cmplx s = gcmplx::conj(tdi_channel_buf[idx]) * het_factor;
-                    if (n_taper > 0.0) {
-                        double w = 1.0;
-                        const double di = (double) i;
-                        const double dlast = (double) (N_sparse - 1);
-                        if (di < n_taper) {
-                            const double xn = di / n_taper;
-                            w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
-                        } else if (di > dlast - n_taper) {
-                            const double xn = (dlast - di) / n_taper;
-                            w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
-                        }
-                        s = cmplx(s.real() * w, s.imag() * w);
-                    }
-                    tdi_channel_buf[idx] = s;
+            // ---- Build ADD chunk-FD into fd_chunk_buf_a ----
+            {
+                CUDA_SHARED int link_sc_rec[NLINKS];
+                CUDA_SHARED int link_sc_em [NLINKS];
+                src.fill_link_arrays(link_sc_rec, link_sc_em);
+                CUDA_SYNC_THREADS;
+                Vec k_sky(0.0, 0.0, 0.0);
+                Vec u_sky(0.0, 0.0, 0.0);
+                Vec v_sky(0.0, 0.0, 0.0);
+                src.get_sky_vectors(&k_sky, &u_sky, &v_sky, p_add);
+                for (int i = THREAD_START_X; i < N_sparse;
+                     i += BLOCK_INCR_X) {
+                    const double t = chunk_t0 + (double) i * dt_sparse;
+                    cmplx tdi_tmp[3];
+                    src.get_tdi_Xf_single(&tdi_tmp[0], t, p_add,
+                                          k_sky, u_sky, v_sky,
+                                          link_sc_rec, link_sc_em, bin_i);
+                    for (int c = 0; c < nchannels; ++c)
+                        fd_chunk_buf_a[c * N_sparse + i] = tdi_tmp[c];
                 }
                 CUDA_SYNC_THREADS;
-
-                // ---- 1c) FFT length N_sparse per channel ----
-                for (int c = 0; c < nchannels; ++c) {
-                    wdm_spline_radix2_fft(&tdi_channel_buf[c * Nt_sub],
-                                            N_sparse, log2_N_sparse,
-                                            /*inverse=*/false);
-                    CUDA_SYNC_THREADS;
+            }
+            for (int idx = THREAD_START_X; idx < nchannels * N_sparse;
+                 idx += BLOCK_INCR_X) {
+                const int i = idx - (idx / N_sparse) * N_sparse;
+                const double tau = (double) i * dt_sparse;
+                const double het_phase = -2.0 * M_PI * f0g_a * tau;
+                const cmplx  het_factor(cos(het_phase), sin(het_phase));
+                cmplx s = gcmplx::conj(fd_chunk_buf_a[idx]) * het_factor;
+                if (n_taper > 0.0) {
+                    double w = 1.0;
+                    const double di = (double) i;
+                    const double dlast = (double) (N_sparse - 1);
+                    if (di < n_taper) {
+                        const double xn = di / n_taper;
+                        w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
+                    } else if (di > dlast - n_taper) {
+                        const double xn = (dlast - di) / n_taper;
+                        w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
+                    }
+                    s = cmplx(s.real() * w, s.imag() * w);
                 }
+                fd_chunk_buf_a[idx] = s;
+            }
+            CUDA_SYNC_THREADS;
+            for (int c = 0; c < nchannels; ++c) {
+                wdm_spline_radix2_fft(&fd_chunk_buf_a[c * N_sparse],
+                                        N_sparse, log2_N_sparse,
+                                        /*inverse=*/false);
+                CUDA_SYNC_THREADS;
+            }
 
-                // ---- 1d) window + rearrange for layer m, in place ----
-                const double scale_fd     = 0.5 * dt_sparse / dt;
-                const int    half_Nt_sub  = Nt_sub / 2;
-                const int    half_Nsp     = N_sparse / 2;
-                const int    fft_offset_a = m * half_Nt_sub - half_Nt_sub - k_f0_a;
+            // ---- Build REM chunk-FD into fd_chunk_buf_r ----
+            {
+                CUDA_SHARED int link_sc_rec[NLINKS];
+                CUDA_SHARED int link_sc_em [NLINKS];
+                src.fill_link_arrays(link_sc_rec, link_sc_em);
+                CUDA_SYNC_THREADS;
+                Vec k_sky(0.0, 0.0, 0.0);
+                Vec u_sky(0.0, 0.0, 0.0);
+                Vec v_sky(0.0, 0.0, 0.0);
+                src.get_sky_vectors(&k_sky, &u_sky, &v_sky, p_rem);
+                for (int i = THREAD_START_X; i < N_sparse;
+                     i += BLOCK_INCR_X) {
+                    const double t = chunk_t0 + (double) i * dt_sparse;
+                    cmplx tdi_tmp[3];
+                    src.get_tdi_Xf_single(&tdi_tmp[0], t, p_rem,
+                                          k_sky, u_sky, v_sky,
+                                          link_sc_rec, link_sc_em, bin_i);
+                    for (int c = 0; c < nchannels; ++c)
+                        fd_chunk_buf_r[c * N_sparse + i] = tdi_tmp[c];
+                }
+                CUDA_SYNC_THREADS;
+            }
+            for (int idx = THREAD_START_X; idx < nchannels * N_sparse;
+                 idx += BLOCK_INCR_X) {
+                const int i = idx - (idx / N_sparse) * N_sparse;
+                const double tau = (double) i * dt_sparse;
+                const double het_phase = -2.0 * M_PI * f0g_r * tau;
+                const cmplx  het_factor(cos(het_phase), sin(het_phase));
+                cmplx s = gcmplx::conj(fd_chunk_buf_r[idx]) * het_factor;
+                if (n_taper > 0.0) {
+                    double w = 1.0;
+                    const double di = (double) i;
+                    const double dlast = (double) (N_sparse - 1);
+                    if (di < n_taper) {
+                        const double xn = di / n_taper;
+                        w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
+                    } else if (di > dlast - n_taper) {
+                        const double xn = (dlast - di) / n_taper;
+                        w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
+                    }
+                    s = cmplx(s.real() * w, s.imag() * w);
+                }
+                fd_chunk_buf_r[idx] = s;
+            }
+            CUDA_SYNC_THREADS;
+            for (int c = 0; c < nchannels; ++c) {
+                wdm_spline_radix2_fft(&fd_chunk_buf_r[c * N_sparse],
+                                        N_sparse, log2_N_sparse,
+                                        /*inverse=*/false);
+                CUDA_SYNC_THREADS;
+            }
+
+            // ============================================================
+            // PER-M-LAYER: for each m, read fd_chunk_buf_a -> layer_buf,
+            // iFFT, parity into w_add_reg. Then read fd_chunk_buf_r ->
+            // layer_buf (overwrites), iFFT, parity -> w_r per thread, then
+            // accumulate 5 partials using w_add_reg + w_r.
+            // ============================================================
+            const double scale_fd     = 0.5 * dt_sparse / dt;
+            const int    half_Nt_sub  = Nt_sub / 2;
+            const int    half_Nsp     = N_sparse / 2;
+            const double kappa        = 2.0 * sqrt(M_PI * dt) / (double) Nf;
+            constexpr int K_MAX_REG   = FAST_WDM_K_PER_THREAD_MAX;
+            for (int m = m_lo; m < m_hi; ++m) {
+                const int m_act        = m - ind_min_f;
+                const int fft_offset_a = m * half_Nt_sub - half_Nt_sub - k_f0_a;
+                const int fft_offset_r = m * half_Nt_sub - half_Nt_sub - k_f0_r;
+
+                // ---- PHASE 1: ADD layer (fd_chunk_buf_a -> layer_buf -> w_add_reg) ----
                 for (int c = 0; c < nchannels; ++c) {
-                    constexpr int K_MAX = FAST_WDM_K_PER_THREAD_MAX;
-                    cmplx my_stage[K_MAX];
-                    int   my_n = 0;
                     for (int k_idx = THREAD_START_X; k_idx < Nt_sub;
                          k_idx += BLOCK_INCR_X) {
                         int fft_bin = fft_offset_a + k_idx;
                         cmplx v(0.0, 0.0);
                         if (fft_bin >= -half_Nsp && fft_bin < half_Nsp) {
                             int read_bin = (fft_bin + N_sparse) % N_sparse;
-                            v = tdi_channel_buf[c * Nt_sub + read_bin];
+                            v = fd_chunk_buf_a[c * N_sparse + read_bin];
                             v = cmplx(v.real() * scale_fd, v.imag() * scale_fd);
                             const double w = wdm_window[k_idx];
                             v = cmplx(v.real() * w, v.imag() * w);
                         }
-                        my_stage[my_n++] = v;
+                        layer_buf[c * Nt_sub + k_idx] = v;
                     }
-                    CUDA_SYNC_THREADS;
-                    my_n = 0;
-                    for (int k_idx = THREAD_START_X; k_idx < Nt_sub;
-                         k_idx += BLOCK_INCR_X) {
-                        tdi_channel_buf[c * Nt_sub + k_idx] = my_stage[my_n++];
-                    }
-                    CUDA_SYNC_THREADS;
                 }
-
-                // ---- 1e) iFFT length Nt_sub per channel ----
+                CUDA_SYNC_THREADS;
                 for (int c = 0; c < nchannels; ++c) {
-                    wdm_spline_radix2_fft(&tdi_channel_buf[c * Nt_sub],
+                    wdm_spline_radix2_fft(&layer_buf[c * Nt_sub],
                                             Nt_sub, log2_Nt_sub,
                                             /*inverse=*/true);
                     CUDA_SYNC_THREADS;
                 }
-
-                // ---- 1f) parity factor; STAGE w_add into per-thread regs ----
-                //
-                // After this pass each thread's w_add_reg[c * K_MAX + k] holds
-                // w_add[c, n_loc] for its k-th n_loc in the accumulator stride.
-                constexpr int K_MAX_REG = FAST_WDM_K_PER_THREAD_MAX;
                 double w_add_reg[FAST_WDM_NCHANNELS_MAX * K_MAX_REG];
-                const double kappa = 2.0 * sqrt(M_PI * dt) / (double) Nf;
                 {
                     int k_idx_reg = 0;
                     for (int n_loc = keep_lo + THREAD_START_X; n_loc < keep_hi;
@@ -4621,117 +4619,40 @@ void wdm_het_swap_ll_kernel(
                         const double sign      = ((((m + 1) * n_loc) & 1) == 0)
                                                   ? 1.0 : -1.0;
                         for (int c = 0; c < nchannels; ++c) {
-                            const cmplx z = tdi_channel_buf[c * Nt_sub + n_loc];
+                            const cmplx z = layer_buf[c * Nt_sub + n_loc];
                             const double rp = parity_even ? z.real() : z.imag();
-                            w_add_reg[c * K_MAX_REG + k_idx_reg] =
-                                kappa * sign * rp;
+                            w_add_reg[c * K_MAX_REG + k_idx_reg] = kappa * sign * rp;
                         }
                         ++k_idx_reg;
                     }
                 }
                 CUDA_SYNC_THREADS;
 
-                // =========================================================
-                // PHASE 2: build w_rem; per-thread accumulate 5 partials
-                // using (w_rem from shared) and (w_add from registers).
-                // =========================================================
-                // ---- 2a) tdi_channel(t) for rem ----
-                {
-                    CUDA_SHARED int link_sc_rec[NLINKS];
-                    CUDA_SHARED int link_sc_em [NLINKS];
-                    src.fill_link_arrays(link_sc_rec, link_sc_em);
-                    CUDA_SYNC_THREADS;
-                    Vec k_sky(0.0, 0.0, 0.0);
-                    Vec u_sky(0.0, 0.0, 0.0);
-                    Vec v_sky(0.0, 0.0, 0.0);
-                    src.get_sky_vectors(&k_sky, &u_sky, &v_sky, p_rem);
-                    for (int i = THREAD_START_X; i < N_sparse;
-                         i += BLOCK_INCR_X) {
-                        const double t = chunk_t0 + (double) i * dt_sparse;
-                        cmplx tdi_tmp[3];
-                        src.get_tdi_Xf_single(&tdi_tmp[0], t, p_rem,
-                                              k_sky, u_sky, v_sky,
-                                              link_sc_rec, link_sc_em, bin_i);
-                        for (int c = 0; c < nchannels; ++c)
-                            tdi_channel_buf[c * N_sparse + i] = tdi_tmp[c];
-                    }
-                    CUDA_SYNC_THREADS;
-                }
-
-                // ---- 2b) heterodyne + Tukey ----
-                for (int idx = THREAD_START_X; idx < nchannels * N_sparse;
-                     idx += BLOCK_INCR_X) {
-                    const int i = idx - (idx / N_sparse) * N_sparse;
-                    const double tau = (double) i * dt_sparse;
-                    const double het_phase = -2.0 * M_PI * f0g_r * tau;
-                    const cmplx  het_factor(cos(het_phase), sin(het_phase));
-                    cmplx s = gcmplx::conj(tdi_channel_buf[idx]) * het_factor;
-                    if (n_taper > 0.0) {
-                        double w = 1.0;
-                        const double di = (double) i;
-                        const double dlast = (double) (N_sparse - 1);
-                        if (di < n_taper) {
-                            const double xn = di / n_taper;
-                            w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
-                        } else if (di > dlast - n_taper) {
-                            const double xn = (dlast - di) / n_taper;
-                            w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
-                        }
-                        s = cmplx(s.real() * w, s.imag() * w);
-                    }
-                    tdi_channel_buf[idx] = s;
-                }
-                CUDA_SYNC_THREADS;
-
-                // ---- 2c) FFT length N_sparse per channel ----
+                // ---- PHASE 2: REM layer (fd_chunk_buf_r -> layer_buf), accumulate ----
                 for (int c = 0; c < nchannels; ++c) {
-                    wdm_spline_radix2_fft(&tdi_channel_buf[c * Nt_sub],
-                                            N_sparse, log2_N_sparse,
-                                            /*inverse=*/false);
-                    CUDA_SYNC_THREADS;
-                }
-
-                // ---- 2d) window + rearrange for layer m, in place ----
-                const int fft_offset_r = m * half_Nt_sub - half_Nt_sub - k_f0_r;
-                for (int c = 0; c < nchannels; ++c) {
-                    constexpr int K_MAX = FAST_WDM_K_PER_THREAD_MAX;
-                    cmplx my_stage[K_MAX];
-                    int   my_n = 0;
                     for (int k_idx = THREAD_START_X; k_idx < Nt_sub;
                          k_idx += BLOCK_INCR_X) {
                         int fft_bin = fft_offset_r + k_idx;
                         cmplx v(0.0, 0.0);
                         if (fft_bin >= -half_Nsp && fft_bin < half_Nsp) {
                             int read_bin = (fft_bin + N_sparse) % N_sparse;
-                            v = tdi_channel_buf[c * Nt_sub + read_bin];
+                            v = fd_chunk_buf_r[c * N_sparse + read_bin];
                             v = cmplx(v.real() * scale_fd, v.imag() * scale_fd);
                             const double w = wdm_window[k_idx];
                             v = cmplx(v.real() * w, v.imag() * w);
                         }
-                        my_stage[my_n++] = v;
+                        layer_buf[c * Nt_sub + k_idx] = v;
                     }
-                    CUDA_SYNC_THREADS;
-                    my_n = 0;
-                    for (int k_idx = THREAD_START_X; k_idx < Nt_sub;
-                         k_idx += BLOCK_INCR_X) {
-                        tdi_channel_buf[c * Nt_sub + k_idx] = my_stage[my_n++];
-                    }
-                    CUDA_SYNC_THREADS;
                 }
-
-                // ---- 2e) iFFT length Nt_sub per channel ----
+                CUDA_SYNC_THREADS;
                 for (int c = 0; c < nchannels; ++c) {
-                    wdm_spline_radix2_fft(&tdi_channel_buf[c * Nt_sub],
+                    wdm_spline_radix2_fft(&layer_buf[c * Nt_sub],
                                             Nt_sub, log2_Nt_sub,
                                             /*inverse=*/true);
                     CUDA_SYNC_THREADS;
                 }
 
-                // ---- 2f) parity factor + 5-partials accumulation ----
-                //
-                // Per (m, n_loc): each thread reads w_rem[c] from shared mem,
-                // already has w_add[c] in registers, reads data + invC from
-                // global, accumulates the 5 inner products.
+                // ---- Accumulate 5 partials using w_add_reg + freshly-parity'd w_r ----
                 const int ind_max_t_excl = ind_min_t + Nt_active;
                 {
                     int k_idx_reg = 0;
@@ -4748,7 +4669,7 @@ void wdm_het_swap_ll_kernel(
                             double d_arr  [FAST_WDM_NCHANNELS_MAX];
                             for (int c = 0; c < nchannels; ++c) {
                                 w_a_arr[c] = w_add_reg[c * K_MAX_REG + k_idx_reg];
-                                const cmplx z = tdi_channel_buf[c * Nt_sub + n_loc];
+                                const cmplx z = layer_buf[c * Nt_sub + n_loc];
                                 const double rp = parity_even ? z.real() : z.imag();
                                 w_r_arr[c] = kappa * sign * rp;
                                 const size_t g_d = ((size_t) c * Nf_active + m_act)
@@ -4893,21 +4814,33 @@ void wdm_het_get_fstat_ll_kernel(
     constexpr int IDX_PSI  = 6;
 
     // Dynamic shared-memory layout (must match shared_bytes at launch):
-    //   tdi_channel_buf[nchannels * Nt_sub] cmplx
-    //   partial_N      [N_FILTERS  * blockDim.x] double  ( 4 * NTH)
-    //   partial_M      [N_M_PART   * blockDim.x] double  (10 * NTH)
-    // (Sparse time grid is computed inline; no shared ``t_arr_buf`` slot.)
+    //   fd_chunk_buf[fi=0..3][nchannels * N_sparse] cmplx
+    //                                              -- per-filter chunk-FD,
+    //                                                 built ONCE per chunk
+    //   layer_buf   [nchannels * Nt_sub]           cmplx -- per-(m, fi) scratch
+    //   partial_N   [N_FILTERS  * blockDim.x]      double  ( 4 * NTH)
+    //   partial_M   [N_M_PART   * blockDim.x]      double  (10 * NTH)
+    // ~67 KB at Nt_sub=N_sparse=256, blockDim=64. Exceeds the 48 KB default
+    // limit -- the launcher calls cudaFuncSetAttribute(...,
+    // cudaFuncAttributeMaxDynamicSharedMemorySize, shared_bytes) to raise it.
 #ifdef __CUDACC__
     extern CUDA_SHARED char shared_mem[];
-    cmplx  *tdi_channel_buf = (cmplx *) shared_mem;
+    cmplx  *fd_chunk_buf[N_FILTERS];
+    fd_chunk_buf[0] = (cmplx *) shared_mem;
+    for (int fi_p = 1; fi_p < N_FILTERS; ++fi_p)
+        fd_chunk_buf[fi_p] = &fd_chunk_buf[fi_p - 1][(size_t) nchannels * N_sparse];
+    cmplx  *layer_buf = &fd_chunk_buf[N_FILTERS - 1][(size_t) nchannels * N_sparse];
     // 4 N + 10 M = 14 partial buffers, each blockDim.x wide.
-    double *partial_N       = (double *) &tdi_channel_buf[(size_t) nchannels * Nt_sub];
-    double *partial_M       = &partial_N[(size_t) N_FILTERS * NUM_THREADS_HERE];
+    double *partial_N = (double *) &layer_buf[(size_t) nchannels * Nt_sub];
+    double *partial_M = &partial_N[(size_t) N_FILTERS * NUM_THREADS_HERE];
 #else
-    cmplx  tdi_channel_buf_cpu[FAST_WDM_NCHANNELS_MAX * FAST_WDM_NT_SUB_MAX];
-    double partial_N_cpu      [N_FILTERS];
-    double partial_M_cpu      [(N_FILTERS * (N_FILTERS + 1)) / 2];
-    cmplx  *tdi_channel_buf = tdi_channel_buf_cpu;
+    cmplx  fd_chunk_buf_cpu[N_FILTERS][FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
+    cmplx  layer_buf_cpu   [FAST_WDM_NCHANNELS_MAX * FAST_WDM_NT_SUB_MAX];
+    double partial_N_cpu   [N_FILTERS];
+    double partial_M_cpu   [(N_FILTERS * (N_FILTERS + 1)) / 2];
+    cmplx  *fd_chunk_buf[N_FILTERS];
+    for (int fi_p = 0; fi_p < N_FILTERS; ++fi_p) fd_chunk_buf[fi_p] = fd_chunk_buf_cpu[fi_p];
+    cmplx  *layer_buf       = layer_buf_cpu;
     double *partial_N       = partial_N_cpu;
     double *partial_M       = partial_M_cpu;
 #endif
@@ -4951,126 +4884,127 @@ void wdm_het_get_fstat_ll_kernel(
             const double chunk_t0    = chunk_t_starts[j];
             const double dt_sparse   = T_chunk / (double) N_sparse;
 
-            for (int m = m_lo; m < m_hi; ++m) {
-                const int m_act = m - ind_min_f;
+            // ============================================================
+            // CHUNK-LEVEL: build all 4 chunk-FD buffers (one per basis
+            // filter). Steps 1-3 (TD-build, heterodyne, Tukey, FFT) do
+            // NOT depend on m, so they happen ONCE per chunk per filter
+            // -- m loop below only does the per-m work (window+rearrange
+            // -> iFFT -> parity -> accumulate).
+            // ============================================================
+            const double n_taper = (tukey_alpha > 0.0)
+                ? 0.5 * tukey_alpha * (double) (N_sparse - 1) : 0.0;
+            for (int fi_b = 0; fi_b < N_FILTERS; ++fi_b) {
+                double params_basis[16];   // GB has 9; bound generously
+                for (int k = 0; k < nparams && k < 16; ++k) {
+                    params_basis[k] = params[k];
+                }
+                params_basis[IDX_A   ] = A_arr   [fi_b];
+                params_basis[IDX_IOTA] = iota_arr[fi_b];
+                params_basis[IDX_PSI ] = psi_arr [fi_b];
+                params_basis[IDX_PHI0] = phi0_arr[fi_b];
 
-                // Per-thread storage for the 4 basis WDM coefs at this
-                // (chunk, m_layer) and the thread's stride-owned n_loc values.
-                //   w_basis_reg[filter_i * nchannels * K_MAX + c * K_MAX + k]
-                constexpr int K_MAX_REG = FAST_WDM_K_PER_THREAD_MAX;
-                double w_basis_reg[N_FILTERS * FAST_WDM_NCHANNELS_MAX * K_MAX_REG];
-
-                // Build each of the 4 basis waveforms in turn.
-                for (int fi = 0; fi < N_FILTERS; ++fi) {
-                    // Local params copy with basis filter substitutions.
-                    double params_basis[16];   // GB has 9; bound generously
-                    for (int k = 0; k < nparams && k < 16; ++k) {
-                        params_basis[k] = params[k];
-                    }
-                    params_basis[IDX_A   ] = A_arr   [fi];
-                    params_basis[IDX_IOTA] = iota_arr[fi];
-                    params_basis[IDX_PSI ] = psi_arr [fi];
-                    params_basis[IDX_PHI0] = phi0_arr[fi];
-
-                    // ---- 1) tdi_channel(t) for this basis filter ----
-                    {
-                        CUDA_SHARED int link_sc_rec[NLINKS];
-                        CUDA_SHARED int link_sc_em [NLINKS];
-                        src.fill_link_arrays(link_sc_rec, link_sc_em);
-                        CUDA_SYNC_THREADS;
-                        Vec k_sky(0.0, 0.0, 0.0);
-                        Vec u_sky(0.0, 0.0, 0.0);
-                        Vec v_sky(0.0, 0.0, 0.0);
-                        src.get_sky_vectors(&k_sky, &u_sky, &v_sky, params_basis);
-                        for (int i = THREAD_START_X; i < N_sparse;
-                             i += BLOCK_INCR_X) {
-                            const double t = chunk_t0 + (double) i * dt_sparse;
-                            cmplx tdi_tmp[3];
-                            src.get_tdi_Xf_single(&tdi_tmp[0], t, params_basis,
-                                                  k_sky, u_sky, v_sky,
-                                                  link_sc_rec, link_sc_em, bin_i);
-                            for (int c = 0; c < nchannels; ++c)
-                                tdi_channel_buf[c * N_sparse + i] = tdi_tmp[c];
-                        }
-                        CUDA_SYNC_THREADS;
-                    }
-
-                    // ---- 2) heterodyne + Tukey ----
-                    const double n_taper = (tukey_alpha > 0.0)
-                        ? 0.5 * tukey_alpha * (double) (N_sparse - 1) : 0.0;
-                    for (int idx = THREAD_START_X; idx < nchannels * N_sparse;
-                         idx += BLOCK_INCR_X) {
-                        const int i = idx - (idx / N_sparse) * N_sparse;
-                        const double tau = (double) i * dt_sparse;
-                        const double het_phase = -2.0 * M_PI * f0_grid * tau;
-                        const cmplx  het_factor(cos(het_phase), sin(het_phase));
-                        cmplx s = gcmplx::conj(tdi_channel_buf[idx]) * het_factor;
-                        if (n_taper > 0.0) {
-                            double w = 1.0;
-                            const double di = (double) i;
-                            const double dlast = (double) (N_sparse - 1);
-                            if (di < n_taper) {
-                                const double xn = di / n_taper;
-                                w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
-                            } else if (di > dlast - n_taper) {
-                                const double xn = (dlast - di) / n_taper;
-                                w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
-                            }
-                            s = cmplx(s.real() * w, s.imag() * w);
-                        }
-                        tdi_channel_buf[idx] = s;
+                // ---- 1) TD-build into fd_chunk_buf[fi_b] ----
+                {
+                    CUDA_SHARED int link_sc_rec[NLINKS];
+                    CUDA_SHARED int link_sc_em [NLINKS];
+                    src.fill_link_arrays(link_sc_rec, link_sc_em);
+                    CUDA_SYNC_THREADS;
+                    Vec k_sky(0.0, 0.0, 0.0);
+                    Vec u_sky(0.0, 0.0, 0.0);
+                    Vec v_sky(0.0, 0.0, 0.0);
+                    src.get_sky_vectors(&k_sky, &u_sky, &v_sky, params_basis);
+                    for (int i = THREAD_START_X; i < N_sparse;
+                         i += BLOCK_INCR_X) {
+                        const double t = chunk_t0 + (double) i * dt_sparse;
+                        cmplx tdi_tmp[3];
+                        src.get_tdi_Xf_single(&tdi_tmp[0], t, params_basis,
+                                              k_sky, u_sky, v_sky,
+                                              link_sc_rec, link_sc_em, bin_i);
+                        for (int c = 0; c < nchannels; ++c)
+                            fd_chunk_buf[fi_b][c * N_sparse + i] = tdi_tmp[c];
                     }
                     CUDA_SYNC_THREADS;
+                }
 
-                    // ---- 3) FFT length N_sparse per channel ----
-                    for (int c = 0; c < nchannels; ++c) {
-                        wdm_spline_radix2_fft(&tdi_channel_buf[c * Nt_sub],
-                                                N_sparse, log2_N_sparse,
-                                                /*inverse=*/false);
-                        CUDA_SYNC_THREADS;
+                // ---- 2) heterodyne + Tukey (in place in fd_chunk_buf[fi_b]) ----
+                for (int idx = THREAD_START_X; idx < nchannels * N_sparse;
+                     idx += BLOCK_INCR_X) {
+                    const int i = idx - (idx / N_sparse) * N_sparse;
+                    const double tau = (double) i * dt_sparse;
+                    const double het_phase = -2.0 * M_PI * f0_grid * tau;
+                    const cmplx  het_factor(cos(het_phase), sin(het_phase));
+                    cmplx s = gcmplx::conj(fd_chunk_buf[fi_b][idx]) * het_factor;
+                    if (n_taper > 0.0) {
+                        double w = 1.0;
+                        const double di = (double) i;
+                        const double dlast = (double) (N_sparse - 1);
+                        if (di < n_taper) {
+                            const double xn = di / n_taper;
+                            w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
+                        } else if (di > dlast - n_taper) {
+                            const double xn = (dlast - di) / n_taper;
+                            w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
+                        }
+                        s = cmplx(s.real() * w, s.imag() * w);
                     }
+                    fd_chunk_buf[fi_b][idx] = s;
+                }
+                CUDA_SYNC_THREADS;
 
-                    // ---- 4) window + rearrange for layer m, in place ----
-                    const double scale_fd     = 0.5 * dt_sparse / dt;
-                    const int    half_Nt_sub  = Nt_sub / 2;
-                    const int    half_Nsp     = N_sparse / 2;
-                    const int    fft_offset   = m * half_Nt_sub - half_Nt_sub - k_f0;
+                // ---- 3) FFT length N_sparse per channel ----
+                for (int c = 0; c < nchannels; ++c) {
+                    wdm_spline_radix2_fft(&fd_chunk_buf[fi_b][c * N_sparse],
+                                            N_sparse, log2_N_sparse,
+                                            /*inverse=*/false);
+                    CUDA_SYNC_THREADS;
+                }
+            } // end build-FD per filter
+            // All 4 chunk-FDs now resident in shared mem; reuse across m below.
+
+            // ============================================================
+            // PER-M-LAYER: for each m, build all 4 basis layer values and
+            // accumulate 4 N + 10 M partials.
+            // ============================================================
+            const double scale_fd    = 0.5 * dt_sparse / dt;
+            const int    half_Nt_sub = Nt_sub / 2;
+            const int    half_Nsp    = N_sparse / 2;
+            const double kappa       = 2.0 * sqrt(M_PI * dt) / (double) Nf;
+            constexpr int K_MAX_REG  = FAST_WDM_K_PER_THREAD_MAX;
+            for (int m = m_lo; m < m_hi; ++m) {
+                const int m_act = m - ind_min_f;
+                // Per-thread storage for THIS m's 4 basis WDM coefs.
+                double w_basis_reg[N_FILTERS * FAST_WDM_NCHANNELS_MAX * K_MAX_REG];
+                const int fft_offset = m * half_Nt_sub - half_Nt_sub - k_f0;
+
+                // Build each of the 4 basis waveforms' layer at this m.
+                for (int fi = 0; fi < N_FILTERS; ++fi) {
+                    // ---- 4) window + rearrange: fd_chunk_buf[fi] -> layer_buf ----
                     for (int c = 0; c < nchannels; ++c) {
-                        constexpr int K_MAX = FAST_WDM_K_PER_THREAD_MAX;
-                        cmplx my_stage[K_MAX];
-                        int   my_n = 0;
                         for (int k_idx = THREAD_START_X; k_idx < Nt_sub;
                              k_idx += BLOCK_INCR_X) {
                             int fft_bin = fft_offset + k_idx;
                             cmplx v(0.0, 0.0);
                             if (fft_bin >= -half_Nsp && fft_bin < half_Nsp) {
                                 int read_bin = (fft_bin + N_sparse) % N_sparse;
-                                v = tdi_channel_buf[c * Nt_sub + read_bin];
+                                v = fd_chunk_buf[fi][c * N_sparse + read_bin];
                                 v = cmplx(v.real() * scale_fd, v.imag() * scale_fd);
                                 const double w = wdm_window[k_idx];
                                 v = cmplx(v.real() * w, v.imag() * w);
                             }
-                            my_stage[my_n++] = v;
+                            layer_buf[c * Nt_sub + k_idx] = v;
                         }
-                        CUDA_SYNC_THREADS;
-                        my_n = 0;
-                        for (int k_idx = THREAD_START_X; k_idx < Nt_sub;
-                             k_idx += BLOCK_INCR_X) {
-                            tdi_channel_buf[c * Nt_sub + k_idx] = my_stage[my_n++];
-                        }
-                        CUDA_SYNC_THREADS;
                     }
+                    CUDA_SYNC_THREADS;
 
-                    // ---- 5) iFFT length Nt_sub per channel ----
+                    // ---- 5) iFFT length Nt_sub per channel (in place in layer_buf) ----
                     for (int c = 0; c < nchannels; ++c) {
-                        wdm_spline_radix2_fft(&tdi_channel_buf[c * Nt_sub],
+                        wdm_spline_radix2_fft(&layer_buf[c * Nt_sub],
                                                 Nt_sub, log2_Nt_sub,
                                                 /*inverse=*/true);
                         CUDA_SYNC_THREADS;
                     }
 
                     // ---- 6) parity factor; stage w_i[c, n_loc] in regs ----
-                    const double kappa = 2.0 * sqrt(M_PI * dt) / (double) Nf;
                     int k_idx_reg = 0;
                     for (int n_loc = keep_lo + THREAD_START_X; n_loc < keep_hi;
                          n_loc += BLOCK_INCR_X) {
@@ -5078,7 +5012,7 @@ void wdm_het_get_fstat_ll_kernel(
                         const double sign      = ((((m + 1) * n_loc) & 1) == 0)
                                                   ? 1.0 : -1.0;
                         for (int c = 0; c < nchannels; ++c) {
-                            const cmplx z  = tdi_channel_buf[c * Nt_sub + n_loc];
+                            const cmplx z  = layer_buf[c * Nt_sub + n_loc];
                             const double rp = parity_even ? z.real() : z.imag();
                             w_basis_reg[(fi * nchannels + c) * K_MAX_REG
                                           + k_idx_reg] = kappa * sign * rp;
@@ -11577,11 +11511,12 @@ static void wdm_het_fill_global_impl(
     (void) grid_dim;
     const int gd_x = num_bin;
     // Shared-mem layout (must match wdm_het_fill_global_kernel):
-    //   tdi_channel_buf[nchannels * Nt_sub] cmplx
-    // (no per-thread partials -- fill_global writes directly via atomicAdd.
-    //  no t_arr_buf -- sparse time grid computed inline in the kernel.)
+    //   fd_chunk_buf [nchannels * N_sparse] cmplx  -- chunk-FD (built ONCE per chunk)
+    //   layer_buf    [nchannels * Nt_sub]   cmplx  -- per-m_layer scratch
+    // (no per-thread partials -- fill_global writes directly via atomicAdd.)
     const size_t shared_bytes =
-        (size_t) nchannels * (size_t) Nt_sub * sizeof(cmplx);
+        (size_t) nchannels * (size_t) N_sparse * sizeof(cmplx) +
+        (size_t) nchannels * (size_t) Nt_sub   * sizeof(cmplx);
 
     // Upload host-side wrapper structs (Orbits / TDIConfig / WDMSettings) to
     // device. Cache the device-side pointers across calls.
@@ -11659,12 +11594,13 @@ static void wdm_het_get_ll_impl(
     (void) grid_dim;
     const int gd_x = num_bin;
     // Shared-mem layout (must match wdm_het_get_ll_kernel):
-    //   tdi_channel_buf[nchannels * Nt_sub] cmplx
-    //   partial_dh     [blockDim.x]         double
-    //   partial_hh     [blockDim.x]         double
-    // (Sparse time grid computed inline in kernel; no t_arr_buf slot.)
+    //   fd_chunk_buf [nchannels * N_sparse] cmplx  -- chunk-FD (built ONCE per chunk)
+    //   layer_buf    [nchannels * Nt_sub]   cmplx  -- per-m_layer scratch
+    //   partial_dh   [blockDim.x]           double
+    //   partial_hh   [blockDim.x]           double
     const size_t shared_bytes =
-        (size_t) nchannels * (size_t) Nt_sub * sizeof(cmplx) +
+        (size_t) nchannels * (size_t) N_sparse * sizeof(cmplx) +
+        (size_t) nchannels * (size_t) Nt_sub   * sizeof(cmplx) +
         (size_t) 2 * (size_t) NUM_THREADS_HERE * sizeof(double);
 
     static Orbits      *orbits_gpu       = nullptr;
@@ -11740,9 +11676,12 @@ static void wdm_het_swap_ll_impl(
     (void) grid_dim;
     const int gd_x = num_bin;
     // Shared-mem layout (must match wdm_het_swap_ll_kernel):
-    //   tdi_channel_buf[nchannels * Nt_sub] cmplx
+    //   fd_chunk_buf_a [nchannels * N_sparse] cmplx  -- add chunk-FD
+    //   fd_chunk_buf_r [nchannels * N_sparse] cmplx  -- rem chunk-FD
+    //   layer_buf      [nchannels * Nt_sub]   cmplx  -- per-m scratch (reused)
     //   5 * blockDim.x doubles (dh_a, dh_r, aa, rr, ar partial-sum buffers)
     const size_t shared_bytes =
+        (size_t) 2 * (size_t) nchannels * (size_t) N_sparse * sizeof(cmplx) +
         (size_t) nchannels * (size_t) Nt_sub * sizeof(cmplx) +
         (size_t) 5 * (size_t) NUM_THREADS_HERE * sizeof(double);
 
@@ -11816,12 +11755,23 @@ static void wdm_het_get_fstat_ll_impl(
     (void) grid_dim;
     const int gd_x = num_bin;
     // Shared-mem layout (must match wdm_het_get_fstat_ll_kernel):
-    //   tdi_channel_buf[nchannels * Nt_sub] cmplx
-    //   partial_N      [ 4 * blockDim.x]    double  (4 basis filters)
-    //   partial_M      [10 * blockDim.x]    double  (upper-tri of 4x4 M)
+    //   fd_chunk_buf[fi=0..3][nchannels * N_sparse] cmplx -- per-filter chunk-FD
+    //   layer_buf            [nchannels * Nt_sub]   cmplx -- per-(m, fi) scratch
+    //   partial_N            [ 4 * blockDim.x]      double (4 basis filters)
+    //   partial_M            [10 * blockDim.x]      double (upper-tri of 4x4 M)
+    // ~67 KB at Nt_sub=N_sparse=256, blockDim=64 -- exceeds default 48 KB
+    // limit, so we raise the cap via cudaFuncSetAttribute below.
+    constexpr int N_FILTERS_LAUNCH = 4;
     const size_t shared_bytes =
+        (size_t) N_FILTERS_LAUNCH * (size_t) nchannels * (size_t) N_sparse * sizeof(cmplx) +
         (size_t) nchannels * (size_t) Nt_sub * sizeof(cmplx) +
         (size_t) 14        * (size_t) NUM_THREADS_HERE * sizeof(double);
+    if (shared_bytes > 48u * 1024u) {
+        gpuErrchk(cudaFuncSetAttribute(
+            wdm_het_get_fstat_ll_kernel<SourceT>,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            (int) shared_bytes));
+    }
 
     static Orbits      *orbits_gpu       = nullptr;
     static TDIConfig   *tdi_config_gpu   = nullptr;
