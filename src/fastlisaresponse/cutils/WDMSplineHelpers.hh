@@ -452,11 +452,11 @@ inline void wdm_spline_radix2_fft(cmplx *a, int N, int log2N, bool inverse)
 
 #if defined(__CUDACC__) && defined(LISA_USE_CUFFTDX)
 
-// Per-size FFT type alias. NUM_THREADS_HERE must be a power of 2 and a
-// divisor of the FFT size for the default EPT formula to be integer.
-// For our use cases (NUM_THREADS_HERE=128, sizes 128/256/512) that's
-// always satisfied; for size 64 with blockDim=128 we'd need
-// FFTsPerBlock=2 (caller responsibility -- not handled here).
+// Per-size FFT type alias. We do NOT pin BlockDim or ElementsPerThread
+// here -- double-precision FFTs in cufftdx top out at BlockDim<=64 for
+// most sizes, so we let cufftdx pick a valid (BlockDim, EPT) combo from
+// its database. The block kernel below uses FFT::block_dim.x to gate
+// which threads of the NUM_THREADS_HERE-thread block participate.
 template <int N, bool inverse>
 struct wdm_cufftdx_fft_traits {
     using direction_t = cufftdx::Direction<
@@ -469,13 +469,12 @@ struct wdm_cufftdx_fft_traits {
       + cufftdx::Type<cufftdx::fft_type::c2c>()
       + direction_t{}
       + cufftdx::Block()
-      + cufftdx::BlockDim<NUM_THREADS_HERE>()
-      + cufftdx::ElementsPerThread<N / NUM_THREADS_HERE>()
       + cufftdx::SM<800>());
 
     using value_type = typename FFT::value_type;  // cuda::std::complex<double>
     static constexpr unsigned int ept    = FFT::elements_per_thread;
     static constexpr unsigned int stride = FFT::stride;
+    static constexpr unsigned int fft_threads = FFT::block_dim.x;
     static constexpr size_t scratch_bytes = FFT::shared_memory_size;
 };
 
@@ -498,39 +497,45 @@ CUDA_DEVICE inline void cufftdx_block_fft(cmplx *shared_buf, char *fft_scratch)
     using Traits     = wdm_cufftdx_fft_traits<N, inverse>;
     using FFT        = typename Traits::FFT;
     using value_type = typename Traits::value_type;
-    constexpr unsigned int EPT    = Traits::ept;
-    constexpr unsigned int STRIDE = Traits::stride;
+    constexpr unsigned int EPT         = Traits::ept;
+    constexpr unsigned int STRIDE      = Traits::stride;
+    constexpr unsigned int FFT_THREADS = Traits::fft_threads;
 
-    // Load shared -> per-thread registers in cufftdx's preferred layout.
-    // Thread t owns element ``t + i * STRIDE`` for i in [0, EPT).
-    value_type thread_data[EPT];
+    // cufftdx picked (BlockDim, EPT) for us. Only the first FFT_THREADS
+    // threads of the NUM_THREADS_HERE-thread launch participate; the rest
+    // sit out and rejoin at the trailing __syncthreads.
     const unsigned int tid = threadIdx.x;
-    #pragma unroll
-    for (unsigned int i = 0; i < EPT; ++i) {
-        const unsigned int idx = tid + i * STRIDE;
-        thread_data[i] = reinterpret_cast<value_type*>(shared_buf)[idx];
-    }
+    if (tid < FFT_THREADS) {
+        value_type thread_data[EPT];
 
-    // Cooperative block FFT (writes thread_data in place).
-    FFT().execute(thread_data, fft_scratch);
-
-    // Store regs -> shared. Also handle iFFT 1/N normalisation here so
-    // it matches wdm_spline_radix2_fft's normalisation convention.
-    if (inverse) {
-        constexpr double inv_N = 1.0 / (double) N;
+        // Load shared -> per-thread registers (thread t owns t + i*STRIDE).
         #pragma unroll
         for (unsigned int i = 0; i < EPT; ++i) {
             const unsigned int idx = tid + i * STRIDE;
-            value_type v = thread_data[i];
-            v.real(v.real() * inv_N);
-            v.imag(v.imag() * inv_N);
-            reinterpret_cast<value_type*>(shared_buf)[idx] = v;
+            thread_data[i] = reinterpret_cast<value_type*>(shared_buf)[idx];
         }
-    } else {
-        #pragma unroll
-        for (unsigned int i = 0; i < EPT; ++i) {
-            const unsigned int idx = tid + i * STRIDE;
-            reinterpret_cast<value_type*>(shared_buf)[idx] = thread_data[i];
+
+        // Cooperative block FFT (writes thread_data in place).
+        FFT().execute(thread_data, fft_scratch);
+
+        // Store regs -> shared. Inverse path applies 1/N to match
+        // wdm_spline_radix2_fft's normalisation convention.
+        if (inverse) {
+            constexpr double inv_N = 1.0 / (double) N;
+            #pragma unroll
+            for (unsigned int i = 0; i < EPT; ++i) {
+                const unsigned int idx = tid + i * STRIDE;
+                value_type v = thread_data[i];
+                v.real(v.real() * inv_N);
+                v.imag(v.imag() * inv_N);
+                reinterpret_cast<value_type*>(shared_buf)[idx] = v;
+            }
+        } else {
+            #pragma unroll
+            for (unsigned int i = 0; i < EPT; ++i) {
+                const unsigned int idx = tid + i * STRIDE;
+                reinterpret_cast<value_type*>(shared_buf)[idx] = thread_data[i];
+            }
         }
     }
     CUDA_SYNC_THREADS;
