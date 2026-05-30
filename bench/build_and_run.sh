@@ -12,6 +12,8 @@
 #   ./build_and_run.sh --num_bin=500 --grid_dim=128 # forward harness args
 #   NVCC=/path/to/nvcc ./build_and_run.sh           # override compiler
 #   SM_ARCH=sm_90 ./build_and_run.sh                # override arch
+#   MATHDX_DIR=/opt/nvidia/mathdx ./build_and_run.sh # enable cufftdx
+#                                                   # (must contain include/cufftdx.hpp)
 
 set -euo pipefail
 
@@ -39,6 +41,19 @@ LAPACK_LDLIBS=$(pkg-config --libs   lapacke 2>/dev/null || true)
 NVCC="${NVCC:-nvcc}"
 SM_ARCH="${SM_ARCH:-sm_80}"
 
+# Optional cufftdx (NVIDIA MathDx). Set MATHDX_DIR to the install root
+# (containing include/cufftdx.hpp) to enable. Empty -> radix-2 fallback.
+CUFFTDX_FLAGS=()
+if [[ -n "${MATHDX_DIR:-}" ]]; then
+    if [[ -f "${MATHDX_DIR}/include/cufftdx.hpp" ]]; then
+        echo "[build_and_run] cufftdx enabled from ${MATHDX_DIR}"
+        CUFFTDX_FLAGS=(-I "${MATHDX_DIR}/include" -DLISA_USE_CUFFTDX)
+    else
+        echo "[build_and_run] WARNING: MATHDX_DIR='${MATHDX_DIR}' has no \
+include/cufftdx.hpp; cufftdx NOT enabled."
+    fi
+fi
+
 "${NVCC}" --version >/dev/null
 echo "[build_and_run] CUDA build via ${NVCC} (-arch=${SM_ARCH})"
 
@@ -58,6 +73,7 @@ echo "[build_and_run] CUDA build via ${NVCC} (-arch=${SM_ARCH})"
     -I "${LAT_INC}/.." \
     -I "${LRG_INC}" \
     -I "${LRG_INC}/.." \
+    "${CUFFTDX_FLAGS[@]}" \
     ${LAPACK_CFLAGS} \
     "${SCRIPT_DIR}/chunked_het_bench.cxx" \
     "${TDI_SRC}" \

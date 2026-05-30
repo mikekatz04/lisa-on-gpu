@@ -304,7 +304,8 @@ class GBWDMComputations(FastLISAResponseParallelModule):
                    grid_dim: int = 0,
                    use_layer_groups: bool = True,
                    group_band_layers: int = 5,
-                   margin_layers: int = 0):
+                   margin_layers: int = 0,
+                   m_band_half_width: int = 1):
         """Per-binary chunked-heterodyne ``<d|h>`` / ``<h|h>``.
 
         Returns ``-0.5 * (d_d + h_h - 2 d_h)`` per binary. ``d_d``
@@ -397,6 +398,7 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             self.xp.asarray(groups["group_m_lo"],   dtype=np.int32),
             self.xp.asarray(groups["group_m_hi"],   dtype=np.int32),
             int(groups["n_groups"]),
+            int(m_band_half_width),
         )
 
         self.d_h_out = d_h_out
@@ -409,7 +411,8 @@ class GBWDMComputations(FastLISAResponseParallelModule):
                         grid_dim: int = 0,
                         use_layer_groups: bool = True,
                         group_band_layers: int = 5,
-                        margin_layers: int = 0):
+                        margin_layers: int = 0,
+                        m_band_half_width: int = 1):
         """Swap-proposal 5-way accumulator via chunked-heterodyne.
 
         Mirrors :meth:`get_ll_wdm` but evaluates the five inner products
@@ -493,6 +496,7 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             int(groups["n_groups"]),
             np.asarray(groups["pair_m_lo_b"],  dtype=np.int32),
             np.asarray(groups["pair_m_hi_b"],  dtype=np.int32),
+            int(m_band_half_width),
         )
 
         self.d_h_add_out       = d_h_a
@@ -691,7 +695,8 @@ class GBWDMComputations(FastLISAResponseParallelModule):
     def fill_global_wdm(self, params, templates,
                         convert_to_ra_dec: bool = True,
                         data_index=None, factors=None,
-                        grid_dim: int = 0):
+                        grid_dim: int = 0,
+                        m_band_half_width: int = 3):
         """Scatter per-source chunked-heterodyne WDM templates into a global buffer.
 
         Argument order matches the other ``*_wdm`` methods on this
@@ -793,6 +798,7 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             float(self.T), float(self.t_ref),
             float(self.resolved_tukey_alpha), int(grid_dim),
             int(self.N_cp_sig), int(self.N_cp_orbit),
+            int(m_band_half_width),
         )
 
     def get_fstat_ll_wdm(self, params, wdm_holder,

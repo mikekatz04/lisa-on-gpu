@@ -1543,21 +1543,21 @@ CUDA_SYNC_THREADS;
 // Doppler); the GPU build keeps the original 256 cap to respect
 // the shared-mem budget. JAX is independent.
 #ifdef __CUDACC__
-#define FAST_WDM_N_SPARSE_MAX  256
+#define FAST_WDM_N_SPARSE_MAX  512
 #else
 #define FAST_WDM_N_SPARSE_MAX  4096
 #endif
 #define FAST_WDM_NCHANNELS_MAX 3
 
 // Max Nt_sub for the per-chunk WDM iFFT scratch (``layer_scratch``).
-// On GPU this scratch lives in CUDA_SHARED memory (replacing the
-// previous global-mem workspace ``ws_layer_scratch_all``) -- avoids
-// the ~400-cycle global-mem latency on every iFFT element access.
-// On CPU it becomes a stack array; 4096-cmplx = 65 KB, fine on the
-// default 8 MB stack. Sizes match FAST_WDM_N_SPARSE_MAX since
-// Nt_sub <= N_sparse in all current configs.
+// On GPU this scratch lives in CUDA_SHARED memory. On CPU it becomes a
+// stack array; 4096-cmplx = 65 KB, fine on the default 8 MB stack.
+// GPU max raised to 1024 to support the (Nt_sub=512, N_sparse=128) and
+// (Nt_sub=1024, N_sparse=512) configs. Note: at Nt_sub=1024 only
+// get_ll/fill_global fit; swap_ll/fstat exceed A100's ~99 KB per-block
+// shared-mem cap and require the shared-mem-conserving paths below.
 #ifdef __CUDACC__
-#define FAST_WDM_NT_SUB_MAX  256
+#define FAST_WDM_NT_SUB_MAX  1024
 #else
 #define FAST_WDM_NT_SUB_MAX  4096
 #endif
@@ -3878,6 +3878,9 @@ void wdm_het_get_ll_kernel(
     cmplx  *layer_buf       = &fd_chunk_buf[(size_t) nchannels * N_sparse];
     double *partial_dh      = (double *) &layer_buf[(size_t) nchannels * Nt_sub];
     double *partial_hh      = &partial_dh[NUM_THREADS_HERE];
+    // cufftdx scratch (only used by wdm_fft_dispatch when LISA_USE_CUFFTDX
+    // is defined; sized as the max across instantiated FFT lengths).
+    char   *fft_scratch     = (char *) &partial_hh[NUM_THREADS_HERE];
 #else
     // CPU stubs: stack arrays sized at the compile-time maxima.
     cmplx  fd_chunk_buf_cpu [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
@@ -3888,6 +3891,7 @@ void wdm_het_get_ll_kernel(
     cmplx  *layer_buf       = layer_buf_cpu;
     double *partial_dh      = partial_dh_cpu;
     double *partial_hh      = partial_hh_cpu;
+    char   *fft_scratch     = nullptr;  // unused on CPU
 #endif
 
     const double layer_df = 1.0 / (2.0 * (double) Nf * dt);
@@ -3997,9 +4001,9 @@ void wdm_het_get_ll_kernel(
             // Per-channel forward FFT. wdm_spline_radix2_fft ends with a
             // CUDA_SYNC_THREADS internally, so no inter-channel sync needed.
             for (int c = 0; c < nchannels; ++c) {
-                wdm_spline_radix2_fft(&fd_chunk_buf[c * N_sparse],
-                                        N_sparse, log2_N_sparse,
-                                        /*inverse=*/false);
+                wdm_fft_dispatch(&fd_chunk_buf[c * N_sparse],
+                                  N_sparse, log2_N_sparse,
+                                  /*inverse=*/false, fft_scratch);
             }
             // fd_chunk_buf now holds the chunk-FD; reuse for every m below.
 
@@ -4046,9 +4050,9 @@ void wdm_het_get_ll_kernel(
                 // ---- 6) iFFT per channel (in place in layer_buf, length Nt_sub) ----
                 // Per-channel iFFT (FFT helper has its own trailing sync).
                 for (int c = 0; c < nchannels; ++c) {
-                    wdm_spline_radix2_fft(&layer_buf[c * Nt_sub],
-                                            Nt_sub, log2_Nt_sub,
-                                            /*inverse=*/true);
+                    wdm_fft_dispatch(&layer_buf[c * Nt_sub],
+                                      Nt_sub, log2_Nt_sub,
+                                      /*inverse=*/true, fft_scratch);
                 }
 
                 // ---- 7+8) FUSED parity + inner-product accumulator ----
@@ -4201,11 +4205,14 @@ void wdm_het_fill_global_kernel(
     extern CUDA_SHARED char shared_mem[];
     cmplx  *fd_chunk_buf = (cmplx *) shared_mem;
     cmplx  *layer_buf    = &fd_chunk_buf[(size_t) nchannels * N_sparse];
+    // cufftdx scratch (unused unless LISA_USE_CUFFTDX is defined).
+    char   *fft_scratch  = (char *) &layer_buf[(size_t) nchannels * Nt_sub];
 #else
     cmplx  fd_chunk_buf_cpu[FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
     cmplx  layer_buf_cpu   [FAST_WDM_NCHANNELS_MAX * FAST_WDM_NT_SUB_MAX];
     cmplx  *fd_chunk_buf = fd_chunk_buf_cpu;
     cmplx  *layer_buf    = layer_buf_cpu;
+    char   *fft_scratch  = nullptr;
 #endif
 
     const double layer_df = 1.0 / (2.0 * (double) Nf * dt);
@@ -4291,9 +4298,9 @@ void wdm_het_fill_global_kernel(
             // Per-channel forward FFT. wdm_spline_radix2_fft ends with a
             // CUDA_SYNC_THREADS internally, so no inter-channel sync needed.
             for (int c = 0; c < nchannels; ++c) {
-                wdm_spline_radix2_fft(&fd_chunk_buf[c * N_sparse],
-                                        N_sparse, log2_N_sparse,
-                                        /*inverse=*/false);
+                wdm_fft_dispatch(&fd_chunk_buf[c * N_sparse],
+                                  N_sparse, log2_N_sparse,
+                                  /*inverse=*/false, fft_scratch);
             }
             // fd_chunk_buf now holds the chunk-FD; reuse below.
 
@@ -4327,9 +4334,9 @@ void wdm_het_fill_global_kernel(
                 // ---- 6) iFFT length Nt_sub per channel (in place in layer_buf) ----
                 // Per-channel iFFT (FFT helper has its own trailing sync).
                 for (int c = 0; c < nchannels; ++c) {
-                    wdm_spline_radix2_fft(&layer_buf[c * Nt_sub],
-                                            Nt_sub, log2_Nt_sub,
-                                            /*inverse=*/true);
+                    wdm_fft_dispatch(&layer_buf[c * Nt_sub],
+                                      Nt_sub, log2_Nt_sub,
+                                      /*inverse=*/true, fft_scratch);
                 }
 
                 // ---- 7) parity factor + atomicAdd into template_fill ----
@@ -4426,6 +4433,8 @@ void wdm_het_swap_ll_kernel(
     double *partial_aa      = &partial_dh_r[NUM_THREADS_HERE];
     double *partial_rr      = &partial_aa  [NUM_THREADS_HERE];
     double *partial_ar      = &partial_rr  [NUM_THREADS_HERE];
+    // cufftdx scratch (unused unless LISA_USE_CUFFTDX is defined).
+    char   *fft_scratch     = (char *) &partial_ar[NUM_THREADS_HERE];
 #else
     cmplx  fd_chunk_buf_a_cpu[FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
     cmplx  fd_chunk_buf_r_cpu[FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
@@ -4440,6 +4449,7 @@ void wdm_het_swap_ll_kernel(
     double *partial_aa      = partial_aa_cpu;
     double *partial_rr      = partial_rr_cpu;
     double *partial_ar      = partial_ar_cpu;
+    char   *fft_scratch     = nullptr;
 #endif
 
     const double layer_df = 1.0 / (2.0 * (double) Nf * dt);
@@ -4533,9 +4543,9 @@ void wdm_het_swap_ll_kernel(
             CUDA_SYNC_THREADS;
             // Per-channel forward FFT for ADD (helper has trailing sync).
             for (int c = 0; c < nchannels; ++c) {
-                wdm_spline_radix2_fft(&fd_chunk_buf_a[c * N_sparse],
-                                        N_sparse, log2_N_sparse,
-                                        /*inverse=*/false);
+                wdm_fft_dispatch(&fd_chunk_buf_a[c * N_sparse],
+                                  N_sparse, log2_N_sparse,
+                                  /*inverse=*/false, fft_scratch);
             }
 
             // ---- Build REM chunk-FD into fd_chunk_buf_r ----
@@ -4585,9 +4595,9 @@ void wdm_het_swap_ll_kernel(
             CUDA_SYNC_THREADS;
             // Per-channel forward FFT for REM (helper has trailing sync).
             for (int c = 0; c < nchannels; ++c) {
-                wdm_spline_radix2_fft(&fd_chunk_buf_r[c * N_sparse],
-                                        N_sparse, log2_N_sparse,
-                                        /*inverse=*/false);
+                wdm_fft_dispatch(&fd_chunk_buf_r[c * N_sparse],
+                                  N_sparse, log2_N_sparse,
+                                  /*inverse=*/false, fft_scratch);
             }
 
             // ============================================================
@@ -4625,9 +4635,9 @@ void wdm_het_swap_ll_kernel(
                 CUDA_SYNC_THREADS;
                 // Per-channel iFFT (FFT helper has its own trailing sync).
                 for (int c = 0; c < nchannels; ++c) {
-                    wdm_spline_radix2_fft(&layer_buf[c * Nt_sub],
-                                            Nt_sub, log2_Nt_sub,
-                                            /*inverse=*/true);
+                    wdm_fft_dispatch(&layer_buf[c * Nt_sub],
+                                      Nt_sub, log2_Nt_sub,
+                                      /*inverse=*/true, fft_scratch);
                 }
                 double w_add_reg[FAST_WDM_NCHANNELS_MAX * K_MAX_REG];
                 {
@@ -4666,9 +4676,9 @@ void wdm_het_swap_ll_kernel(
                 CUDA_SYNC_THREADS;
                 // Per-channel iFFT (FFT helper has its own trailing sync).
                 for (int c = 0; c < nchannels; ++c) {
-                    wdm_spline_radix2_fft(&layer_buf[c * Nt_sub],
-                                            Nt_sub, log2_Nt_sub,
-                                            /*inverse=*/true);
+                    wdm_fft_dispatch(&layer_buf[c * Nt_sub],
+                                      Nt_sub, log2_Nt_sub,
+                                      /*inverse=*/true, fft_scratch);
                 }
 
                 // ---- Accumulate 5 partials using w_add_reg + freshly-parity'd w_r ----
@@ -4870,6 +4880,9 @@ void wdm_het_get_fstat_ll_kernel(
     // 4 N + 10 M = 14 partial buffers, each blockDim.x wide.
     double *partial_N = (double *) &layer_buf[(size_t) nchannels * Nt_sub];
     double *partial_M = &partial_N[(size_t) N_FILTERS * NUM_THREADS_HERE];
+    // cufftdx scratch (unused unless LISA_USE_CUFFTDX is defined).
+    char   *fft_scratch = (char *) &partial_M[(size_t) ((N_FILTERS * (N_FILTERS + 1)) / 2)
+                                              * NUM_THREADS_HERE];
 #else
     cmplx  fd_chunk_buf_cpu[N_FILTERS][FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
     cmplx  layer_buf_cpu   [FAST_WDM_NCHANNELS_MAX * FAST_WDM_NT_SUB_MAX];
@@ -4880,6 +4893,7 @@ void wdm_het_get_fstat_ll_kernel(
     cmplx  *layer_buf       = layer_buf_cpu;
     double *partial_N       = partial_N_cpu;
     double *partial_M       = partial_M_cpu;
+    char   *fft_scratch     = nullptr;
 #endif
 
     constexpr int N_M_PARTIALS = (N_FILTERS * (N_FILTERS + 1)) / 2;  // = 10
@@ -4990,9 +5004,9 @@ void wdm_het_get_fstat_ll_kernel(
 
                 // ---- 3) FFT length N_sparse per channel (helper has trailing sync) ----
                 for (int c = 0; c < nchannels; ++c) {
-                    wdm_spline_radix2_fft(&fd_chunk_buf[fi_b][c * N_sparse],
-                                            N_sparse, log2_N_sparse,
-                                            /*inverse=*/false);
+                    wdm_fft_dispatch(&fd_chunk_buf[fi_b][c * N_sparse],
+                                      N_sparse, log2_N_sparse,
+                                      /*inverse=*/false, fft_scratch);
                 }
             } // end build-FD per filter
             // All 4 chunk-FDs now resident in shared mem; reuse across m below.
@@ -5034,9 +5048,9 @@ void wdm_het_get_fstat_ll_kernel(
 
                     // ---- 5) iFFT length Nt_sub per channel (helper has trailing sync) ----
                     for (int c = 0; c < nchannels; ++c) {
-                        wdm_spline_radix2_fft(&layer_buf[c * Nt_sub],
-                                                Nt_sub, log2_Nt_sub,
-                                                /*inverse=*/true);
+                        wdm_fft_dispatch(&layer_buf[c * Nt_sub],
+                                          Nt_sub, log2_Nt_sub,
+                                          /*inverse=*/true, fft_scratch);
                     }
 
                     // ---- 6) parity factor; stage w_i[c, n_loc] in regs ----
@@ -11595,10 +11609,12 @@ static void wdm_het_fill_global_impl(
     // Shared-mem layout (must match wdm_het_fill_global_kernel):
     //   fd_chunk_buf [nchannels * N_sparse] cmplx  -- chunk-FD (built ONCE per chunk)
     //   layer_buf    [nchannels * Nt_sub]   cmplx  -- per-m_layer scratch
+    //   fft_scratch  [wdm_cufftdx_max_scratch()] bytes  -- 0 unless cufftdx is on
     // (no per-thread partials -- fill_global writes directly via atomicAdd.)
     const size_t shared_bytes =
         (size_t) nchannels * (size_t) N_sparse * sizeof(cmplx) +
-        (size_t) nchannels * (size_t) Nt_sub   * sizeof(cmplx);
+        (size_t) nchannels * (size_t) Nt_sub   * sizeof(cmplx) +
+        wdm_cufftdx_max_scratch();
 
     // Upload host-side wrapper structs (Orbits / TDIConfig / WDMSettings) to
     // device. Cache the device-side pointers across calls.
@@ -11680,10 +11696,12 @@ static void wdm_het_get_ll_impl(
     //   layer_buf    [nchannels * Nt_sub]   cmplx  -- per-m_layer scratch
     //   partial_dh   [blockDim.x]           double
     //   partial_hh   [blockDim.x]           double
+    //   fft_scratch  [wdm_cufftdx_max_scratch()] bytes  -- 0 unless cufftdx is on
     const size_t shared_bytes =
         (size_t) nchannels * (size_t) N_sparse * sizeof(cmplx) +
         (size_t) nchannels * (size_t) Nt_sub   * sizeof(cmplx) +
-        (size_t) 2 * (size_t) NUM_THREADS_HERE * sizeof(double);
+        (size_t) 2 * (size_t) NUM_THREADS_HERE * sizeof(double) +
+        wdm_cufftdx_max_scratch();
 
     static Orbits      *orbits_gpu       = nullptr;
     static TDIConfig   *tdi_config_gpu   = nullptr;
@@ -11762,10 +11780,12 @@ static void wdm_het_swap_ll_impl(
     //   fd_chunk_buf_r [nchannels * N_sparse] cmplx  -- rem chunk-FD
     //   layer_buf      [nchannels * Nt_sub]   cmplx  -- per-m scratch (reused)
     //   5 * blockDim.x doubles (dh_a, dh_r, aa, rr, ar partial-sum buffers)
+    //   fft_scratch    [wdm_cufftdx_max_scratch()] bytes -- 0 unless cufftdx is on
     const size_t shared_bytes =
         (size_t) 2 * (size_t) nchannels * (size_t) N_sparse * sizeof(cmplx) +
         (size_t) nchannels * (size_t) Nt_sub * sizeof(cmplx) +
-        (size_t) 5 * (size_t) NUM_THREADS_HERE * sizeof(double);
+        (size_t) 5 * (size_t) NUM_THREADS_HERE * sizeof(double) +
+        wdm_cufftdx_max_scratch();
 
     static Orbits      *orbits_gpu       = nullptr;
     static TDIConfig   *tdi_config_gpu   = nullptr;
@@ -11841,13 +11861,15 @@ static void wdm_het_get_fstat_ll_impl(
     //   layer_buf            [nchannels * Nt_sub]   cmplx -- per-(m, fi) scratch
     //   partial_N            [ 4 * blockDim.x]      double (4 basis filters)
     //   partial_M            [10 * blockDim.x]      double (upper-tri of 4x4 M)
+    //   fft_scratch          [wdm_cufftdx_max_scratch()] bytes -- 0 unless cufftdx is on
     // ~67 KB at Nt_sub=N_sparse=256, blockDim=64 -- exceeds default 48 KB
     // limit, so we raise the cap via cudaFuncSetAttribute below.
     constexpr int N_FILTERS_LAUNCH = 4;
     const size_t shared_bytes =
         (size_t) N_FILTERS_LAUNCH * (size_t) nchannels * (size_t) N_sparse * sizeof(cmplx) +
         (size_t) nchannels * (size_t) Nt_sub * sizeof(cmplx) +
-        (size_t) 14        * (size_t) NUM_THREADS_HERE * sizeof(double);
+        (size_t) 14        * (size_t) NUM_THREADS_HERE * sizeof(double) +
+        wdm_cufftdx_max_scratch();
     if (shared_bytes > 48u * 1024u) {
         gpuErrchk(cudaFuncSetAttribute(
             wdm_het_get_fstat_ll_kernel<SourceT>,
@@ -11906,7 +11928,8 @@ void GBComputationGroup::gb_wdm_het_fill_global_wrap(
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
     double T_chunk, double dt, double T, double t_ref,
-    double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit)
+    double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
+    int m_band_half_width)
 {
     wdm_het_fill_global_impl<GBTDIonTheFly>(
         template_fill, orbits, tdi_config,
@@ -11916,7 +11939,7 @@ void GBComputationGroup::gb_wdm_het_fill_global_wrap(
         wdm_window, n_chunks, num_bin, nparams,
         Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk, T_chunk, dt, T, t_ref, tukey_alpha,
-        grid_dim, N_cp_sig, N_cp_orbit, /*m_band_half_width=*/1);
+        grid_dim, N_cp_sig, N_cp_orbit, m_band_half_width);
 }
 
 void GBComputationGroup::gb_wdm_het_get_ll_wrap(
@@ -11933,7 +11956,8 @@ void GBComputationGroup::gb_wdm_het_get_ll_wrap(
     double T_chunk, double dt, double T, double t_ref, int tdi_type,
     double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
     int *binary_perm, int *group_starts, int *group_ends,
-    int *group_m_lo, int *group_m_hi, int n_groups)
+    int *group_m_lo, int *group_m_hi, int n_groups,
+    int m_band_half_width)
 {
     wdm_het_get_ll_impl<GBTDIonTheFly>(
         d_h_out, h_h_out, orbits, tdi_config,
@@ -11947,7 +11971,7 @@ void GBComputationGroup::gb_wdm_het_get_ll_wrap(
         T_chunk, dt, T, t_ref, tdi_type, tukey_alpha,
         grid_dim, N_cp_sig, N_cp_orbit,
         binary_perm, group_starts, group_ends,
-        group_m_lo, group_m_hi, n_groups, /*m_band_half_width=*/1);
+        group_m_lo, group_m_hi, n_groups, m_band_half_width);
 }
 
 void GBComputationGroup::gb_wdm_het_swap_ll_wrap(
@@ -11968,7 +11992,8 @@ void GBComputationGroup::gb_wdm_het_swap_ll_wrap(
     double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
     int *binary_perm, int *group_starts, int *group_ends,
     int *group_m_lo, int *group_m_hi, int n_groups,
-    int *pair_m_lo_b, int *pair_m_hi_b)
+    int *pair_m_lo_b, int *pair_m_hi_b,
+    int m_band_half_width)
 {
     wdm_het_swap_ll_impl<GBTDIonTheFly>(
         d_h_add_out, d_h_remove_out, add_add_out, remove_remove_out, add_remove_out,
@@ -11984,7 +12009,7 @@ void GBComputationGroup::gb_wdm_het_swap_ll_wrap(
         grid_dim, N_cp_sig, N_cp_orbit,
         binary_perm, group_starts, group_ends,
         group_m_lo, group_m_hi, n_groups,
-        pair_m_lo_b, pair_m_hi_b, /*m_band_half_width=*/1);
+        pair_m_lo_b, pair_m_hi_b, m_band_half_width);
 }
 
 

@@ -286,16 +286,32 @@ endif()
 if(FASTLISA_WITH_GPU)
   add_library(fastlisaresponse_gpu_tdionthefly_gpu_static STATIC ${GBT_DIR}/cutils/Interpolate.cu ${LISATOOLS_DIR}/cutils/Detector.cu LISAResponse.cu TDIonTheFly.cu)
   apply_gpu_backend_common_options(tdionthefly_gpu fastlisaresponse fastlisaresponse true )
-  target_include_directories(fastlisaresponse_gpu_tdionthefly_gpu_static PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})  
+  target_include_directories(fastlisaresponse_gpu_tdionthefly_gpu_static PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})
   target_sources(fastlisaresponse_gpu_tdionthefly_gpu_static PUBLIC FILE_SET HEADERS FILES
                                         TDIonTheFly.hh)
+
+  # ---- Optional cufftdx (NVIDIA MathDx Block FFT) ----
+  # When FASTLISA_MATHDX_DIR is set, swap the hand-rolled radix-2 in
+  # WDMSplineHelpers.hh for cufftdx's cooperative block FFT.
+  if(FASTLISA_MATHDX_DIR)
+    if(NOT EXISTS "${FASTLISA_MATHDX_DIR}/include/cufftdx.hpp")
+      message(WARNING "FASTLISA_MATHDX_DIR='${FASTLISA_MATHDX_DIR}' does not \
+contain include/cufftdx.hpp -- cufftdx will NOT be enabled.")
+    else()
+      message(STATUS "cufftdx enabled from ${FASTLISA_MATHDX_DIR}")
+      target_include_directories(fastlisaresponse_gpu_tdionthefly_gpu_static
+        PUBLIC "${FASTLISA_MATHDX_DIR}/include")
+      target_compile_definitions(fastlisaresponse_gpu_tdionthefly_gpu_static
+        PUBLIC LISA_USE_CUFFTDX)
+    endif()
+  endif()
 
   pybind11_add_module(fastlisaresponse_gpu_tdionthefly "${LISATOOLS_DIR}/cutils/binding.cxx" "${GBT_DIR}/cutils/gbt_binding.cxx" binding_flr.cxx binding_tof.cxx)
   apply_gpu_backend_common_options(tdionthefly fastlisaresponse fastlisaresponse false)
 
   # Link your target to the imported target name
   target_link_libraries(fastlisaresponse_gpu_tdionthefly PUBLIC fastlisaresponse_gpu_tdionthefly_gpu_static)  #  ${LISATOOLS_DETECTOR_STATIC_LIB_CPU})
-  target_include_directories(fastlisaresponse_gpu_tdionthefly PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})  
+  target_include_directories(fastlisaresponse_gpu_tdionthefly PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})
   target_sources(fastlisaresponse_gpu_tdionthefly PUBLIC FILE_SET HEADERS FILES
                                           binding_tof.hpp)
 

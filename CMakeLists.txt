@@ -121,6 +121,17 @@ set(
   CACHE STRING "Value of the -march compiler option if supported by compiler"
 )
 
+# FASTLISA_MATHDX_DIR points to the install root of NVIDIA's MathDx package
+# (https://developer.nvidia.com/cufftdx-downloads). If set + non-empty,
+# the GPU build adds -I${FASTLISA_MATHDX_DIR}/include and -DLISA_USE_CUFFTDX,
+# enabling the cufftdx Block-FFT path in WDMSplineHelpers.hh. If unset,
+# the kernel falls back to the hand-rolled radix-2 helper.
+set(
+  FASTLISA_MATHDX_DIR ""
+  CACHE PATH "Path to NVIDIA MathDx install root (contains include/cufftdx.hpp). \
+Leave empty to disable cufftdx and use the hand-rolled radix-2 fallback."
+)
+
 # ---- Phony target for project specific properties ----
 add_library(fastlisaresponse INTERFACE)
 

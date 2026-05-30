@@ -34,6 +34,14 @@
 #include "TDIonTheFly.hh"
 #include "gbt_global.h"
 
+// cufftdx is opt-in via -DLISA_USE_CUFFTDX. It replaces the hand-rolled
+// radix-2 FFT in ``wdm_spline_radix2_fft`` (kept as fallback) with a
+// higher-radix cooperative block FFT from NVIDIA's MathDx. Header-only:
+// add ``-I/path/to/mathdx/include`` to the nvcc include path.
+#if defined(__CUDACC__) && defined(LISA_USE_CUFFTDX)
+#include <cufftdx.hpp>
+#endif
+
 #ifndef WDM_SPLINE_MAX_NARROW_WIDTHS
 #define WDM_SPLINE_MAX_NARROW_WIDTHS 8
 #endif
@@ -408,6 +416,180 @@ inline void wdm_spline_radix2_fft(cmplx *a, int N, int log2N, bool inverse)
         }
         CUDA_SYNC_THREADS;
     }
+}
+
+
+// ---------------------------------------------------------------------------
+// cufftdx Block-FFT wrapper (compile-time templated on size + direction).
+//
+// Drop-in alternative to ``wdm_spline_radix2_fft`` for sizes the GPU
+// dispatcher (``wdm_fft_dispatch`` below) hands off to cufftdx.
+//
+// Design notes:
+//
+//   * cufftdx is COMPILE-TIME templated on (Size, Direction, Precision,
+//     BlockDim, Arch). To handle our runtime-varying Nt_sub / N_sparse,
+//     we instantiate a small set of POT sizes (64, 128, 256, 512) and
+//     runtime-dispatch via ``wdm_fft_dispatch``.
+//
+//   * Block FFT distributes the FFT cooperatively across all
+//     ``blockDim.x`` threads. Each thread holds
+//     ``FFT::elements_per_thread`` cmplx values in registers during the
+//     transform. With NUM_THREADS_HERE = 128 and N = 256, EPT = 2.
+//
+//   * Data flow: load from caller's shared-mem buffer -> per-thread
+//     register array (in cufftdx's preferred stride pattern) -> FFT
+//     execute -> store back to caller's shared-mem buffer.
+//
+//   * Each FFT specialisation has a constexpr ``shared_memory_size``
+//     that gives the scratch needed by cufftdx (twiddle tables,
+//     intra-warp comms). The dispatcher takes a caller-provided scratch
+//     pointer sized at the max across instantiated specialisations.
+//
+//   * Falls back to wdm_spline_radix2_fft when LISA_USE_CUFFTDX is not
+//     defined OR when the requested size isn't in the dispatch table.
+// ---------------------------------------------------------------------------
+
+#if defined(__CUDACC__) && defined(LISA_USE_CUFFTDX)
+
+// Per-size FFT type alias. NUM_THREADS_HERE must be a power of 2 and a
+// divisor of the FFT size for the default EPT formula to be integer.
+// For our use cases (NUM_THREADS_HERE=128, sizes 128/256/512) that's
+// always satisfied; for size 64 with blockDim=128 we'd need
+// FFTsPerBlock=2 (caller responsibility -- not handled here).
+template <int N, bool inverse>
+struct wdm_cufftdx_fft_traits {
+    using direction_t = cufftdx::Direction<
+        inverse ? cufftdx::fft_direction::inverse
+                : cufftdx::fft_direction::forward>;
+
+    using FFT = decltype(
+        cufftdx::Size<N>()
+      + cufftdx::Precision<double>()
+      + cufftdx::Type<cufftdx::fft_type::c2c>()
+      + direction_t{}
+      + cufftdx::Block()
+      + cufftdx::BlockDim<NUM_THREADS_HERE>()
+      + cufftdx::ElementsPerThread<N / NUM_THREADS_HERE>()
+      + cufftdx::SM<800>());
+
+    using value_type = typename FFT::value_type;  // cuda::std::complex<double>
+    static constexpr unsigned int ept    = FFT::elements_per_thread;
+    static constexpr unsigned int stride = FFT::stride;
+    static constexpr size_t scratch_bytes = FFT::shared_memory_size;
+};
+
+// Compile-time upper bound on the scratch any of our specialisations
+// needs (used by kernel launchers to size the FFT scratch region).
+template <int N>
+struct wdm_cufftdx_fft_scratch {
+    static constexpr size_t value = std::max(
+        wdm_cufftdx_fft_traits<N, false>::scratch_bytes,
+        wdm_cufftdx_fft_traits<N, true >::scratch_bytes);
+};
+
+// Block FFT for one length-N buffer in shared mem. The caller passes:
+//   shared_buf : pointer to N cmplx values in shared mem (overwritten)
+//   fft_scratch: pointer to FFT::shared_memory_size bytes of shared mem
+//                (must NOT alias shared_buf)
+template <int N, bool inverse>
+CUDA_DEVICE inline void cufftdx_block_fft(cmplx *shared_buf, char *fft_scratch)
+{
+    using Traits     = wdm_cufftdx_fft_traits<N, inverse>;
+    using FFT        = typename Traits::FFT;
+    using value_type = typename Traits::value_type;
+    constexpr unsigned int EPT    = Traits::ept;
+    constexpr unsigned int STRIDE = Traits::stride;
+
+    // Load shared -> per-thread registers in cufftdx's preferred layout.
+    // Thread t owns element ``t + i * STRIDE`` for i in [0, EPT).
+    value_type thread_data[EPT];
+    const unsigned int tid = threadIdx.x;
+    #pragma unroll
+    for (unsigned int i = 0; i < EPT; ++i) {
+        const unsigned int idx = tid + i * STRIDE;
+        thread_data[i] = reinterpret_cast<value_type*>(shared_buf)[idx];
+    }
+
+    // Cooperative block FFT (writes thread_data in place).
+    FFT().execute(thread_data, fft_scratch);
+
+    // Store regs -> shared. Also handle iFFT 1/N normalisation here so
+    // it matches wdm_spline_radix2_fft's normalisation convention.
+    if (inverse) {
+        constexpr double inv_N = 1.0 / (double) N;
+        #pragma unroll
+        for (unsigned int i = 0; i < EPT; ++i) {
+            const unsigned int idx = tid + i * STRIDE;
+            value_type v = thread_data[i];
+            v.real(v.real() * inv_N);
+            v.imag(v.imag() * inv_N);
+            reinterpret_cast<value_type*>(shared_buf)[idx] = v;
+        }
+    } else {
+        #pragma unroll
+        for (unsigned int i = 0; i < EPT; ++i) {
+            const unsigned int idx = tid + i * STRIDE;
+            reinterpret_cast<value_type*>(shared_buf)[idx] = thread_data[i];
+        }
+    }
+    CUDA_SYNC_THREADS;
+}
+
+// Compile-time scratch upper bound across all sizes we dispatch to.
+// Used by kernel launchers to size the shared FFT scratch region.
+constexpr size_t wdm_cufftdx_max_scratch() {
+    size_t s = 0;
+    s = std::max(s, wdm_cufftdx_fft_scratch<128>::value);
+    s = std::max(s, wdm_cufftdx_fft_scratch<256>::value);
+    s = std::max(s, wdm_cufftdx_fft_scratch<512>::value);
+    s = std::max(s, wdm_cufftdx_fft_scratch<1024>::value);
+    return s;
+}
+
+#else  // !LISA_USE_CUFFTDX
+
+// Stub scratch size = 0 when cufftdx is disabled. wdm_fft_dispatch
+// falls through to wdm_spline_radix2_fft and never touches the scratch.
+inline constexpr size_t wdm_cufftdx_max_scratch() { return 0; }
+
+#endif  // LISA_USE_CUFFTDX
+
+
+// ---------------------------------------------------------------------------
+// Runtime dispatcher: pick cufftdx for supported POT sizes, else fall
+// back to the hand-rolled radix-2. ``fft_scratch`` is only read by the
+// cufftdx path -- safe to pass nullptr if LISA_USE_CUFFTDX is off.
+//
+// Supported cufftdx sizes (matches the specialisations below):
+//   128, 256, 512    (must divide NUM_THREADS_HERE == 128)
+// Sizes outside this set OR when cufftdx is disabled fall back to
+// wdm_spline_radix2_fft.
+// ---------------------------------------------------------------------------
+CUDA_DEVICE
+inline void wdm_fft_dispatch(cmplx *a, int N, int log2N, bool inverse,
+                              char *fft_scratch)
+{
+#if defined(__CUDACC__) && defined(LISA_USE_CUFFTDX)
+    switch (log2N) {
+        case 7:  // N = 128
+            if (inverse) cufftdx_block_fft<128, true >(a, fft_scratch);
+            else         cufftdx_block_fft<128, false>(a, fft_scratch);
+            return;
+        case 8:  // N = 256
+            if (inverse) cufftdx_block_fft<256, true >(a, fft_scratch);
+            else         cufftdx_block_fft<256, false>(a, fft_scratch);
+            return;
+        case 9:  // N = 512
+            if (inverse) cufftdx_block_fft<512, true >(a, fft_scratch);
+            else         cufftdx_block_fft<512, false>(a, fft_scratch);
+            return;
+        default:
+            break;  // fall through to radix-2 fallback
+    }
+#endif
+    (void) fft_scratch;
+    wdm_spline_radix2_fft(a, N, log2N, inverse);
 }
 
 

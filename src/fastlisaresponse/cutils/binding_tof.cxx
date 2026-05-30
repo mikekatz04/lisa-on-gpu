@@ -496,7 +496,8 @@ void GBComputationGroupWrap::gb_wdm_het_fill_global(
     int N_sparse, int log2_N_sparse,
     int nchannels, int n_rfft_chunk,
     double T_chunk, double dt, double T, double t_ref,
-    double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit)
+    double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
+    int m_band_half_width)
 {
     const int Nf = wdm_settings_wrap->wdm_settings->Nf;
     const int Nt = wdm_settings_wrap->wdm_settings->Nt;
@@ -516,7 +517,8 @@ void GBComputationGroupWrap::gb_wdm_het_fill_global(
         Nt_sub, log2_Nt_sub,
         N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
-        T_chunk, dt, T, t_ref, tukey_alpha, grid_dim, N_cp_sig, N_cp_orbit);
+        T_chunk, dt, T, t_ref, tukey_alpha, grid_dim, N_cp_sig, N_cp_orbit,
+        m_band_half_width);
 }
 
 void GBComputationGroupWrap::gb_wdm_het_get_ll(
@@ -537,7 +539,8 @@ void GBComputationGroupWrap::gb_wdm_het_get_ll(
     double T_chunk, double dt, double T, double t_ref, int tdi_type,
     double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
     array_type<int> binary_perm, array_type<int> group_starts, array_type<int> group_ends,
-    array_type<int> group_m_lo, array_type<int> group_m_hi, int n_groups)
+    array_type<int> group_m_lo, array_type<int> group_m_hi, int n_groups,
+    int m_band_half_width)
 {
     // Group-array lengths: binary_perm is num_bin; the four group_*
     // arrays are length max(n_groups, 1) (caller passes length-1 stubs
@@ -584,7 +587,7 @@ void GBComputationGroupWrap::gb_wdm_het_get_ll(
         return_pointer_and_check_length(group_ends,   "group_ends",   gn, 1),
         return_pointer_and_check_length(group_m_lo,   "group_m_lo",   gn, 1),
         return_pointer_and_check_length(group_m_hi,   "group_m_hi",   gn, 1),
-        n_groups);
+        n_groups, m_band_half_width);
 }
 
 void GBComputationGroupWrap::gb_wdm_het_swap_ll(
@@ -608,7 +611,8 @@ void GBComputationGroupWrap::gb_wdm_het_swap_ll(
     double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
     array_type<int> binary_perm, array_type<int> group_starts, array_type<int> group_ends,
     array_type<int> group_m_lo, array_type<int> group_m_hi, int n_groups,
-    array_type<int> pair_m_lo_b, array_type<int> pair_m_hi_b)
+    array_type<int> pair_m_lo_b, array_type<int> pair_m_hi_b,
+    int m_band_half_width)
 {
     const int gn = (n_groups > 0) ? n_groups : 1;
     const int Nf_active = wdm_settings_wrap->wdm_settings->Nf_active;
@@ -656,7 +660,8 @@ void GBComputationGroupWrap::gb_wdm_het_swap_ll(
         return_pointer_and_check_length(group_m_hi,   "group_m_hi",   gn, 1),
         n_groups,
         return_pointer_and_check_length(pair_m_lo_b, "pair_m_lo_b", num_bin, 1),
-        return_pointer_and_check_length(pair_m_hi_b, "pair_m_hi_b", num_bin, 1));
+        return_pointer_and_check_length(pair_m_hi_b, "pair_m_hi_b", num_bin, 1),
+        m_band_half_width);
 }
 
 
