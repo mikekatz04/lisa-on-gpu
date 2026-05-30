@@ -47,6 +47,7 @@ echo "[build_and_run] CUDA build via ${NVCC} (-arch=${SM_ARCH})"
     -arch="${SM_ARCH}" \
     --extended-lambda \
     --expt-relaxed-constexpr \
+    -rdc=true \
     -DBENCH_GPU=1 \
     -std=c++17 \
     -O3 \
