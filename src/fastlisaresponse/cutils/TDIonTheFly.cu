@@ -3840,7 +3840,7 @@ void wdm_het_get_ll_kernel(
     //
     // Total ~15 KB; well under the 48 KB default on A100.
 #ifdef __CUDACC__
-    extern __shared__ unsigned char shared_mem[];
+    extern CUDA_SHARED char shared_mem[];
     cmplx  *tdi_channel_buf = (cmplx *) shared_mem;
     double *t_arr_buf       = (double *) &tdi_channel_buf[(size_t) nchannels * Nt_sub];
     double *partial_dh      = &t_arr_buf[N_sparse];
@@ -4207,7 +4207,7 @@ void wdm_het_fill_global_kernel(
     const int Nt = wdm_settings->Nt;
 
 #ifdef __CUDACC__
-    extern __shared__ unsigned char shared_mem[];
+    extern CUDA_SHARED char shared_mem[];
     cmplx  *tdi_channel_buf = (cmplx *) shared_mem;
     double *t_arr_buf       = (double *) &tdi_channel_buf[(size_t) nchannels * Nt_sub];
 #else
@@ -4418,7 +4418,7 @@ void wdm_het_swap_ll_kernel(
     const int Nt_active  = wdm_settings->Nt_active;
 
 #ifdef __CUDACC__
-    extern __shared__ unsigned char shared_mem[];
+    extern CUDA_SHARED char shared_mem[];
     cmplx  *tdi_channel_buf = (cmplx *) shared_mem;
     double *t_arr_buf       = (double *) &tdi_channel_buf[(size_t) nchannels * Nt_sub];
     double *partial_dh_a    = &t_arr_buf[N_sparse];
@@ -4859,7 +4859,7 @@ void wdm_het_get_fstat_ll_kernel(
     constexpr int IDX_PSI  = 6;
 
 #ifdef __CUDACC__
-    extern __shared__ unsigned char shared_mem[];
+    extern CUDA_SHARED char shared_mem[];
     cmplx  *tdi_channel_buf = (cmplx *) shared_mem;
     double *t_arr_buf       = (double *) &tdi_channel_buf[(size_t) nchannels * Nt_sub];
     // 4 N + 10 M = 14 partial buffers, each blockDim.x wide.
