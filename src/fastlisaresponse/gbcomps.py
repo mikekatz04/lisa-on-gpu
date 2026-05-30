@@ -795,6 +795,106 @@ class GBWDMComputations(FastLISAResponseParallelModule):
             int(self.N_cp_sig), int(self.N_cp_orbit),
         )
 
+    def get_fstat_ll_wdm(self, params, wdm_holder,
+                          data_index=None, noise_index=None,
+                          convert_to_ra_dec: bool = True,
+                          grid_dim: int = 0,
+                          m_band_half_width: int = 1):
+        """Chunked-heterodyne F-stat over the WDM domain.
+
+        Builds the 4 Cornish & Crowder '05 basis filters per binary at the
+        binary's (f0, fdot, lam, beta) with fixed
+        ``(A, iota, psi, phi0) = (2, pi/2, {0, pi/4, 0, pi/4},
+                                  {0, pi, 3*pi/2, pi/2})``.
+
+        Returns
+        -------
+        N_arr : ndarray, shape ``(num_bin, 4)``
+            Per-binary ``<d | A_i>`` for i in 0..3.
+        M_mat : ndarray, shape ``(num_bin, 10)``
+            Per-binary upper-triangle ``<A_i | A_j>`` for i <= j,
+            flattened in row-major order ``[M00, M01, M02, M03, M11,
+            M12, M13, M22, M23, M33]``.
+
+        Compute ``F = N^T M^{-1} N / 2`` from these on the Python side
+        (numpy.linalg.solve / inv).
+
+        WDM coefficients are real -> N and M are real-valued; the imag
+        parts returned by the C++ kernel are always 0 and dropped here.
+
+        Args:
+            params: ``(num_bin, nparams)`` array of GB parameters.
+            wdm_holder: ``AnalysisContainerArray`` providing
+                ``linear_data_arr[0]`` (WDM data) and
+                ``linear_psd_arr[0]`` (invC).
+            data_index, noise_index: per-binary slab indices into
+                ``wdm_holder``.
+            grid_dim: CUDA launch grid size (0 -> use num_bin).
+            m_band_half_width: layer-band half-width around f0
+                (m_floor +/- m_band_half_width, 2*m_band_half_width+1
+                layers total per binary). Default 1.
+        """
+        params_tmp = self.xp.asarray(self.xp.atleast_2d(params)).copy()
+        num_bin = params_tmp.shape[0]
+        nparams = int(self._NPARAMS)
+
+        if convert_to_ra_dec:
+            lam = params_tmp[:, -2].copy()
+            beta = params_tmp[:, -1].copy()
+            lam, beta = ecliptic_to_icrs(lam, beta)
+            params_tmp[:, -2] = lam
+            params_tmp[:, -1] = beta
+
+        # Outputs (kernel writes both re + im; we drop im since WDM is real).
+        if self.backend.name == "fastlisaresponse_jax":
+            N_re = np.zeros((num_bin, 4))
+            N_im = np.zeros((num_bin, 4))
+            M_re = np.zeros((num_bin, 10))
+            M_im = np.zeros((num_bin, 10))
+        else:
+            N_re = self.xp.zeros((num_bin, 4))
+            N_im = self.xp.zeros((num_bin, 4))
+            M_re = self.xp.zeros((num_bin, 10))
+            M_im = self.xp.zeros((num_bin, 10))
+
+        num_data = num_noise = len(wdm_holder)
+        data_index, noise_index = self._prep_indices(
+            num_bin, num_data, num_noise, data_index, noise_index)
+
+        params_in = params_tmp.flatten().copy()
+
+        # F-stat has its own narrow-band path inside the kernel; the
+        # layer-grouping interface is not used here. Route through the
+        # standard ``_kernel(name)`` so SOBBHWDMComputations picks up the
+        # ``sobbh_`` prefix automatically.
+        self._kernel("get_fstat_ll")(
+            N_re.reshape(-1), N_im.reshape(-1),
+            M_re.reshape(-1), M_im.reshape(-1),
+            self.cpp_orbits, self.cpp_tdi_config,
+            self.cpp_wdm_settings,
+            params_in, data_index, noise_index,
+            self.xp.asarray(self.chunk_t_starts),
+            self.xp.asarray(self.chunk_keep_lo), self.xp.asarray(self.chunk_keep_hi),
+            self.xp.asarray(self.chunk_n_global_offset),
+            self.xp.asarray(self.wdm_window),
+            wdm_holder.linear_data_arr[0],
+            wdm_holder.linear_psd_arr[0],
+            self.n_chunks, int(num_bin), int(nparams),
+            int(self.Nt_sub), int(self.log2_Nt_sub),
+            int(self.N_sparse), int(self.log2_N_sparse),
+            int(self.nchannels), int(self.n_rfft_chunk),
+            float(self.T_chunk), float(self.dt),
+            float(self.T), float(self.t_ref),
+            int(self.backend.TDITypeDict[self.tdi_type]),
+            float(self.resolved_tukey_alpha), int(grid_dim),
+            int(m_band_half_width),
+        )
+
+        # WDM coefs are real -> imag is identically 0.
+        self.N_arr = N_re
+        self.M_mat = M_re
+        return N_re, M_re
+
 
 class SOBBHWDMComputations(GBWDMComputations):
     """Stellar-origin BBH analog of :class:`GBWDMComputations`.

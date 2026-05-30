@@ -461,6 +461,25 @@ class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBas
         array_type<int> binary_perm, array_type<int> group_starts, array_type<int> group_ends,
         array_type<int> group_m_lo, array_type<int> group_m_hi, int n_groups,
         array_type<int> pair_m_lo_b, array_type<int> pair_m_hi_b);
+
+    void gb_wdm_het_get_fstat_ll(
+        array_type<double> N_arr_re_out, array_type<double> N_arr_im_out,
+        array_type<double> M_mat_re_out, array_type<double> M_mat_im_out,
+        OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+        WDMSettingsWrap *wdm_settings_wrap,
+        array_type<double> params_all,
+        array_type<int> data_index_all, array_type<int> noise_index_all,
+        array_type<double> chunk_t_starts,
+        array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
+        array_type<int> chunk_n_global_offset,
+        array_type<double> wdm_window,
+        array_type<double> data_d, array_type<double> invC,
+        int n_chunks, int num_bin, int nparams,
+        int Nt_sub, int log2_Nt_sub,
+        int N_sparse, int log2_N_sparse,
+        int nchannels, int n_rfft_chunk,
+        double T_chunk, double dt, double T, double t_ref, int tdi_type,
+        double tukey_alpha, int grid_dim, int m_band_half_width);
 };
 
 
@@ -527,6 +546,25 @@ class SOBBHComputationGroupWrap: public SOBBHComputationGroup, public ReturnPoin
         array_type<int> binary_perm, array_type<int> group_starts, array_type<int> group_ends,
         array_type<int> group_m_lo, array_type<int> group_m_hi, int n_groups,
         array_type<int> pair_m_lo_b, array_type<int> pair_m_hi_b);
+
+    void sobbh_wdm_het_get_fstat_ll(
+        array_type<double> N_arr_re_out, array_type<double> N_arr_im_out,
+        array_type<double> M_mat_re_out, array_type<double> M_mat_im_out,
+        OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+        WDMSettingsWrap *wdm_settings_wrap,
+        array_type<double> params_all,
+        array_type<int> data_index_all, array_type<int> noise_index_all,
+        array_type<double> chunk_t_starts,
+        array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
+        array_type<int> chunk_n_global_offset,
+        array_type<double> wdm_window,
+        array_type<double> data_d, array_type<double> invC,
+        int n_chunks, int num_bin, int nparams,
+        int Nt_sub, int log2_Nt_sub,
+        int N_sparse, int log2_N_sparse,
+        int nchannels, int n_rfft_chunk,
+        double T_chunk, double dt, double T, double t_ref, int tdi_type,
+        double tukey_alpha, int grid_dim, int m_band_half_width);
 };
 
 #endif // __BINDING_TOF_HPP__

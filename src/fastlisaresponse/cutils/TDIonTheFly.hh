@@ -752,6 +752,30 @@ class GBComputationGroup{
         int *group_m_lo, int *group_m_hi, int n_groups,
         int *pair_m_lo_b, int *pair_m_hi_b);
 
+    // F-stat (chunked-heterodyne). Builds the 4 Cornish & Crowder '05 basis
+    // filters per binary and writes:
+    //   N_arr_re/im_out :  (num_bin, 4)  -- <d|A_i> (im always 0 for real WDM)
+    //   M_mat_re/im_out :  (num_bin, 10) -- upper-triangle <A_i|A_j> (i<=j)
+    // Python computes F = N^T M^{-1} N / 2 from these.
+    void gb_wdm_het_get_fstat_ll_wrap(
+        double *N_arr_re_out, double *N_arr_im_out,
+        double *M_mat_re_out, double *M_mat_im_out,
+        Orbits *orbits, TDIConfig *tdi_config,
+        WDMSettings *wdm_settings,
+        double *params_all,
+        int *data_index_all, int *noise_index_all,
+        double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
+        int *chunk_n_global_offset,
+        double *wdm_window,
+        double *data_d, double *invC,
+        int n_chunks, int num_bin, int nparams,
+        int Nt_sub, int log2_Nt_sub,
+        int N_sparse, int log2_N_sparse,
+        int nchannels, int n_rfft_chunk,
+        double T_chunk, double dt, double T, double t_ref, int tdi_type,
+        double tukey_alpha,
+        int grid_dim, int m_band_half_width);
+
     // Spline-path mirrors. `coarse_dt` (seconds) sets the coarse-grid spacing
     // for the cubic-spline window builder (smaller -> more accurate / more
     // get_tdi work). Python computes coarse_dt from a user knob
@@ -939,6 +963,26 @@ class SOBBHComputationGroup{
         int *binary_perm, int *group_starts, int *group_ends,
         int *group_m_lo, int *group_m_hi, int n_groups,
         int *pair_m_lo_b, int *pair_m_hi_b);
+
+    // F-stat (chunked-heterodyne); see GBComputationGroup::gb_wdm_het_get_fstat_ll_wrap.
+    void sobbh_wdm_het_get_fstat_ll_wrap(
+        double *N_arr_re_out, double *N_arr_im_out,
+        double *M_mat_re_out, double *M_mat_im_out,
+        Orbits *orbits, TDIConfig *tdi_config,
+        WDMSettings *wdm_settings,
+        double *params_all,
+        int *data_index_all, int *noise_index_all,
+        double *chunk_t_starts, int *chunk_keep_lo, int *chunk_keep_hi,
+        int *chunk_n_global_offset,
+        double *wdm_window,
+        double *data_d, double *invC,
+        int n_chunks, int num_bin, int nparams,
+        int Nt_sub, int log2_Nt_sub,
+        int N_sparse, int log2_N_sparse,
+        int nchannels, int n_rfft_chunk,
+        double T_chunk, double dt, double T, double t_ref, int tdi_type,
+        double tukey_alpha,
+        int grid_dim, int m_band_half_width);
 };
 
 #endif // __TDI_ON_THE_FLY_HH__

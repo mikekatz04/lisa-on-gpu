@@ -660,6 +660,61 @@ void GBComputationGroupWrap::gb_wdm_het_swap_ll(
 }
 
 
+void GBComputationGroupWrap::gb_wdm_het_get_fstat_ll(
+    array_type<double> N_arr_re_out, array_type<double> N_arr_im_out,
+    array_type<double> M_mat_re_out, array_type<double> M_mat_im_out,
+    OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+    WDMSettingsWrap *wdm_settings_wrap,
+    array_type<double> params_all,
+    array_type<int> data_index_all, array_type<int> noise_index_all,
+    array_type<double> chunk_t_starts,
+    array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
+    array_type<int> chunk_n_global_offset,
+    array_type<double> wdm_window,
+    array_type<double> data_d, array_type<double> invC,
+    int n_chunks, int num_bin, int nparams,
+    int Nt_sub, int log2_Nt_sub,
+    int N_sparse, int log2_N_sparse,
+    int nchannels, int n_rfft_chunk,
+    double T_chunk, double dt, double T, double t_ref, int tdi_type,
+    double tukey_alpha, int grid_dim, int m_band_half_width)
+{
+    const int Nf_active = wdm_settings_wrap->wdm_settings->Nf_active;
+    const int Nt_active = wdm_settings_wrap->wdm_settings->Nt_active;
+    gb_wdm_het_get_fstat_ll_wrap(
+        // outputs: (num_bin, 4) for N, (num_bin, 10) for M (upper-triangle)
+        return_pointer_and_check_length(N_arr_re_out, "N_arr_re_out", num_bin, 4),
+        return_pointer_and_check_length(N_arr_im_out, "N_arr_im_out", num_bin, 4),
+        return_pointer_and_check_length(M_mat_re_out, "M_mat_re_out", num_bin, 10),
+        return_pointer_and_check_length(M_mat_im_out, "M_mat_im_out", num_bin, 10),
+        orbits_wrap->orbits, tdi_config_wrap->tdi_config,
+        wdm_settings_wrap->wdm_settings,
+        return_pointer_and_check_length(params_all, "params_all", nparams, num_bin),
+        return_pointer_and_check_length(data_index_all, "data_index_all", num_bin, 1),
+        return_pointer_and_check_length(noise_index_all, "noise_index_all", num_bin, 1),
+        return_pointer_and_check_length(chunk_t_starts, "chunk_t_starts", n_chunks, 1),
+        return_pointer_and_check_length(chunk_keep_lo, "chunk_keep_lo", n_chunks, 1),
+        return_pointer_and_check_length(chunk_keep_hi, "chunk_keep_hi", n_chunks, 1),
+        return_pointer_and_check_length(chunk_n_global_offset, "chunk_n_global_offset", n_chunks, 1),
+        return_pointer_and_check_length(wdm_window, "wdm_window", Nt_sub, 1),
+        return_pointer_and_check_length(
+            data_d, "data_d",
+            (size_t) nchannels * Nf_active * Nt_active, 1),
+        return_pointer_and_check_length(
+            invC, "invC",
+            ((tdi_type == TDI_XYZ)
+                 ? (size_t) nchannels * nchannels * Nf_active * Nt_active
+                 : (size_t) nchannels * Nf_active * Nt_active),
+            1),
+        n_chunks, num_bin, nparams,
+        Nt_sub, log2_Nt_sub,
+        N_sparse, log2_N_sparse,
+        nchannels, n_rfft_chunk,
+        T_chunk, dt, T, t_ref, tdi_type,
+        tukey_alpha, grid_dim, m_band_half_width);
+}
+
+
 // ---- SOBBH-flavored pybind shims -------------------------------------------
 void SOBBHComputationGroupWrap::sobbh_wdm_het_fill_global(
     array_type<double> template_fill,
@@ -831,6 +886,60 @@ void SOBBHComputationGroupWrap::sobbh_wdm_het_swap_ll(
         n_groups,
         return_pointer_and_check_length(pair_m_lo_b, "pair_m_lo_b", num_bin, 1),
         return_pointer_and_check_length(pair_m_hi_b, "pair_m_hi_b", num_bin, 1));
+}
+
+
+void SOBBHComputationGroupWrap::sobbh_wdm_het_get_fstat_ll(
+    array_type<double> N_arr_re_out, array_type<double> N_arr_im_out,
+    array_type<double> M_mat_re_out, array_type<double> M_mat_im_out,
+    OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
+    WDMSettingsWrap *wdm_settings_wrap,
+    array_type<double> params_all,
+    array_type<int> data_index_all, array_type<int> noise_index_all,
+    array_type<double> chunk_t_starts,
+    array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
+    array_type<int> chunk_n_global_offset,
+    array_type<double> wdm_window,
+    array_type<double> data_d, array_type<double> invC,
+    int n_chunks, int num_bin, int nparams,
+    int Nt_sub, int log2_Nt_sub,
+    int N_sparse, int log2_N_sparse,
+    int nchannels, int n_rfft_chunk,
+    double T_chunk, double dt, double T, double t_ref, int tdi_type,
+    double tukey_alpha, int grid_dim, int m_band_half_width)
+{
+    const int Nf_active = wdm_settings_wrap->wdm_settings->Nf_active;
+    const int Nt_active = wdm_settings_wrap->wdm_settings->Nt_active;
+    sobbh_wdm_het_get_fstat_ll_wrap(
+        return_pointer_and_check_length(N_arr_re_out, "N_arr_re_out", num_bin, 4),
+        return_pointer_and_check_length(N_arr_im_out, "N_arr_im_out", num_bin, 4),
+        return_pointer_and_check_length(M_mat_re_out, "M_mat_re_out", num_bin, 10),
+        return_pointer_and_check_length(M_mat_im_out, "M_mat_im_out", num_bin, 10),
+        orbits_wrap->orbits, tdi_config_wrap->tdi_config,
+        wdm_settings_wrap->wdm_settings,
+        return_pointer_and_check_length(params_all, "params_all", nparams, num_bin),
+        return_pointer_and_check_length(data_index_all, "data_index_all", num_bin, 1),
+        return_pointer_and_check_length(noise_index_all, "noise_index_all", num_bin, 1),
+        return_pointer_and_check_length(chunk_t_starts, "chunk_t_starts", n_chunks, 1),
+        return_pointer_and_check_length(chunk_keep_lo, "chunk_keep_lo", n_chunks, 1),
+        return_pointer_and_check_length(chunk_keep_hi, "chunk_keep_hi", n_chunks, 1),
+        return_pointer_and_check_length(chunk_n_global_offset, "chunk_n_global_offset", n_chunks, 1),
+        return_pointer_and_check_length(wdm_window, "wdm_window", Nt_sub, 1),
+        return_pointer_and_check_length(
+            data_d, "data_d",
+            (size_t) nchannels * Nf_active * Nt_active, 1),
+        return_pointer_and_check_length(
+            invC, "invC",
+            ((tdi_type == TDI_XYZ)
+                 ? (size_t) nchannels * nchannels * Nf_active * Nt_active
+                 : (size_t) nchannels * Nf_active * Nt_active),
+            1),
+        n_chunks, num_bin, nparams,
+        Nt_sub, log2_Nt_sub,
+        N_sparse, log2_N_sparse,
+        nchannels, n_rfft_chunk,
+        T_chunk, dt, T, t_ref, tdi_type,
+        tukey_alpha, grid_dim, m_band_half_width);
 }
 
 
@@ -1149,6 +1258,12 @@ void tdionthefly_part(py::module &m) {
          "Chunked-heterodyne swap_ll. Returns the same five inner products as "
          "gb_wdm_swap_ll: <d|h_add>, <d|h_remove>, <h_add|h_add>, "
          "<h_remove|h_remove>, <h_add|h_remove>.")
+    .def("gb_wdm_het_get_fstat_ll", &GBComputationGroupWrap::gb_wdm_het_get_fstat_ll,
+         "Chunked-heterodyne F-stat. Returns per-binary N_arr (4,) = "
+         "<d|A_i> and M_mat (10,) = <A_i|A_j> upper-triangle (4 basis "
+         "filters per Cornish & Crowder '05). Python computes "
+         "F = N^T M^{-1} N / 2 from these. Imag outputs always 0 "
+         "(WDM coefficients are real).")
     ;
 
     #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
@@ -1165,6 +1280,8 @@ void tdionthefly_part(py::module &m) {
          "SOBBH chunked-heterodyne get_ll.")
     .def("sobbh_wdm_het_swap_ll", &SOBBHComputationGroupWrap::sobbh_wdm_het_swap_ll,
          "SOBBH chunked-heterodyne swap_ll.")
+    .def("sobbh_wdm_het_get_fstat_ll", &SOBBHComputationGroupWrap::sobbh_wdm_het_get_fstat_ll,
+         "SOBBH chunked-heterodyne F-stat (same N+M outputs as the GB variant).")
     ;
 }
 

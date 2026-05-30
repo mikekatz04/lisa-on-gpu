@@ -197,6 +197,13 @@ class GBComputationGroupWrapJAX:
     def gb_fd_swap_ll_grad(self, *a, **k):
         self._unimplemented("gb_fd_swap_ll_grad")
 
+    # F-stat (chunked-heterodyne) -- not yet implemented in JAX. The C++
+    # backend exposes ``gb_wdm_het_get_fstat_ll`` / SOBBH equivalent;
+    # users requesting fstat with ``force_backend="jax"`` get a clear
+    # error until the JAX standalone kernel lands.
+    def gb_wdm_het_get_fstat_ll(self, *a, **k):
+        self._unimplemented("gb_wdm_het_get_fstat_ll")
+
     # ----------------------------------------------------------------
     # Chunked-heterodyne JAX kernels (gb_wdm_het_*)
     #
@@ -620,9 +627,10 @@ class SOBBHComputationGroupWrapJAX(GBComputationGroupWrapJAX):
     # Alias the chunked-het kernel methods under the SOBBH naming
     # convention so the C++-style dispatch in SOBBHWDMComputations
     # resolves cleanly via ``self._kernel("...")``.
-    sobbh_wdm_het_fill_global  = GBComputationGroupWrapJAX.gb_wdm_het_fill_global
-    sobbh_wdm_het_get_ll       = GBComputationGroupWrapJAX.gb_wdm_het_get_ll
-    sobbh_wdm_het_swap_ll      = GBComputationGroupWrapJAX.gb_wdm_het_swap_ll
-    sobbh_wdm_het_get_ll_grad  = GBComputationGroupWrapJAX.gb_wdm_het_get_ll_grad
-    sobbh_wdm_het_swap_ll_grad = GBComputationGroupWrapJAX.gb_wdm_het_swap_ll_grad
-    sobbh_wdm_het_hessian      = GBComputationGroupWrapJAX.gb_wdm_het_hessian
+    sobbh_wdm_het_fill_global   = GBComputationGroupWrapJAX.gb_wdm_het_fill_global
+    sobbh_wdm_het_get_ll        = GBComputationGroupWrapJAX.gb_wdm_het_get_ll
+    sobbh_wdm_het_swap_ll       = GBComputationGroupWrapJAX.gb_wdm_het_swap_ll
+    sobbh_wdm_het_get_ll_grad   = GBComputationGroupWrapJAX.gb_wdm_het_get_ll_grad
+    sobbh_wdm_het_swap_ll_grad  = GBComputationGroupWrapJAX.gb_wdm_het_swap_ll_grad
+    sobbh_wdm_het_hessian       = GBComputationGroupWrapJAX.gb_wdm_het_hessian
+    sobbh_wdm_het_get_fstat_ll  = GBComputationGroupWrapJAX.gb_wdm_het_get_fstat_ll
