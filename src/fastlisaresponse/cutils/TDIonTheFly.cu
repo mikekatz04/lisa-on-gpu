@@ -3830,29 +3830,39 @@ void wdm_het_get_ll_kernel(
     // Dynamic shared-memory layout (set by ``shared_bytes`` at kernel launch).
     // Per (chunk, m_layer) we reuse ``tdi_channel_buf`` for: heterodyned slow
     // signal -> FFT -> windowed iFFT input -> iFFT -> WDM coefficients. The
-    // FFT is length N_sparse, the iFFT is length Nt_sub; in this kernel we
-    // require N_sparse <= Nt_sub so that the same buffer slot fits both.
+    // FFT is length N_sparse, the iFFT is length Nt_sub; today we require
+    // N_sparse == Nt_sub (the chunk-FD indexing in step 5 wraps to N_sparse
+    // and the FFT and iFFT both stride at ``c * Nt_sub``).
     //
-    //   tdi_channel_buf[3 * Nt_sub] cmplx  (~12 KB at Nt_sub=256)
-    //   t_arr_buf      [N_sparse]   double (~ 2 KB at N_sparse=256)
-    //   partial_dh     [blockDim.x] double (~ 0.5 KB at blockDim.x=64)
-    //   partial_hh     [blockDim.x] double
+    //   tdi_channel_buf[nchannels * Nt_sub] cmplx  (~12 KB at Nt_sub=256)
+    //   partial_dh     [blockDim.x]         double (~ 0.5 KB at blockDim.x=64)
+    //   partial_hh     [blockDim.x]         double
     //
-    // Total ~15 KB; well under the 48 KB default on A100.
+    // Total ~13 KB; well under the 48 KB default on A100. The sparse time
+    // grid is computed on the fly inside the get_tdi_Xf_single loop, so we
+    // do not need a separate ``t_arr_buf`` slot.
+    //
+    // TODO(N_sparse != Nt_sub): allow distinct forward-FFT (N_sparse) and
+    // inverse-FFT (Nt_sub) widths while reusing a single buffer sized at
+    // ``max(N_sparse, Nt_sub)``. Today the per-channel stride is hard-wired
+    // at ``c * Nt_sub`` (which matches ``c * N_sparse`` only when the two
+    // are equal). Generalising would mean: size buf at ``nchannels *
+    // max(N_sparse, Nt_sub)``, stride writes at ``c * N_sparse`` through
+    // step 4 (FFT), step 5's permutation reads from ``c * N_sparse`` and
+    // writes ``c * Nt_sub``, then step 6 (iFFT) and downstream stride at
+    // ``c * Nt_sub``. Useful when we want a finer chunk-FD bin spacing
+    // (larger N_sparse) than the WDM time grid (Nt_sub) supports.
 #ifdef __CUDACC__
     extern CUDA_SHARED char shared_mem[];
     cmplx  *tdi_channel_buf = (cmplx *) shared_mem;
-    double *t_arr_buf       = (double *) &tdi_channel_buf[(size_t) nchannels * Nt_sub];
-    double *partial_dh      = &t_arr_buf[N_sparse];
+    double *partial_dh      = (double *) &tdi_channel_buf[(size_t) nchannels * Nt_sub];
     double *partial_hh      = &partial_dh[NUM_THREADS_HERE];
 #else
     // CPU stubs: stack arrays sized at the compile-time maxima.
     cmplx  tdi_channel_buf_cpu[FAST_WDM_NCHANNELS_MAX * FAST_WDM_NT_SUB_MAX];
-    double t_arr_buf_cpu      [FAST_WDM_N_SPARSE_MAX];
     double partial_dh_cpu     [1];
     double partial_hh_cpu     [1];
     cmplx  *tdi_channel_buf = tdi_channel_buf_cpu;
-    double *t_arr_buf       = t_arr_buf_cpu;
     double *partial_dh      = partial_dh_cpu;
     double *partial_hh      = partial_hh_cpu;
 #endif
@@ -3904,13 +3914,6 @@ void wdm_het_get_ll_kernel(
             const double chunk_t0    = chunk_t_starts[j];
             const double dt_sparse   = T_chunk / (double) N_sparse;
 
-            // Build sparse time grid for this chunk in shared mem.
-            // (Used by ``src.get_tdi_Xf`` inside the per-layer loop.)
-            for (int i = THREAD_START_X; i < N_sparse; i += BLOCK_INCR_X) {
-                t_arr_buf[i] = chunk_t0 + (double) i * dt_sparse;
-            }
-            CUDA_SYNC_THREADS;
-
             // Per m_layer in this binary's band:
             //   1. tdi_channel(t) computed for all (c, i) into tdi_channel_buf
             //   2. heterodyne in time domain: tdi_channel(t) *= exp(-i 2pi f0 t)
@@ -3926,13 +3929,21 @@ void wdm_het_get_ll_kernel(
                 const int m_act = m - ind_min_f;
 
                 // ---- 1) compute tdi_channel(t) into tdi_channel_buf ----
-                // ``get_tdi_Xf`` thread-strides over i internally and writes
-                // the raw complex TDI values into tdi_channel_buf with layout
-                // [c * N_sparse + i].
+                // Thread-stride over i; compute t inline as a linear ramp
+                // (chunk_t0 + i * dt_sparse) instead of staging a shared
+                // ``t_arr_buf``. Writes the raw complex TDI values into
+                // tdi_channel_buf with layout [c * N_sparse + i].
                 {
-                    src.get_tdi_Xf(tdi_channel_buf, params, t_arr_buf, N_sparse,
-                                    bin_i, link_sc_rec, link_sc_em,
-                                    k_sky, u_sky, v_sky);
+                    for (int i = THREAD_START_X; i < N_sparse;
+                         i += BLOCK_INCR_X) {
+                        const double t = chunk_t0 + (double) i * dt_sparse;
+                        cmplx tdi_tmp[3];
+                        src.get_tdi_Xf_single(&tdi_tmp[0], t, params,
+                                              k_sky, u_sky, v_sky,
+                                              link_sc_rec, link_sc_em, bin_i);
+                        for (int c = 0; c < nchannels; ++c)
+                            tdi_channel_buf[c * N_sparse + i] = tdi_tmp[c];
+                    }
                     CUDA_SYNC_THREADS;
                 }
 
@@ -4206,15 +4217,16 @@ void wdm_het_fill_global_kernel(
     const int Nf = wdm_settings->Nf;
     const int Nt = wdm_settings->Nt;
 
+    // Dynamic shared-memory layout (set by ``shared_bytes`` at kernel launch):
+    //   tdi_channel_buf[nchannels * Nt_sub] cmplx
+    // (no per-thread partials; fill_global writes via atomicAdd. The sparse
+    // time grid is computed on the fly inside the get_tdi_Xf_single loop.)
 #ifdef __CUDACC__
     extern CUDA_SHARED char shared_mem[];
     cmplx  *tdi_channel_buf = (cmplx *) shared_mem;
-    double *t_arr_buf       = (double *) &tdi_channel_buf[(size_t) nchannels * Nt_sub];
 #else
     cmplx  tdi_channel_buf_cpu[FAST_WDM_NCHANNELS_MAX * FAST_WDM_NT_SUB_MAX];
-    double t_arr_buf_cpu      [FAST_WDM_N_SPARSE_MAX];
     cmplx  *tdi_channel_buf = tdi_channel_buf_cpu;
-    double *t_arr_buf       = t_arr_buf_cpu;
 #endif
 
     const double layer_df = 1.0 / (2.0 * (double) Nf * dt);
@@ -4240,11 +4252,6 @@ void wdm_het_fill_global_kernel(
             const double chunk_t0    = chunk_t_starts[j];
             const double dt_sparse   = T_chunk / (double) N_sparse;
 
-            for (int i = THREAD_START_X; i < N_sparse; i += BLOCK_INCR_X) {
-                t_arr_buf[i] = chunk_t0 + (double) i * dt_sparse;
-            }
-            CUDA_SYNC_THREADS;
-
             for (int m = m_lo; m < m_hi; ++m) {
                 // ---- 1) tdi_channel(t) -> tdi_channel_buf ----
                 {
@@ -4256,9 +4263,16 @@ void wdm_het_fill_global_kernel(
                     Vec u_sky(0.0, 0.0, 0.0);
                     Vec v_sky(0.0, 0.0, 0.0);
                     src.get_sky_vectors(&k_sky, &u_sky, &v_sky, params);
-                    src.get_tdi_Xf(tdi_channel_buf, params, t_arr_buf, N_sparse,
-                                    bin_i, link_sc_rec, link_sc_em,
-                                    k_sky, u_sky, v_sky);
+                    for (int i = THREAD_START_X; i < N_sparse;
+                         i += BLOCK_INCR_X) {
+                        const double t = chunk_t0 + (double) i * dt_sparse;
+                        cmplx tdi_tmp[3];
+                        src.get_tdi_Xf_single(&tdi_tmp[0], t, params,
+                                              k_sky, u_sky, v_sky,
+                                              link_sc_rec, link_sc_em, bin_i);
+                        for (int c = 0; c < nchannels; ++c)
+                            tdi_channel_buf[c * N_sparse + i] = tdi_tmp[c];
+                    }
                     CUDA_SYNC_THREADS;
                 }
 
@@ -4417,22 +4431,24 @@ void wdm_het_swap_ll_kernel(
     const int Nf_active  = wdm_settings->Nf_active;
     const int Nt_active  = wdm_settings->Nt_active;
 
+    // Dynamic shared-memory layout (must match shared_bytes at launch):
+    //   tdi_channel_buf[nchannels * Nt_sub] cmplx
+    //   partial_dh_a / partial_dh_r / partial_aa / partial_rr / partial_ar
+    //     each [blockDim.x] double
+    // (Sparse time grid is computed inline; no shared ``t_arr_buf`` slot.)
 #ifdef __CUDACC__
     extern CUDA_SHARED char shared_mem[];
     cmplx  *tdi_channel_buf = (cmplx *) shared_mem;
-    double *t_arr_buf       = (double *) &tdi_channel_buf[(size_t) nchannels * Nt_sub];
-    double *partial_dh_a    = &t_arr_buf[N_sparse];
+    double *partial_dh_a    = (double *) &tdi_channel_buf[(size_t) nchannels * Nt_sub];
     double *partial_dh_r    = &partial_dh_a[NUM_THREADS_HERE];
     double *partial_aa      = &partial_dh_r[NUM_THREADS_HERE];
     double *partial_rr      = &partial_aa  [NUM_THREADS_HERE];
     double *partial_ar      = &partial_rr  [NUM_THREADS_HERE];
 #else
     cmplx  tdi_channel_buf_cpu[FAST_WDM_NCHANNELS_MAX * FAST_WDM_NT_SUB_MAX];
-    double t_arr_buf_cpu      [FAST_WDM_N_SPARSE_MAX];
     double partial_dh_a_cpu[1], partial_dh_r_cpu[1];
     double partial_aa_cpu  [1], partial_rr_cpu  [1], partial_ar_cpu[1];
     cmplx  *tdi_channel_buf = tdi_channel_buf_cpu;
-    double *t_arr_buf       = t_arr_buf_cpu;
     double *partial_dh_a    = partial_dh_a_cpu;
     double *partial_dh_r    = partial_dh_r_cpu;
     double *partial_aa      = partial_aa_cpu;
@@ -4475,11 +4491,6 @@ void wdm_het_swap_ll_kernel(
             const double chunk_t0    = chunk_t_starts[j];
             const double dt_sparse   = T_chunk / (double) N_sparse;
 
-            for (int i = THREAD_START_X; i < N_sparse; i += BLOCK_INCR_X) {
-                t_arr_buf[i] = chunk_t0 + (double) i * dt_sparse;
-            }
-            CUDA_SYNC_THREADS;
-
             for (int m = m_lo; m < m_hi; ++m) {
                 const int m_act = m - ind_min_f;
 
@@ -4498,9 +4509,16 @@ void wdm_het_swap_ll_kernel(
                     Vec u_sky(0.0, 0.0, 0.0);
                     Vec v_sky(0.0, 0.0, 0.0);
                     src.get_sky_vectors(&k_sky, &u_sky, &v_sky, p_add);
-                    src.get_tdi_Xf(tdi_channel_buf, p_add, t_arr_buf, N_sparse,
-                                    bin_i, link_sc_rec, link_sc_em,
-                                    k_sky, u_sky, v_sky);
+                    for (int i = THREAD_START_X; i < N_sparse;
+                         i += BLOCK_INCR_X) {
+                        const double t = chunk_t0 + (double) i * dt_sparse;
+                        cmplx tdi_tmp[3];
+                        src.get_tdi_Xf_single(&tdi_tmp[0], t, p_add,
+                                              k_sky, u_sky, v_sky,
+                                              link_sc_rec, link_sc_em, bin_i);
+                        for (int c = 0; c < nchannels; ++c)
+                            tdi_channel_buf[c * N_sparse + i] = tdi_tmp[c];
+                    }
                     CUDA_SYNC_THREADS;
                 }
 
@@ -4618,9 +4636,16 @@ void wdm_het_swap_ll_kernel(
                     Vec u_sky(0.0, 0.0, 0.0);
                     Vec v_sky(0.0, 0.0, 0.0);
                     src.get_sky_vectors(&k_sky, &u_sky, &v_sky, p_rem);
-                    src.get_tdi_Xf(tdi_channel_buf, p_rem, t_arr_buf, N_sparse,
-                                    bin_i, link_sc_rec, link_sc_em,
-                                    k_sky, u_sky, v_sky);
+                    for (int i = THREAD_START_X; i < N_sparse;
+                         i += BLOCK_INCR_X) {
+                        const double t = chunk_t0 + (double) i * dt_sparse;
+                        cmplx tdi_tmp[3];
+                        src.get_tdi_Xf_single(&tdi_tmp[0], t, p_rem,
+                                              k_sky, u_sky, v_sky,
+                                              link_sc_rec, link_sc_em, bin_i);
+                        for (int c = 0; c < nchannels; ++c)
+                            tdi_channel_buf[c * N_sparse + i] = tdi_tmp[c];
+                    }
                     CUDA_SYNC_THREADS;
                 }
 
@@ -4858,20 +4883,22 @@ void wdm_het_get_fstat_ll_kernel(
     constexpr int IDX_IOTA = 5;
     constexpr int IDX_PSI  = 6;
 
+    // Dynamic shared-memory layout (must match shared_bytes at launch):
+    //   tdi_channel_buf[nchannels * Nt_sub] cmplx
+    //   partial_N      [N_FILTERS  * blockDim.x] double  ( 4 * NTH)
+    //   partial_M      [N_M_PART   * blockDim.x] double  (10 * NTH)
+    // (Sparse time grid is computed inline; no shared ``t_arr_buf`` slot.)
 #ifdef __CUDACC__
     extern CUDA_SHARED char shared_mem[];
     cmplx  *tdi_channel_buf = (cmplx *) shared_mem;
-    double *t_arr_buf       = (double *) &tdi_channel_buf[(size_t) nchannels * Nt_sub];
     // 4 N + 10 M = 14 partial buffers, each blockDim.x wide.
-    double *partial_N       = &t_arr_buf[N_sparse];
+    double *partial_N       = (double *) &tdi_channel_buf[(size_t) nchannels * Nt_sub];
     double *partial_M       = &partial_N[(size_t) N_FILTERS * NUM_THREADS_HERE];
 #else
     cmplx  tdi_channel_buf_cpu[FAST_WDM_NCHANNELS_MAX * FAST_WDM_NT_SUB_MAX];
-    double t_arr_buf_cpu      [FAST_WDM_N_SPARSE_MAX];
     double partial_N_cpu      [N_FILTERS];
     double partial_M_cpu      [(N_FILTERS * (N_FILTERS + 1)) / 2];
     cmplx  *tdi_channel_buf = tdi_channel_buf_cpu;
-    double *t_arr_buf       = t_arr_buf_cpu;
     double *partial_N       = partial_N_cpu;
     double *partial_M       = partial_M_cpu;
 #endif
@@ -4915,11 +4942,6 @@ void wdm_het_get_fstat_ll_kernel(
             const double chunk_t0    = chunk_t_starts[j];
             const double dt_sparse   = T_chunk / (double) N_sparse;
 
-            for (int i = THREAD_START_X; i < N_sparse; i += BLOCK_INCR_X) {
-                t_arr_buf[i] = chunk_t0 + (double) i * dt_sparse;
-            }
-            CUDA_SYNC_THREADS;
-
             for (int m = m_lo; m < m_hi; ++m) {
                 const int m_act = m - ind_min_f;
 
@@ -4952,9 +4974,16 @@ void wdm_het_get_fstat_ll_kernel(
                         Vec u_sky(0.0, 0.0, 0.0);
                         Vec v_sky(0.0, 0.0, 0.0);
                         src.get_sky_vectors(&k_sky, &u_sky, &v_sky, params_basis);
-                        src.get_tdi_Xf(tdi_channel_buf, params_basis, t_arr_buf,
-                                        N_sparse, bin_i, link_sc_rec, link_sc_em,
-                                        k_sky, u_sky, v_sky);
+                        for (int i = THREAD_START_X; i < N_sparse;
+                             i += BLOCK_INCR_X) {
+                            const double t = chunk_t0 + (double) i * dt_sparse;
+                            cmplx tdi_tmp[3];
+                            src.get_tdi_Xf_single(&tdi_tmp[0], t, params_basis,
+                                                  k_sky, u_sky, v_sky,
+                                                  link_sc_rec, link_sc_em, bin_i);
+                            for (int c = 0; c < nchannels; ++c)
+                                tdi_channel_buf[c * N_sparse + i] = tdi_tmp[c];
+                        }
                         CUDA_SYNC_THREADS;
                     }
 
@@ -11536,10 +11565,12 @@ static void wdm_het_fill_global_impl(
     (void) N_cp_sig; (void) N_cp_orbit;
 #ifdef __CUDACC__
     const int gd_x = (grid_dim > 0) ? grid_dim : num_bin;
-    // Shared-mem size: 3 * Nt_sub cmplx + 2 * NUM_THREADS doubles.
+    // Shared-mem layout (must match wdm_het_fill_global_kernel):
+    //   tdi_channel_buf[nchannels * Nt_sub] cmplx
+    // (no per-thread partials -- fill_global writes directly via atomicAdd.
+    //  no t_arr_buf -- sparse time grid computed inline in the kernel.)
     const size_t shared_bytes =
-        (size_t) 3 * (size_t) Nt_sub * sizeof(cmplx) +
-        (size_t) 2 * (size_t) NUM_THREADS_HERE * sizeof(double);
+        (size_t) nchannels * (size_t) Nt_sub * sizeof(cmplx);
 
     // Upload host-side wrapper structs (Orbits / TDIConfig / WDMSettings) to
     // device. Cache the device-side pointers across calls.
@@ -11612,8 +11643,13 @@ static void wdm_het_get_ll_impl(
     (void) group_m_lo; (void) group_m_hi; (void) n_groups;
 #ifdef __CUDACC__
     const int gd_x = (grid_dim > 0) ? grid_dim : num_bin;
+    // Shared-mem layout (must match wdm_het_get_ll_kernel):
+    //   tdi_channel_buf[nchannels * Nt_sub] cmplx
+    //   partial_dh     [blockDim.x]         double
+    //   partial_hh     [blockDim.x]         double
+    // (Sparse time grid computed inline in kernel; no t_arr_buf slot.)
     const size_t shared_bytes =
-        (size_t) 3 * (size_t) Nt_sub * sizeof(cmplx) +
+        (size_t) nchannels * (size_t) Nt_sub * sizeof(cmplx) +
         (size_t) 2 * (size_t) NUM_THREADS_HERE * sizeof(double);
 
     static Orbits      *orbits_gpu       = nullptr;
@@ -11684,9 +11720,12 @@ static void wdm_het_swap_ll_impl(
     (void) pair_m_lo_b; (void) pair_m_hi_b;
 #ifdef __CUDACC__
     const int gd_x = (grid_dim > 0) ? grid_dim : num_bin;
+    // Shared-mem layout (must match wdm_het_swap_ll_kernel):
+    //   tdi_channel_buf[nchannels * Nt_sub] cmplx
+    //   5 * blockDim.x doubles (dh_a, dh_r, aa, rr, ar partial-sum buffers)
     const size_t shared_bytes =
-        (size_t) 3 * (size_t) Nt_sub * sizeof(cmplx) +
-        (size_t) 5 * (size_t) NUM_THREADS_HERE * sizeof(double);  // 5 partial-sum buffers
+        (size_t) nchannels * (size_t) Nt_sub * sizeof(cmplx) +
+        (size_t) 5 * (size_t) NUM_THREADS_HERE * sizeof(double);
 
     static Orbits      *orbits_gpu       = nullptr;
     static TDIConfig   *tdi_config_gpu   = nullptr;
@@ -11753,11 +11792,13 @@ static void wdm_het_get_fstat_ll_impl(
 {
 #ifdef __CUDACC__
     const int gd_x = (grid_dim > 0) ? grid_dim : num_bin;
-    // F-stat shared mem: 3 * Nt_sub cmplx (buffer) + 14 * NUM_THREADS doubles
-    // (4 N partials + 10 M partials, real-only since invC is real).
+    // Shared-mem layout (must match wdm_het_get_fstat_ll_kernel):
+    //   tdi_channel_buf[nchannels * Nt_sub] cmplx
+    //   partial_N      [ 4 * blockDim.x]    double  (4 basis filters)
+    //   partial_M      [10 * blockDim.x]    double  (upper-tri of 4x4 M)
     const size_t shared_bytes =
-        (size_t) 3 * (size_t) Nt_sub * sizeof(cmplx) +
-        (size_t) 14 * (size_t) NUM_THREADS_HERE * sizeof(double);
+        (size_t) nchannels * (size_t) Nt_sub * sizeof(cmplx) +
+        (size_t) 14        * (size_t) NUM_THREADS_HERE * sizeof(double);
 
     static Orbits      *orbits_gpu       = nullptr;
     static TDIConfig   *tdi_config_gpu   = nullptr;
