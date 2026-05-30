@@ -107,6 +107,19 @@ def compute_chunk_geometry(Nt, Nt_sub, n_pad):
     """
     step = int(Nt_sub) - 2 * int(n_pad)
     assert step > 0 and step % 2 == 0, (Nt_sub, n_pad, step)
+
+    # Single-chunk case: Nt_sub >= Nt. One chunk covers the full WDM grid;
+    # the chunk's TD span (Nt_sub samples) is longer than Nt but we only
+    # keep [0, Nt) WDM pixels. The waveform is evaluated on the fly at any
+    # t, so extending the chunk past t_obs_end is harmless.
+    if int(Nt_sub) >= int(Nt):
+        return dict(
+            starts      = np.asarray([0],          dtype=np.int64),
+            keep_lo     = np.asarray([0],          dtype=np.int32),
+            keep_hi     = np.asarray([int(Nt)],    dtype=np.int32),
+            n_global_lo = np.asarray([0],          dtype=np.int32),
+        )
+
     n_full = (int(Nt) - int(Nt_sub)) // step + 1
     starts = [j * step for j in range(n_full)]
     last_full_end = starts[-1] + Nt_sub
