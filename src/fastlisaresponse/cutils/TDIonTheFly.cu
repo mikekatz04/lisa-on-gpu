@@ -3931,7 +3931,8 @@ void wdm_het_get_ll_kernel(
     double T_chunk, double dt, double T, double t_ref,
     int    tdi_type,
     double tukey_alpha,
-    int    m_band_half_width)
+    int    m_band_half_width,
+    int    N_cp_orbit)   // 0 -> raw orbit lookups; >0 -> per-chunk spline cache
 {
     // One binary per block (grid.X); chunks iterated sequentially inside the
     // block. See the kernel-section header comment above for the full design.
@@ -4004,6 +4005,29 @@ void wdm_het_get_ll_kernel(
     CUDA_SHARED int link_sc_rec[NLINKS];
     CUDA_SHARED int link_sc_em [NLINKS];
     src.fill_link_arrays(link_sc_rec, link_sc_em);
+
+    // Orbit spline-cache buffers (used only if N_cp_orbit > 0). Mirrors the
+    // buffer set consumed by ``populate_orbit_spline_cache``. Sized at
+    // FAST_WDM_N_CP_ORBIT_MAX so the kernel JITs once and dispatches against
+    // any 0 < N_cp_orbit <= max. At N_cp_orbit=32 this adds ~15.6 KB to
+    // shared-mem; capped at 48 -> ~23 KB. Replaces global-mem orbit table
+    // reads inside get_tdi_Xf_single with cooperative shared-mem cubic
+    // spline evals.
+    CUDA_SHARED double orbit_t_cp_buf  [FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_ltt_y_buf [6 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_ltt_c1_buf[6 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_ltt_c2_buf[6 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_ltt_c3_buf[6 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_pos_y_buf [9 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_pos_c1_buf[9 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_pos_c2_buf[9 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_pos_c3_buf[9 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_B_buf     [FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED double orbit_pcr_buf   [8 * FAST_WDM_N_CP_ORBIT_MAX];
+    CUDA_SHARED OrbitsSplineCache orbit_cache_storage;
+    const bool use_orbit_cache =
+        (N_cp_orbit > 0 && N_cp_orbit <= FAST_WDM_N_CP_ORBIT_MAX);
+
     CUDA_SYNC_THREADS;
 
     // One binary per block on grid.X. Grid-stride if num_bin > gridDim.x.
@@ -4045,6 +4069,24 @@ void wdm_het_get_ll_kernel(
             const double chunk_t0    = chunk_t_starts[j];
             const double dt_sparse   = T_chunk / (double) N_sparse;
 
+            // Populate orbit spline cache once over this chunk's time
+            // window [chunk_t0, chunk_t0 + T_chunk]. All threads cooperate
+            // (PCR solver on GPU, Thomas on CPU). Skipped when N_cp_orbit==0.
+            OrbitsSplineCache *orbit_cache_ptr = nullptr;
+            if (use_orbit_cache) {
+                populate_orbit_spline_cache(
+                    &orbit_cache_storage, orbits,
+                    chunk_t0, T_chunk, N_cp_orbit,
+                    orbit_t_cp_buf,
+                    orbit_ltt_y_buf, orbit_ltt_c1_buf,
+                    orbit_ltt_c2_buf, orbit_ltt_c3_buf,
+                    orbit_pos_y_buf, orbit_pos_c1_buf,
+                    orbit_pos_c2_buf, orbit_pos_c3_buf,
+                    orbit_B_buf, orbit_pcr_buf);
+                CUDA_SYNC_THREADS;
+                orbit_cache_ptr = &orbit_cache_storage;
+            }
+
             // ============================================================
             // Steps 1-4 are CHUNK-LEVEL: TD-build -> heterodyne -> Tukey
             // -> FFT into fd_chunk_buf. They do NOT depend on m, so we
@@ -4054,13 +4096,24 @@ void wdm_het_get_ll_kernel(
             // ---- 1) compute tdi_channel(t) into fd_chunk_buf ----
             // Thread-stride over i; compute t inline as a linear ramp.
             // Writes raw complex TDI values into fd_chunk_buf with layout
-            // [c * N_sparse + i].
+            // [c * N_sparse + i]. If orbit_cache_ptr != nullptr, the TDI
+            // calls use shared-mem cubic-spline orbit evals instead of
+            // global-mem table lookups -- bit-equivalent to the raw path
+            // at N_cp_orbit >= 32 over typical chunk lengths (LTT and
+            // position residuals well below float64 precision).
             for (int i = THREAD_START_X; i < N_sparse; i += BLOCK_INCR_X) {
                 const double t = chunk_t0 + (double) i * dt_sparse;
                 cmplx tdi_tmp[3];
-                src.get_tdi_Xf_single(&tdi_tmp[0], t, params,
-                                      k_sky, u_sky, v_sky,
-                                      link_sc_rec, link_sc_em, bin_i);
+                if (orbit_cache_ptr != nullptr) {
+                    src.get_tdi_Xf_single_cached(&tdi_tmp[0], t, params,
+                                                  k_sky, u_sky, v_sky,
+                                                  link_sc_rec, link_sc_em,
+                                                  bin_i, orbit_cache_ptr);
+                } else {
+                    src.get_tdi_Xf_single(&tdi_tmp[0], t, params,
+                                          k_sky, u_sky, v_sky,
+                                          link_sc_rec, link_sc_em, bin_i);
+                }
                 for (int c = 0; c < nchannels; ++c)
                     fd_chunk_buf[c * N_sparse + i] = tdi_tmp[c];
             }
@@ -11786,7 +11839,9 @@ static void wdm_het_get_ll_impl(
     // New kernel does not use group-grouping path: each block handles one
     // binary and determines its own narrow m-band internally. Layer-grouping
     // can be reintroduced later as a perf optimization.
-    (void) N_cp_sig; (void) N_cp_orbit;
+    // N_cp_sig still unused; N_cp_orbit now wired into the kernel for the
+    // shared-mem orbit spline cache (raw orbits when 0).
+    (void) N_cp_sig;
     (void) binary_perm; (void) group_starts; (void) group_ends;
     (void) group_m_lo; (void) group_m_hi; (void) n_groups;
 #ifdef __CUDACC__
@@ -11817,6 +11872,16 @@ static void wdm_het_get_ll_impl(
     gpuErrchk(cudaMemcpy(tdi_config_gpu,   tdi_config,   sizeof(TDIConfig),    cudaMemcpyHostToDevice));
     gpuErrchk(cudaMemcpy(wdm_settings_gpu, wdm_settings, sizeof(WDMSettings), cudaMemcpyHostToDevice));
 
+    // When the kernel's orbit spline cache is enabled, its static shared
+    // mem footprint grows by ~26 KB (the orbit_*_buf set). Total can exceed
+    // the 48 KB default on sm_70+; opt in to the larger per-block max via
+    // cudaFuncSetAttribute before launch.
+    if (N_cp_orbit > 0) {
+        gpuErrchk(cudaFuncSetAttribute(
+            wdm_het_get_ll_kernel<SourceT>,
+            cudaFuncAttributeMaxDynamicSharedMemorySize, 96 * 1024));
+    }
+
     dim3 grid((unsigned) gd_x, 1u, 1u);
     wdm_het_get_ll_kernel<SourceT><<<grid, NUM_THREADS_HERE, shared_bytes>>>(
         d_h_out, h_h_out, orbits_gpu, tdi_config_gpu, wdm_settings_gpu,
@@ -11826,7 +11891,8 @@ static void wdm_het_get_ll_impl(
         n_chunks, num_bin, nparams,
         Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
-        T_chunk, dt, T, t_ref, tdi_type, tukey_alpha, m_band_half_width);
+        T_chunk, dt, T, t_ref, tdi_type, tukey_alpha, m_band_half_width,
+        N_cp_orbit);
     cudaDeviceSynchronize();
     gpuErrchk(cudaGetLastError());
 #else
@@ -11839,7 +11905,8 @@ static void wdm_het_get_ll_impl(
         n_chunks, num_bin, nparams,
         Nt_sub, log2_Nt_sub, N_sparse, log2_N_sparse,
         nchannels, n_rfft_chunk,
-        T_chunk, dt, T, t_ref, tdi_type, tukey_alpha, m_band_half_width);
+        T_chunk, dt, T, t_ref, tdi_type, tukey_alpha, m_band_half_width,
+        N_cp_orbit);
 #endif
 }
 
