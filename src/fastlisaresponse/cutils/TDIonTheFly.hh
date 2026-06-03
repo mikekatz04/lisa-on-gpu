@@ -19,7 +19,7 @@
 #define SOBBHTDIonTheFly SOBBHTDIonTheFlyGPU
 #define FDSplineTDIWaveform FDSplineTDIWaveformGPU
 #define TDSplineTDIWaveform TDSplineTDIWaveformGPU
-#define WaveletLookupTable WaveletLookupTableGPU
+// WaveletLookupTable disabled at Phase 3L (2026-06-02) -- lookup-table spline path is being retired.
 #define WDMDomain WDMDomainGPU
 #define GBComputationGroup GBComputationGroupGPU
 #else
@@ -27,7 +27,7 @@
 #define SOBBHTDIonTheFly SOBBHTDIonTheFlyCPU
 #define FDSplineTDIWaveform FDSplineTDIWaveformCPU
 #define TDSplineTDIWaveform TDSplineTDIWaveformCPU
-#define WaveletLookupTable WaveletLookupTableCPU
+// WaveletLookupTable disabled at Phase 3L (2026-06-02) -- lookup-table spline path is being retired.
 #define WDMDomain WDMDomainCPU
 #define GBComputationGroup GBComputationGroupCPU
 #endif
@@ -549,6 +549,7 @@ class WDMDomain : public WDMSettings{
 //                from the built n_ref pixel to the desired layer_n.
 enum LookupKind : int { LOOKUP_PER_N = 0, LOOKUP_N_REF_ONLY = 1 };
 
+#if 0  // === WaveletLookupTable disabled at Phase 3L (2026-06-02) -- lookup-table spline path retiring ===
 class WaveletLookupTable : public WDMSettings{
   public:
     double *c_nm_all;
@@ -594,6 +595,7 @@ class WaveletLookupTable : public WDMSettings{
     CUDA_DEVICE
     double get_w_mn_lookup(cmplx tdi_channel_val, double f, double fdot, int layer_m, int layer_n);
 };
+#endif  // === end WaveletLookupTable disabled ===
 
 void fd_spline_run_wave_tdi_wrap(FDSplineTDIWaveform *tdi_on_fly, cmplx *tdi_channels_arr, 
     double *tdi_amp, double *tdi_phase, double *phi_ref, 
@@ -607,7 +609,7 @@ class GBComputationGroup{
     // on a coarse uniform time grid of spacing `coarse_dt` (seconds). Output
     // template_fill is bit-compatible with the direct path's output up to
     // cubic-spline interpolation error.
-    void gb_wdm_spline_fill_global_wrap(double *template_fill, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, double *factors_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double coarse_dt);
+    // gb_wdm_spline_fill_global_wrap disabled at Phase 3L (2026-06-02) -- WaveletLookupTable retiring.
 
     // Chunked-heterodyne family. Replaces the per-pixel WaveletLookupTable path
     // with a per-chunk dense-rfft + WDM xform built on the slow signal
@@ -708,8 +710,7 @@ class GBComputationGroup{
     // for the cubic-spline window builder (smaller -> more accurate / more
     // get_tdi work). Python computes coarse_dt from a user knob
     // `coarse_pts_per_year` (typical 256).
-    void gb_wdm_spline_get_ll_wrap(double *d_h_out, double *h_h_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double coarse_dt);
-    void gb_wdm_spline_swap_ll_wrap(double *d_h_add_out, double *d_h_remove_out, double *add_add_out, double *remove_remove_out, double *add_remove_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_add_all, double *params_remove_all, int *data_index_all, int *noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double coarse_dt);
+    // gb_wdm_spline_get_ll_wrap, gb_wdm_spline_swap_ll_wrap disabled at Phase 3L (2026-06-02).
 
     // Chain-rule parameter gradients of the two likelihood kernels.
     //
@@ -725,7 +726,7 @@ class GBComputationGroup{
     // the plus/minus slots from `params + eps_k e_k` and `params - eps_k e_k`
     // while the base slot is reused. `eps_k <= 0` freezes parameter k as
     // with the direct path. Shared-memory footprint is constant in nparams.
-    void gb_wdm_spline_get_ll_grad_wrap(double *grad_out, Orbits* orbits, TDIConfig *tdi_config, WaveletLookupTable* wdm_lookup, WDMDomain* wdm, double *params_all, int *data_index_all, int *noise_index_all, double *param_eps, int num_bin, int nparams, double T, double t_ref, int tdi_type, double coarse_dt);
+    // gb_wdm_spline_get_ll_grad_wrap disabled at Phase 3L (2026-06-02).
 
 
     // Spline analog of gb_wdm_eval_inputs_wrap. Builds ONE coarse-grid spline
@@ -882,6 +883,33 @@ class GBComputationGroup{
         int     ind_min_t, int ind_min_f,
         int     m_active_half_width,
         double  layer_df, double dt,
+        int     nchannels, int tdi_type,
+        int     N_sparse_fd);
+
+    // Stage 2b -- in-kernel sparse-FD signal-het. Fuses the existing
+    // ``gb_run_fd_wave_tdi`` (sparse heterodyned rfft) with the polyphase +
+    // bin-fold pipeline. X_het is allocated in a transient per-call buffer
+    // (heap on CPU; would be per-block shared memory on GPU at Stage 3).
+    // No per-source FD storage in global memory.
+    void gb_signal_het_get_ll_in_kernel_wrap(
+        GBTDIonTheFly *tdi_on_fly,
+        double *d_h_out, double *h_h_out,
+        cmplx  *c0_sparse_all,
+        cmplx  *A0_all, cmplx *A1_all,
+        cmplx  *B0_all, cmplx *B1_all,
+        double *wdm_window,
+        int    *n_sparse_local_arr,
+        double *params_cand_all,
+        double *params_ref_all,
+        int    *data_index_all,
+        int     num_bin, int num_data,
+        int     nparams, int f0_idx, int fdot_idx,
+        int     Nf, int Nt, int Nf_active, int Nt_active,
+        int     Nt_layer, int N_sparse_t, int stride,
+        int     ind_min_t, int ind_min_f,
+        int     m_active_half_width,
+        double  layer_df, double dt,
+        double  T_obs, double t_start,
         int     nchannels, int tdi_type,
         int     N_sparse_fd);
 };

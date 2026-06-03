@@ -462,6 +462,7 @@ void WDMDomain::get_inner_product_value_cross_channel(double *d_h, double *h_h, 
     *h_h = val_h_h;
 }
 
+#if 0  // === WaveletLookupTable disabled at Phase 3L (2026-06-02) -- lookup-table spline path retiring ===
 CUDA_DEVICE
 double WaveletLookupTable::linear_interp(double f_scaled, double fdot, double *z_vals, int layer_n)
 {
@@ -600,6 +601,7 @@ double WaveletLookupTable::get_wdm_in_channel_over_layers(cmplx tdi_channel_val,
         return 0.0;
     }
 }
+#endif  // === end WaveletLookupTable disabled ===
 
 CUDA_DEVICE
 void WDMDomain::add_ip_contrib(double *d_h_tmp, double *h_h_tmp, double *w_mn, int layer_m, int n, int data_index, int noise_index, int tdi_type)
@@ -5444,6 +5446,7 @@ void GBComputationGroup::gb_wdm_spline_eval_inputs_wrap(
 // `coarse_dt` is the spacing of the coarse grid in seconds (Python computes
 // it from the user-supplied coarse_pts_per_year and pushes it through).
 // =============================================================================
+#if 0  // === gb_wdm_spline_* kernel + wrap bodies disabled at Phase 3L (2026-06-02) -- WaveletLookupTable retiring ===
 template<int num_diff, int total_diff>
 CUDA_KERNEL
 void gb_wdm_spline_fill_global_kernel(
@@ -6388,6 +6391,7 @@ void GBComputationGroup::gb_wdm_spline_get_ll_grad_wrap(
 //  that we never sample dw on layers more than num_diff away from the
 //  central template's layer_m.
 // -----------------------------------------------------------------------------
+#endif  // === end gb_wdm_spline_* kernel + wrap bodies disabled ===
 
 
 
@@ -11124,4 +11128,645 @@ void SOBBHComputationGroup::sobbh_wdm_het_get_fstat_ll_wrap(
         nchannels, n_rfft_chunk,
         T_chunk, dt, T, t_ref, tdi_type, tukey_alpha,
         grid_dim, m_band_half_width);
+}
+
+
+// ============================================================================
+// Signal-heterodyne (v2 polyphase) -- CPU implementation
+//
+// First port of the v2 polyphase signal-het Python prototype at
+// LISAanalysistools/scripts/gb_chunked_het/gb_signal_het_wdm_v2.py.
+//
+// Algorithm per binary (matches Python prototype exactly):
+//
+//   1. f0_cand = params_cand[bin, f0_idx]
+//      m_floor = floor(f0_cand / layer_df)
+//      m_active = [m_floor - half, ..., m_floor + half], clipped to active band
+//
+//   2. For each m_active layer:
+//        Polyphase fold + iFFT of length Nt_layer over the windowed FD slice
+//        around bin (m * Nt/2), with pre-phase shift to land outputs at
+//        n_global = n_start + n_layer * stride.
+//        Apply lisatools complex-WDM coefficient layout
+//          kappa * (-1)^((m+1)n) * conj(C_mn) * after_ifft * (-1)^n / stride
+//        to produce c1_sparse[c, m_active_idx, n_layer].
+//
+//   3. r[c, m, b] = c1_sparse[c, m_active_idx, b] / c0_sparse[data_idx,
+//                  c, m_local_in_full, b]    (safe divide with floor mask).
+//      dr/dn via centred FD over b with mean bin width = stride.
+//
+//   4. Bin-folded inner products (NO carrier de-rotation -- matches the
+//      Python v1 sparse path):
+//        <d|h> = 0.5 * Re sum_{c',m_act,b} (A0 * r + A1 * dr/dn)
+//        <h|h> = 0.5 * Re sum (B0 * r_outer + B1 * cross_drr)
+//      with r_outer / cross_drr handled differently for XYZ vs AE/AET.
+//
+// GPU branch: TODO (prints and returns; CPU fully wired).
+// ============================================================================
+
+namespace {
+
+// Per-binary, single channel: compute c1_sparse[m_active_layers, Nt_layer]
+// via polyphase fold + naive O(Nt_layer^2) DFT-of-length-Nt_layer.
+// Naive DFT is sufficient for correctness validation; swap for radix-2 FFT
+// later for performance.
+static void signal_het_polyphase_one_channel(
+    const cmplx *fd_rfft_chan,            // (n_rfft,) complex
+    const int   *m_active,                // (m_active_layers,)
+    int          m_active_layers,
+    const double *window,                 // (Nt,)
+    int          Nt,
+    int          Nt_layer,                // iFFT length
+    int          N_sparse_t,              // number of sparse outputs kept (<= Nt_layer)
+    int          stride,
+    int          Nf,
+    int          ind_min_t,
+    const int   *n_sparse_local_arr,      // (N_sparse_t,) -- only first entry used for n_start
+    double       dt,
+    int          n_rfft,
+    cmplx       *c1_sparse_out)           // (m_active_layers, N_sparse_t)
+{
+    const int   N        = Nf * Nt;
+    const int   half_Nt  = Nt / 2;
+    const cmplx I_c      = cmplx(0.0, 1.0);
+    const double TWO_PI  = 2.0 * M_PI;
+    const double kappa   = 2.0 * std::sqrt(M_PI * dt) / (double) Nf;
+
+    // n_start = first sparse position (ind_min_t + stride/2 by construction).
+    const int n_start = ind_min_t + n_sparse_local_arr[0];
+
+    // Working buffers on the stack (per binary x per channel).
+    // Max sane Nt for CPU is ~32k, Nt_layer ~ 2k.
+    std::vector<cmplx> weighted((size_t) Nt);
+    std::vector<cmplx> folded((size_t) Nt_layer);
+
+    for (int im = 0; im < m_active_layers; ++im) {
+        const int m_global = m_active[im];
+        const int centre   = m_global * half_Nt;
+
+        // Step 1: gather Nt FD bins around the layer centre, with Hermitian
+        // wraparound (real TD -> rfft conjugate symmetry).
+        for (int i = 0; i < Nt; ++i) {
+            const int j_off = i - half_Nt;
+            int k = centre + j_off;
+            bool conj_flag = false;
+            int k_use;
+            if (k < 0) {
+                k_use = -k;
+                conj_flag = true;
+            } else if (k > N / 2) {
+                k_use = N - k;
+                conj_flag = true;
+            } else {
+                k_use = k;
+            }
+
+            cmplx h(0.0, 0.0);
+            if (k_use >= 0 && k_use < n_rfft) {
+                h = fd_rfft_chan[k_use];
+                if (conj_flag) h = gcmplx::conj(h);
+            }
+
+            // Window + prephase: phitilde(j_off) * exp(+i 2*pi*j_off*n_start/Nt)
+            const double phase_arg = TWO_PI * (double) j_off * (double) n_start / (double) Nt;
+            const cmplx  prephase  = gcmplx::exp(I_c * phase_arg);
+            weighted[i] = h * window[i] * prephase;
+        }
+
+        // Step 2: polyphase fold (length Nt -> length Nt_layer).
+        for (int r = 0; r < Nt_layer; ++r) folded[r] = cmplx(0.0, 0.0);
+        for (int i = 0; i < Nt; ++i) {
+            const int r = i % Nt_layer;
+            folded[r] += weighted[i];
+        }
+
+        // Step 3: naive iFFT of length Nt_layer (matches numpy ifft conv).
+        //   ifft_out[n_layer] = (1/Nt_layer) * sum_r Y[r] * exp(+i 2*pi*r*n_layer/Nt_layer)
+        // We only need the first N_sparse_t outputs (sparse positions tile
+        // the active n-range; the polyphase identity is exact for all of them).
+        for (int n_layer = 0; n_layer < N_sparse_t; ++n_layer) {
+            cmplx acc(0.0, 0.0);
+            for (int r = 0; r < Nt_layer; ++r) {
+                const double pa = TWO_PI * (double) r * (double) n_layer / (double) Nt_layer;
+                acc += folded[r] * gcmplx::exp(I_c * pa);
+            }
+            acc *= (1.0 / (double) Nt_layer);
+
+            // Lisatools complex-WDM conversion at the sparse pixel n_global =
+            // n_start + n_layer * stride.
+            const int n_global = n_start + n_layer * stride;
+            // sign_scale = (-1)^n_global / stride
+            const double sign_scale = ((n_global & 1) ? -1.0 : 1.0) / (double) stride;
+            const cmplx after_ifft_lt = acc * sign_scale;
+
+            // kappa * (-1)^((m+1)n) * conj(C_mn) where C_mn = 1 (even m+n)
+            // or 1j (odd m+n); conj(C_mn) = 1 (even) or -1j (odd).
+            const int  m_plus_n  = (m_global + n_global) & 1;
+            const cmplx conj_cmn = (m_plus_n == 0) ? cmplx(1.0, 0.0)
+                                                   : cmplx(0.0, -1.0);
+            const int  sign_mn_int = ((m_global + 1) * n_global) & 1;
+            const double sign_mn   = sign_mn_int ? -1.0 : 1.0;
+            const cmplx coef = kappa * sign_mn * conj_cmn;
+
+            c1_sparse_out[(size_t) im * N_sparse_t + n_layer] = after_ifft_lt * coef;
+        }
+    }
+}
+
+}  // anonymous namespace
+
+void GBComputationGroup::gb_signal_het_get_ll_wrap(
+    double *d_h_out,
+    double *h_h_out,
+    cmplx  *fd_rfft_all,
+    cmplx  *c0_sparse_all,
+    cmplx  *A0_all,
+    cmplx  *A1_all,
+    cmplx  *B0_all,
+    cmplx  *B1_all,
+    double *wdm_window,
+    int    *n_sparse_local_arr,
+    double *params_cand_all,
+    double *params_ref_all,
+    int    *data_index_all,
+    int     num_bin, int num_data,
+    int     nparams, int f0_idx, int fdot_idx,
+    int     Nf, int Nt, int Nf_active, int Nt_active,
+    int     Nt_layer, int N_sparse_t, int stride,
+    int     ind_min_t, int ind_min_f,
+    int     m_active_half_width,
+    double  layer_df, double dt,
+    int     nchannels, int tdi_type,
+    int     n_rfft)
+{
+    (void) params_ref_all;  // not used in bin-fold path (kept for future de-rotation)
+    (void) fdot_idx;
+    (void) num_data;
+    (void) Nt_active;
+
+#ifdef __CUDACC__
+    // GPU port deferred. CPU branch fully wired below; matches the pattern
+    // of gb_fd_swap_ll_grad_wrap (header comment line 861-862).
+    std::fprintf(stderr, "[gb_signal_het_get_ll_wrap] GPU branch TODO -- "
+                         "use CPU backend (force_backend=\"cpu\")\n");
+    return;
+#endif
+
+    const int M = 2 * m_active_half_width + 1;
+    const int Nf_active_idx_max = Nf_active - 1;
+    const double FLOOR_EPS = 1e-12;
+
+    std::vector<cmplx> c1_sparse((size_t) nchannels * M * N_sparse_t);
+    std::vector<cmplx> r_sparse((size_t)  nchannels * M * N_sparse_t);
+    std::vector<cmplx> dr_sparse((size_t) nchannels * M * N_sparse_t);
+
+    for (int bin = 0; bin < num_bin; ++bin) {
+        const double f0_cand = params_cand_all[(size_t) bin * nparams + f0_idx];
+        const int    m_floor = (int) std::floor(f0_cand / layer_df);
+        int m_active[16];
+        for (int im = 0; im < M; ++im) {
+            int m_g = m_floor + (im - m_active_half_width);
+            if (m_g < ind_min_f) m_g = ind_min_f;
+            if (m_g > ind_min_f + Nf_active_idx_max) m_g = ind_min_f + Nf_active_idx_max;
+            m_active[im] = m_g;
+        }
+
+        const int data_idx = data_index_all[bin];
+
+        for (int c = 0; c < nchannels; ++c) {
+            const cmplx *fd_chan = fd_rfft_all + (size_t) bin * nchannels * n_rfft
+                                              + (size_t) c * n_rfft;
+            cmplx *c1_chan = c1_sparse.data()
+                + (size_t) c * M * N_sparse_t;
+            signal_het_polyphase_one_channel(
+                fd_chan, m_active, M, wdm_window, Nt, Nt_layer, N_sparse_t,
+                stride, Nf, ind_min_t, n_sparse_local_arr, dt, n_rfft, c1_chan);
+        }
+
+        // r at sparse bin centres (safe divide vs c0)
+        for (int c = 0; c < nchannels; ++c) {
+            for (int im = 0; im < M; ++im) {
+                const int m_local = m_active[im] - ind_min_f;
+                double max_mag = 0.0;
+                for (int b = 0; b < N_sparse_t; ++b) {
+                    const cmplx c0v = c0_sparse_all[
+                        ((size_t) data_idx * nchannels + c) * Nf_active * N_sparse_t
+                        + (size_t) m_local * N_sparse_t + b];
+                    const double mag = gcmplx::abs(c0v);
+                    if (mag > max_mag) max_mag = mag;
+                }
+                const double floor_th = std::max(FLOOR_EPS * max_mag, 1e-300);
+
+                for (int b = 0; b < N_sparse_t; ++b) {
+                    const cmplx c0v = c0_sparse_all[
+                        ((size_t) data_idx * nchannels + c) * Nf_active * N_sparse_t
+                        + (size_t) m_local * N_sparse_t + b];
+                    const cmplx c1v = c1_sparse[
+                        (size_t) c * M * N_sparse_t
+                        + (size_t) im * N_sparse_t + b];
+                    const size_t r_idx = (size_t) c * M * N_sparse_t
+                                       + (size_t) im * N_sparse_t + b;
+                    if (gcmplx::abs(c0v) > floor_th) {
+                        r_sparse[r_idx] = c1v / c0v;
+                    } else {
+                        r_sparse[r_idx] = cmplx(0.0, 0.0);
+                    }
+                }
+            }
+        }
+
+        // dr/dn via centred FD over b
+        const double Dn = (double) stride;
+        for (int c = 0; c < nchannels; ++c) {
+            for (int im = 0; im < M; ++im) {
+                for (int b = 0; b < N_sparse_t; ++b) {
+                    const size_t i_cmb = (size_t) c * M * N_sparse_t
+                                       + (size_t) im * N_sparse_t + b;
+                    cmplx d(0.0, 0.0);
+                    if (N_sparse_t >= 3) {
+                        if (b == 0) {
+                            d = (r_sparse[i_cmb + 1] - r_sparse[i_cmb]) / Dn;
+                        } else if (b == N_sparse_t - 1) {
+                            d = (r_sparse[i_cmb] - r_sparse[i_cmb - 1]) / Dn;
+                        } else {
+                            d = (r_sparse[i_cmb + 1] - r_sparse[i_cmb - 1]) / (2.0 * Dn);
+                        }
+                    } else if (N_sparse_t == 2) {
+                        const size_t i0 = (size_t) c * M * N_sparse_t + (size_t) im * N_sparse_t;
+                        d = (r_sparse[i0 + 1] - r_sparse[i0]) / Dn;
+                    }
+                    dr_sparse[i_cmb] = d;
+                }
+            }
+        }
+
+        // Inner products
+        cmplx d_h_raw(0.0, 0.0);
+        cmplx h_h_raw(0.0, 0.0);
+
+        for (int c = 0; c < nchannels; ++c) {
+            for (int im = 0; im < M; ++im) {
+                const int m_local = m_active[im] - ind_min_f;
+                for (int b = 0; b < N_sparse_t; ++b) {
+                    const cmplx r  = r_sparse[ (size_t) c * M * N_sparse_t
+                                            + (size_t) im * N_sparse_t + b];
+                    const cmplx dr = dr_sparse[(size_t) c * M * N_sparse_t
+                                            + (size_t) im * N_sparse_t + b];
+                    const cmplx a0 = A0_all[((size_t) data_idx * nchannels + c)
+                                            * Nf_active * N_sparse_t
+                                            + (size_t) m_local * N_sparse_t + b];
+                    const cmplx a1 = A1_all[((size_t) data_idx * nchannels + c)
+                                            * Nf_active * N_sparse_t
+                                            + (size_t) m_local * N_sparse_t + b];
+                    d_h_raw += a0 * r + a1 * dr;
+                }
+            }
+        }
+
+        if (tdi_type == 0) {
+            // XYZ: cross-channel B0/B1 of shape (num_data, nch, nch, Nf_active, Nt_layer)
+            for (int c = 0; c < nchannels; ++c) {
+                for (int c2 = 0; c2 < nchannels; ++c2) {
+                    for (int im = 0; im < M; ++im) {
+                        const int m_local = m_active[im] - ind_min_f;
+                        for (int b = 0; b < N_sparse_t; ++b) {
+                            const cmplx r_c  = r_sparse[ (size_t) c  * M * N_sparse_t
+                                                     + (size_t) im * N_sparse_t + b];
+                            const cmplx r_c2 = r_sparse[ (size_t) c2 * M * N_sparse_t
+                                                     + (size_t) im * N_sparse_t + b];
+                            const cmplx dr_c  = dr_sparse[(size_t) c  * M * N_sparse_t
+                                                     + (size_t) im * N_sparse_t + b];
+                            const cmplx dr_c2 = dr_sparse[(size_t) c2 * M * N_sparse_t
+                                                     + (size_t) im * N_sparse_t + b];
+                            const cmplx b0 = B0_all[
+                                (((size_t) data_idx * nchannels + c) * nchannels + c2)
+                                  * Nf_active * N_sparse_t
+                                + (size_t) m_local * N_sparse_t + b];
+                            const cmplx b1 = B1_all[
+                                (((size_t) data_idx * nchannels + c) * nchannels + c2)
+                                  * Nf_active * N_sparse_t
+                                + (size_t) m_local * N_sparse_t + b];
+                            const cmplx r_outer  = gcmplx::conj(r_c) * r_c2;
+                            const cmplx cross_drr = gcmplx::conj(r_c)  * dr_c2
+                                                  + gcmplx::conj(dr_c) * r_c2;
+                            h_h_raw += b0 * r_outer + b1 * cross_drr;
+                        }
+                    }
+                }
+            }
+        } else {
+            // AE / AET: diagonal B0/B1 of shape (num_data, nch, Nf_active, Nt_layer)
+            for (int c = 0; c < nchannels; ++c) {
+                for (int im = 0; im < M; ++im) {
+                    const int m_local = m_active[im] - ind_min_f;
+                    for (int b = 0; b < N_sparse_t; ++b) {
+                        const cmplx r  = r_sparse[ (size_t) c * M * N_sparse_t
+                                                 + (size_t) im * N_sparse_t + b];
+                        const cmplx dr = dr_sparse[(size_t) c * M * N_sparse_t
+                                                 + (size_t) im * N_sparse_t + b];
+                        const cmplx b0 = B0_all[((size_t) data_idx * nchannels + c)
+                                                * Nf_active * N_sparse_t
+                                                + (size_t) m_local * N_sparse_t + b];
+                        const cmplx b1 = B1_all[((size_t) data_idx * nchannels + c)
+                                                * Nf_active * N_sparse_t
+                                                + (size_t) m_local * N_sparse_t + b];
+                        const double rsq = (gcmplx::conj(r) * r).real();
+                        const cmplx cross_drr = gcmplx::conj(r) * dr
+                                              + gcmplx::conj(dr) * r;
+                        h_h_raw += b0 * rsq + b1 * cross_drr;
+                    }
+                }
+            }
+        }
+
+        d_h_out[bin] = 0.5 * d_h_raw.real();
+        h_h_out[bin] = 0.5 * h_h_raw.real();
+    }
+}
+
+
+// ============================================================================
+// Signal-heterodyne (v2 polyphase) -- Stage 2a: SPARSE-FD entry point.
+// See gb_signal_het_get_ll_sparse_wrap declaration in TDIonTheFly.hh for the
+// design rationale. Polyphase fold iterates only the N_sparse_fd nonzero
+// bins (the source's spectral support around f0 in absolute frame);
+// implicit zero everywhere else.
+// ============================================================================
+
+void GBComputationGroup::gb_signal_het_get_ll_sparse_wrap(
+    double *d_h_out, double *h_h_out,
+    cmplx  *X_het_all, int *k_f0_all,
+    cmplx  *c0_sparse_all,
+    cmplx  *A0_all, cmplx *A1_all,
+    cmplx  *B0_all, cmplx *B1_all,
+    double *wdm_window, int *n_sparse_local_arr,
+    double *params_cand_all, double *params_ref_all,
+    int    *data_index_all,
+    int     num_bin, int num_data,
+    int     nparams, int f0_idx, int fdot_idx,
+    int     Nf, int Nt, int Nf_active, int Nt_active,
+    int     Nt_layer, int N_sparse_t, int stride,
+    int     ind_min_t, int ind_min_f,
+    int     m_active_half_width,
+    double  layer_df, double dt,
+    int     nchannels, int tdi_type,
+    int     N_sparse_fd)
+{
+    (void) params_ref_all; (void) fdot_idx; (void) num_data; (void) Nt_active;
+
+#ifdef __CUDACC__
+    std::fprintf(stderr, "[gb_signal_het_get_ll_sparse_wrap] GPU branch TODO -- "
+                         "use CPU backend (force_backend=\"cpu\")\n");
+    return;
+#endif
+
+    const int M = 2 * m_active_half_width + 1;
+    const int Nf_active_idx_max = Nf_active - 1;
+    const double FLOOR_EPS = 1e-12;
+    const double TWO_PI = 2.0 * M_PI;
+    const cmplx I_c = cmplx(0.0, 1.0);
+    const int   half_Nt = Nt / 2;
+    const int   half_NS = N_sparse_fd / 2;
+    const double kappa = 2.0 * std::sqrt(M_PI * dt) / (double) Nf;
+    const int   n_start = ind_min_t + n_sparse_local_arr[0];
+
+    std::vector<cmplx> fold((size_t) nchannels * M * Nt_layer);
+    std::vector<cmplx> c1_sparse((size_t) nchannels * M * N_sparse_t);
+    std::vector<cmplx> r_sparse((size_t)  nchannels * M * N_sparse_t);
+    std::vector<cmplx> dr_sparse((size_t) nchannels * M * N_sparse_t);
+
+    for (int bin = 0; bin < num_bin; ++bin) {
+        const double f0_cand = params_cand_all[(size_t) bin * nparams + f0_idx];
+        const int    m_floor = (int) std::floor(f0_cand / layer_df);
+        int m_active[16];
+        for (int im = 0; im < M; ++im) {
+            int m_g = m_floor + (im - m_active_half_width);
+            if (m_g < ind_min_f) m_g = ind_min_f;
+            if (m_g > ind_min_f + Nf_active_idx_max) m_g = ind_min_f + Nf_active_idx_max;
+            m_active[im] = m_g;
+        }
+        const int data_idx = data_index_all[bin];
+        const int k_f0     = k_f0_all[bin];
+
+        // Polyphase fold: iterate only N_sparse_fd nonzero bins.
+        std::fill(fold.begin(), fold.end(), cmplx(0.0, 0.0));
+        for (int c = 0; c < nchannels; ++c) {
+            const cmplx *X_chan = X_het_all + (size_t) bin * nchannels * N_sparse_fd
+                                            + (size_t) c * N_sparse_fd;
+            for (int i = 0; i < N_sparse_fd; ++i) {
+                const cmplx Xi = X_chan[i];
+                if (Xi.real() == 0.0 && Xi.imag() == 0.0) continue;
+                const int k_abs = k_f0 + (i - half_NS);
+                for (int im = 0; im < M; ++im) {
+                    const int j = k_abs - m_active[im] * half_Nt + half_Nt;
+                    if (j < 0 || j >= Nt) continue;
+                    const int j_off = j - half_Nt;
+                    const double phase_arg = TWO_PI * (double) j_off
+                                             * (double) n_start / (double) Nt;
+                    const cmplx prephase = gcmplx::exp(I_c * phase_arg);
+                    const cmplx weighted = Xi * wdm_window[j] * prephase;
+                    const int r = j % Nt_layer;
+                    fold[(size_t) c * M * Nt_layer
+                       + (size_t) im * Nt_layer + r] += weighted;
+                }
+            }
+        }
+
+        // iFFT of length Nt_layer (naive DFT; keep first N_sparse_t outputs).
+        for (int c = 0; c < nchannels; ++c) {
+            for (int im = 0; im < M; ++im) {
+                const cmplx *fold_cm = fold.data()
+                    + (size_t) c * M * Nt_layer + (size_t) im * Nt_layer;
+                for (int n_layer = 0; n_layer < N_sparse_t; ++n_layer) {
+                    cmplx acc(0.0, 0.0);
+                    for (int rr = 0; rr < Nt_layer; ++rr) {
+                        const double pa = TWO_PI * (double) rr
+                                          * (double) n_layer / (double) Nt_layer;
+                        acc += fold_cm[rr] * gcmplx::exp(I_c * pa);
+                    }
+                    acc *= (1.0 / (double) Nt_layer);
+                    const int n_global = n_start + n_layer * stride;
+                    const double sign_scale = ((n_global & 1) ? -1.0 : 1.0)
+                                              / (double) stride;
+                    const cmplx after_ifft_lt = acc * sign_scale;
+                    const int  m_global = m_active[im];
+                    const int  m_plus_n = (m_global + n_global) & 1;
+                    const cmplx conj_cmn = (m_plus_n == 0) ? cmplx(1.0, 0.0)
+                                                           : cmplx(0.0, -1.0);
+                    const int  sign_mn_int = ((m_global + 1) * n_global) & 1;
+                    const double sign_mn = sign_mn_int ? -1.0 : 1.0;
+                    const cmplx coef = kappa * sign_mn * conj_cmn;
+                    c1_sparse[(size_t) c * M * N_sparse_t
+                            + (size_t) im * N_sparse_t + n_layer] = after_ifft_lt * coef;
+                }
+            }
+        }
+
+        // r, dr, inner products: same as Stage 1.
+        for (int c = 0; c < nchannels; ++c) {
+            for (int im = 0; im < M; ++im) {
+                const int m_local = m_active[im] - ind_min_f;
+                double max_mag = 0.0;
+                for (int b = 0; b < N_sparse_t; ++b) {
+                    const cmplx c0v = c0_sparse_all[
+                        ((size_t) data_idx * nchannels + c) * Nf_active * N_sparse_t
+                        + (size_t) m_local * N_sparse_t + b];
+                    const double mag = gcmplx::abs(c0v);
+                    if (mag > max_mag) max_mag = mag;
+                }
+                const double floor_th = std::max(FLOOR_EPS * max_mag, 1e-300);
+                for (int b = 0; b < N_sparse_t; ++b) {
+                    const cmplx c0v = c0_sparse_all[
+                        ((size_t) data_idx * nchannels + c) * Nf_active * N_sparse_t
+                        + (size_t) m_local * N_sparse_t + b];
+                    const cmplx c1v = c1_sparse[
+                        (size_t) c * M * N_sparse_t + (size_t) im * N_sparse_t + b];
+                    const size_t r_idx = (size_t) c * M * N_sparse_t
+                                       + (size_t) im * N_sparse_t + b;
+                    if (gcmplx::abs(c0v) > floor_th) r_sparse[r_idx] = c1v / c0v;
+                    else                              r_sparse[r_idx] = cmplx(0.0, 0.0);
+                }
+            }
+        }
+
+        const double Dn = (double) stride;
+        for (int c = 0; c < nchannels; ++c) {
+            for (int im = 0; im < M; ++im) {
+                for (int b = 0; b < N_sparse_t; ++b) {
+                    const size_t i_cmb = (size_t) c * M * N_sparse_t
+                                       + (size_t) im * N_sparse_t + b;
+                    cmplx d(0.0, 0.0);
+                    if (N_sparse_t >= 3) {
+                        if (b == 0) d = (r_sparse[i_cmb + 1] - r_sparse[i_cmb]) / Dn;
+                        else if (b == N_sparse_t - 1) d = (r_sparse[i_cmb] - r_sparse[i_cmb - 1]) / Dn;
+                        else d = (r_sparse[i_cmb + 1] - r_sparse[i_cmb - 1]) / (2.0 * Dn);
+                    } else if (N_sparse_t == 2) {
+                        const size_t i0 = (size_t) c * M * N_sparse_t + (size_t) im * N_sparse_t;
+                        d = (r_sparse[i0 + 1] - r_sparse[i0]) / Dn;
+                    }
+                    dr_sparse[i_cmb] = d;
+                }
+            }
+        }
+
+        cmplx d_h_raw(0.0, 0.0), h_h_raw(0.0, 0.0);
+        for (int c = 0; c < nchannels; ++c) {
+            for (int im = 0; im < M; ++im) {
+                const int m_local = m_active[im] - ind_min_f;
+                for (int b = 0; b < N_sparse_t; ++b) {
+                    const cmplx r  = r_sparse[ (size_t) c * M * N_sparse_t + (size_t) im * N_sparse_t + b];
+                    const cmplx dr = dr_sparse[(size_t) c * M * N_sparse_t + (size_t) im * N_sparse_t + b];
+                    const cmplx a0 = A0_all[((size_t) data_idx * nchannels + c) * Nf_active * N_sparse_t + (size_t) m_local * N_sparse_t + b];
+                    const cmplx a1 = A1_all[((size_t) data_idx * nchannels + c) * Nf_active * N_sparse_t + (size_t) m_local * N_sparse_t + b];
+                    d_h_raw += a0 * r + a1 * dr;
+                }
+            }
+        }
+        if (tdi_type == 0) {
+            for (int c = 0; c < nchannels; ++c) for (int c2 = 0; c2 < nchannels; ++c2)
+                for (int im = 0; im < M; ++im) {
+                    const int m_local = m_active[im] - ind_min_f;
+                    for (int b = 0; b < N_sparse_t; ++b) {
+                        const cmplx r_c  = r_sparse[(size_t) c  * M * N_sparse_t + (size_t) im * N_sparse_t + b];
+                        const cmplx r_c2 = r_sparse[(size_t) c2 * M * N_sparse_t + (size_t) im * N_sparse_t + b];
+                        const cmplx dr_c  = dr_sparse[(size_t) c  * M * N_sparse_t + (size_t) im * N_sparse_t + b];
+                        const cmplx dr_c2 = dr_sparse[(size_t) c2 * M * N_sparse_t + (size_t) im * N_sparse_t + b];
+                        const cmplx b0 = B0_all[(((size_t) data_idx * nchannels + c) * nchannels + c2) * Nf_active * N_sparse_t + (size_t) m_local * N_sparse_t + b];
+                        const cmplx b1 = B1_all[(((size_t) data_idx * nchannels + c) * nchannels + c2) * Nf_active * N_sparse_t + (size_t) m_local * N_sparse_t + b];
+                        const cmplx r_outer = gcmplx::conj(r_c) * r_c2;
+                        const cmplx cross_drr = gcmplx::conj(r_c) * dr_c2 + gcmplx::conj(dr_c) * r_c2;
+                        h_h_raw += b0 * r_outer + b1 * cross_drr;
+                    }
+                }
+        } else {
+            for (int c = 0; c < nchannels; ++c) for (int im = 0; im < M; ++im) {
+                const int m_local = m_active[im] - ind_min_f;
+                for (int b = 0; b < N_sparse_t; ++b) {
+                    const cmplx r  = r_sparse[ (size_t) c * M * N_sparse_t + (size_t) im * N_sparse_t + b];
+                    const cmplx dr = dr_sparse[(size_t) c * M * N_sparse_t + (size_t) im * N_sparse_t + b];
+                    const cmplx b0 = B0_all[((size_t) data_idx * nchannels + c) * Nf_active * N_sparse_t + (size_t) m_local * N_sparse_t + b];
+                    const cmplx b1 = B1_all[((size_t) data_idx * nchannels + c) * Nf_active * N_sparse_t + (size_t) m_local * N_sparse_t + b];
+                    const double rsq = (gcmplx::conj(r) * r).real();
+                    const cmplx cross_drr = gcmplx::conj(r) * dr + gcmplx::conj(dr) * r;
+                    h_h_raw += b0 * rsq + b1 * cross_drr;
+                }
+            }
+        }
+
+        d_h_out[bin] = 0.5 * d_h_raw.real();
+        h_h_out[bin] = 0.5 * h_h_raw.real();
+    }
+}
+
+
+
+// ============================================================================
+// Signal-heterodyne (v2 polyphase) -- Stage 2b: IN-KERNEL sparse-FD entry.
+//
+// Fuses the existing gb_run_fd_wave_tdi_wrap (sparse heterodyned rfft) with
+// the Stage 2a polyphase + bin-fold pipeline. Per-source X_het is allocated
+// transiently inside this call (heap on CPU; per-block shared memory on GPU
+// at Stage 3). NO per-source FD storage in global memory.
+//
+// CPU implementation: two-pass for clarity --
+//   (1) gb_run_fd_wave_tdi_wrap fills X_het + k_f0 buffers
+//   (2) gb_signal_het_get_ll_sparse_wrap consumes those buffers
+//
+// GPU Stage 3 will fuse these into a single kernel with X_het in __shared__.
+// ============================================================================
+
+void GBComputationGroup::gb_signal_het_get_ll_in_kernel_wrap(
+    GBTDIonTheFly *tdi_on_fly,
+    double *d_h_out, double *h_h_out,
+    cmplx  *c0_sparse_all,
+    cmplx  *A0_all, cmplx *A1_all,
+    cmplx  *B0_all, cmplx *B1_all,
+    double *wdm_window,
+    int    *n_sparse_local_arr,
+    double *params_cand_all,
+    double *params_ref_all,
+    int    *data_index_all,
+    int     num_bin, int num_data,
+    int     nparams, int f0_idx, int fdot_idx,
+    int     Nf, int Nt, int Nf_active, int Nt_active,
+    int     Nt_layer, int N_sparse_t, int stride,
+    int     ind_min_t, int ind_min_f,
+    int     m_active_half_width,
+    double  layer_df, double dt,
+    double  T_obs, double t_start,
+    int     nchannels, int tdi_type,
+    int     N_sparse_fd)
+{
+#ifdef __CUDACC__
+    std::fprintf(stderr, "[gb_signal_het_get_ll_in_kernel_wrap] GPU branch "
+                         "TODO -- use CPU backend (force_backend=\"cpu\")\n");
+    return;
+#endif
+
+    std::vector<cmplx>  X_het((size_t) num_bin * nchannels * N_sparse_fd);
+    std::vector<int>    k_f0_buf(num_bin);
+    std::vector<double> f0_grid_buf(num_bin);
+
+    gb_run_fd_wave_tdi_wrap(
+        tdi_on_fly,
+        X_het.data(), k_f0_buf.data(), f0_grid_buf.data(),
+        params_cand_all, t_start, T_obs,
+        N_sparse_fd, num_bin, nparams, nchannels);
+
+    this->gb_signal_het_get_ll_sparse_wrap(
+        d_h_out, h_h_out,
+        X_het.data(), k_f0_buf.data(),
+        c0_sparse_all,
+        A0_all, A1_all, B0_all, B1_all,
+        wdm_window, n_sparse_local_arr,
+        params_cand_all, params_ref_all, data_index_all,
+        num_bin, num_data,
+        nparams, f0_idx, fdot_idx,
+        Nf, Nt, Nf_active, Nt_active,
+        Nt_layer, N_sparse_t, stride,
+        ind_min_t, ind_min_f,
+        m_active_half_width,
+        layer_df, dt,
+        nchannels, tdi_type,
+        N_sparse_fd);
 }

@@ -129,6 +129,7 @@ void FDSplineTDIWaveformWrap::run_wave_tdi_wrap(
 }
 
 
+#if 0  // === WaveletLookupTableWrap::* + gb_wdm_spline_* impls disabled at Phase 3L (2026-06-02) ===
 void WaveletLookupTableWrap::get_w_mn_arr(
     array_type<double> out,
     array_type<double> amp_arr,
@@ -257,6 +258,7 @@ void GBComputationGroupWrap::gb_wdm_spline_eval_inputs(
         return_pointer_and_check_length(fdot_out,      "fdot_out",      num_bin * num_t * nchannels, 1),
         return_pointer_and_check_length(phase_ref_out, "phase_ref_out", num_bin * num_t, 1));
 }
+#endif  // === end WaveletLookupTableWrap::* + gb_wdm_spline_* impls disabled ===
 
 void GBComputationGroupWrap::gb_fd_fill_global(
     array_type<std::complex<double>> template_fill,
@@ -1139,36 +1141,8 @@ void tdionthefly_part(py::module &m) {
          py::arg("orbits"), py::arg("tdi_config"), py::arg("Tobs"), py::arg("t_ref"))
     ;
 
-#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
-    py::class_<WaveletLookupTableWrap>(m, "WaveletLookupTableWrapGPU")
-#else
-    py::class_<WaveletLookupTableWrap>(m, "WaveletLookupTableWrapCPU")
-#endif
-
-    // Bind the constructor — kind selects the LookupKind (0=PER_N, 1=N_REF_ONLY).
-    .def(py::init<array_type<double>,array_type<double>,int,int,double,double,double,double, double, double, int, int, int, int, int, int, int, int, int, int>(),
-         py::arg("c_nm_all"), py::arg("s_nm_all"), py::arg("num_f"), py::arg("num_fdot"), py::arg("df_interp"), py::arg("dfdot_interp"), py::arg("min_f"), py::arg("min_fdot"), py::arg("layer_df"), py::arg("layer_dt"), py::arg("Nf"), py::arg("Nt"), py::arg("num_channel"), py::arg("ind_min_t"), py::arg("ind_max_t"), py::arg("ind_min_f"), py::arg("ind_max_f"), py::arg("m_ref"), py::arg("n_ref"), py::arg("kind"))
-    // Bind member functions
-    .def("get_w_mn_arr", &WaveletLookupTableWrap::get_w_mn_arr,
-         py::arg("out"), py::arg("amp"), py::arg("phi"), py::arg("f"), py::arg("fdot"),
-         py::arg("m"), py::arg("n"), py::arg("N"),
-         "For each i in [0,N), compute the C-side w_mn for the given (amp,phi,f,fdot,m,n). "
-         "tdi_channel_val is constructed as amp*(cos(phi) + i*sin(phi)) — matching the post conj/exp(-Iπ/2) representation used in the kernel.")
-
-    // You can also expose public data members directly using def_readwrite
-    .def_readwrite("wdm_lookup", &WaveletLookupTableWrap::wdm_lookup)
-    // .def("get_link_ind", &OrbitsWrap::get_link_ind, "Get link index.")
-    ;
-
-#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
-    py::class_<WaveletLookupTable>(m, "WaveletLookupTableGPU")
-#else
-    py::class_<WaveletLookupTable>(m, "WaveletLookupTableCPU")
-#endif
-    // Bind the constructor — see LookupKind in TDIonTheFly.hh for kind values.
-    .def(py::init<double*,double*,int,int,double,double,double,double, double, double, int, int, int, int, int, int, int, int, int, int>(),
-         py::arg("c_nm_all"), py::arg("s_nm_all"), py::arg("num_f"), py::arg("num_fdot"), py::arg("df_interp"), py::arg("dfdot_interp"), py::arg("min_f"), py::arg("min_fdot"), py::arg("layer_df"), py::arg("layer_dt"), py::arg("Nf"), py::arg("Nt"), py::arg("num_channel"), py::arg("ind_min_t"), py::arg("ind_max_t"), py::arg("ind_min_f"), py::arg("ind_max_f"), py::arg("m_ref"), py::arg("n_ref"), py::arg("kind"))
-    ;
+    // === WaveletLookupTable + WaveletLookupTableWrap pybind11 registrations
+    // disabled at Phase 3L (2026-06-02) -- lookup-table path retiring ===
 
     // Phase 3L (2026-06-02): WDMSettingsWrap pybind11 registration moved
     // to LAT's binding_flr.cxx (registered in pycppdetector via
@@ -1233,31 +1207,10 @@ void tdionthefly_part(py::module &m) {
          "FD analog of gb_wdm_swap_ll_grad: returns (grad_add, grad_remove), "
          "the per-binary derivatives of ll_diff = L(after swap) - L(before "
          "swap) with respect to theta_add and theta_remove respectively.")
-    // ---- Spline-path mirrors. `coarse_dt` (seconds) sets the coarse-grid
-    // spacing used by the cubic-spline window builder. ---------------------
-    .def("gb_wdm_spline_fill_global", &GBComputationGroupWrap::gb_wdm_spline_fill_global,
-         "Spline-path mirror of gb_wdm_fill_global. `coarse_dt` (seconds) is "
-         "the coarse-grid spacing.")
-    .def("gb_wdm_spline_get_ll", &GBComputationGroupWrap::gb_wdm_spline_get_ll,
-         "Spline-path mirror of gb_wdm_get_ll.")
-    .def("gb_wdm_spline_swap_ll", &GBComputationGroupWrap::gb_wdm_spline_swap_ll,
-         "Spline-path mirror of gb_wdm_swap_ll.")
-    .def("gb_wdm_spline_get_ll_grad", &GBComputationGroupWrap::gb_wdm_spline_get_ll_grad,
-         "Spline-path mirror of gb_wdm_get_ll_grad. Same chain-rule formula, "
-         "frozen layer_m_c, central differences with param_eps[k]; memory is "
-         "constant in nparams (three spline slots in shared).")
-    .def("gb_wdm_spline_eval_inputs", &GBComputationGroupWrap::gb_wdm_spline_eval_inputs,
-         py::arg("orbits"), py::arg("tdi_config"),
-         py::arg("params_all"), py::arg("tn_arr"),
-         py::arg("num_bin"), py::arg("nparams"), py::arg("num_t"), py::arg("nchannels"),
-         py::arg("T"), py::arg("t_ref"),
-         py::arg("t_window_start"), py::arg("coarse_dt"),
-         py::arg("amp_out"), py::arg("phi_out"),
-         py::arg("f_out"), py::arg("fdot_out"),
-         py::arg("phase_ref_out"),
-         "Spline diagnostic: builds one WDM_SPLINE_L-point spline window "
-         "starting at t_window_start with spacing coarse_dt, then evaluates "
-         "at every tn in tn_arr. Output layout matches gb_wdm_eval_inputs.")
+    // ---- Spline-path mirrors disabled at Phase 3L (2026-06-02) ----------
+    // The gb_wdm_spline_* methods used WaveletLookupTableWrap; lookup-
+    // table path is retiring. Chunked-heterodyne (gb_wdm_het_*) below is
+    // the supported WDM path.
     // ---- Chunked-heterodyne (no lookup table) ----------------------
     .def("gb_wdm_het_fill_global", &GBComputationGroupWrap::gb_wdm_het_fill_global,
          "Chunked-heterodyne fill_global. Builds the WDM-domain GB template by "

@@ -119,7 +119,7 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
             WDMSettingsWrap=_lat_pd.WDMSettingsWrapCPU,
             WDMDomainWrap=fastlisaresponse_backend_cpu.tdionthefly.WDMDomainWrapCPU,
             FDDomainWrap=_lat_pd.FDDomainWrapCPU,
-            WaveletLookupTableWrap=fastlisaresponse_backend_cpu.tdionthefly.WaveletLookupTableWrapCPU,
+            WaveletLookupTableWrap=None,  # Phase 3L (2026-06-02): lookup-table path retired.
             GBComputationGroupWrap=fastlisaresponse_backend_cpu.tdionthefly.GBComputationGroupWrapCPU,
             SOBBHComputationGroupWrap=fastlisaresponse_backend_cpu.tdionthefly.SOBBHComputationGroupWrapCPU,
             TDITypeDict=tmp,
@@ -175,7 +175,7 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
             WDMSettingsWrap=_lat_pd.WDMSettingsWrapGPU,
             WDMDomainWrap=fastlisaresponse_backend_cuda11x.tdionthefly.WDMDomainWrapGPU,
             FDDomainWrap=_lat_pd.FDDomainWrapGPU,
-            WaveletLookupTableWrap=fastlisaresponse_backend_cuda11x.tdionthefly.WaveletLookupTableWrapGPU,
+            WaveletLookupTableWrap=None,  # Phase 3L (2026-06-02): lookup-table path retired.
             GBComputationGroupWrap=fastlisaresponse_backend_cuda11x.tdionthefly.GBComputationGroupWrapGPU,
             SOBBHComputationGroupWrap=fastlisaresponse_backend_cuda11x.tdionthefly.SOBBHComputationGroupWrapGPU,
             TDITypeDict=tmp,
@@ -228,7 +228,7 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
             WDMSettingsWrap=_lat_pd.WDMSettingsWrapGPU,
             WDMDomainWrap=fastlisaresponse_backend_cuda12x.tdionthefly.WDMDomainWrapGPU,
             FDDomainWrap=_lat_pd.FDDomainWrapGPU,
-            WaveletLookupTableWrap=fastlisaresponse_backend_cuda12x.tdionthefly.WaveletLookupTableWrapGPU,
+            WaveletLookupTableWrap=None,  # Phase 3L (2026-06-02): lookup-table path retired.
             GBComputationGroupWrap=fastlisaresponse_backend_cuda12x.tdionthefly.GBComputationGroupWrapGPU,
             SOBBHComputationGroupWrap=fastlisaresponse_backend_cuda12x.tdionthefly.SOBBHComputationGroupWrapGPU,
             TDITypeDict=tmp,

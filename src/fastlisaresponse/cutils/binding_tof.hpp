@@ -22,7 +22,7 @@ namespace py = pybind11;
 #define SOBBHTDIonTheFlyWrap SOBBHTDIonTheFlyWrapGPU
 #define FDSplineTDIWaveformWrap FDSplineTDIWaveformWrapGPU
 #define TDSplineTDIWaveformWrap TDSplineTDIWaveformWrapGPU
-#define WaveletLookupTableWrap WaveletLookupTableWrapGPU
+// WaveletLookupTableWrap disabled at Phase 3L (2026-06-02) -- lookup-table path retiring.
 #define WDMDomainWrap WDMDomainWrapGPU
 #define GBComputationGroupWrap GBComputationGroupWrapGPU
 #define SOBBHComputationGroupWrap SOBBHComputationGroupWrapGPU
@@ -31,7 +31,7 @@ namespace py = pybind11;
 #define SOBBHTDIonTheFlyWrap SOBBHTDIonTheFlyWrapCPU
 #define FDSplineTDIWaveformWrap FDSplineTDIWaveformWrapCPU
 #define TDSplineTDIWaveformWrap TDSplineTDIWaveformWrapCPU
-#define WaveletLookupTableWrap WaveletLookupTableWrapCPU
+// WaveletLookupTableWrap disabled at Phase 3L (2026-06-02) -- lookup-table path retiring.
 #define WDMDomainWrap WDMDomainWrapCPU
 #define GBComputationGroupWrap GBComputationGroupWrapCPU
 #define SOBBHComputationGroupWrap SOBBHComputationGroupWrapCPU
@@ -180,6 +180,7 @@ class SOBBHTDIonTheFlyWrap : public LISATDIonTheFlyWrap {
 };
 
 
+#if 0  // === WaveletLookupTableWrap disabled at Phase 3L (2026-06-02) -- lookup-table path retiring ===
 class WaveletLookupTableWrap : public ReturnPointerBase {
   public:
     WaveletLookupTable *wdm_lookup;
@@ -222,6 +223,7 @@ class WaveletLookupTableWrap : public ReturnPointerBase {
         array_type<int> n_arr,
         int N);
 };
+#endif  // === end WaveletLookupTableWrap disabled ===
 
 
 // WDMSettingsWrap class moved to LAT at Phase 3L (2026-06-02). Definition
@@ -280,10 +282,8 @@ class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBas
     // cost of more get_tdi work. A typical Python-side choice is
     //     coarse_dt = (1 year in seconds) / coarse_pts_per_year
     // with `coarse_pts_per_year` defaulting to 256.
-    void gb_wdm_spline_fill_global(array_type<double>template_fill, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, array_type<double>factors_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double coarse_dt);
-    void gb_wdm_spline_get_ll(array_type<double>d_h_out, array_type<double>h_h_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, array_type<int>noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double coarse_dt);
-    void gb_wdm_spline_swap_ll(array_type<double>d_h_add_out, array_type<double>d_h_remove_out, array_type<double>add_add_out, array_type<double>remove_remove_out, array_type<double>add_remove_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_add_all, array_type<double>params_remove_all, array_type<int>data_index_all, array_type<int>noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double coarse_dt);
-    void gb_wdm_spline_get_ll_grad(array_type<double>grad_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, array_type<int>noise_index_all, array_type<double>param_eps, int num_bin, int nparams, double T, double t_ref, int tdi_type, double coarse_dt);
+    // gb_wdm_spline_fill_global, gb_wdm_spline_get_ll, gb_wdm_spline_swap_ll,
+    // gb_wdm_spline_get_ll_grad disabled at Phase 3L (2026-06-02) -- WaveletLookupTable retiring.
 
     // Spline diagnostic — same output layout as gb_wdm_eval_inputs; builds a
     // single WDM_SPLINE_L-point spline window starting at t_window_start with
