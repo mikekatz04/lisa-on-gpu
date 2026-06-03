@@ -145,115 +145,13 @@ void WaveletLookupTableWrap::get_w_mn_arr(
 }
 
 
-void GBComputationGroupWrap::gb_wdm_fill_global(array_type<double>template_fill, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, array_type<double>factors_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
-{
-    // from the parent class
-
-    gb_wdm_fill_global_wrap(
-        return_pointer_and_check_length(template_fill, "template_fill", wdm_wrap->wdm->Nf_active * wdm_wrap->wdm->Nt_active, 3),
-        orbits_wrap->orbits,
-        tdi_config_wrap->tdi_config,
-        wdm_lookup_wrap->wdm_lookup,
-        wdm_wrap->wdm,
-        return_pointer_and_check_length(params_all, "params_all", nparams, num_bin),
-        return_pointer_and_check_length(data_index_all, "data_index_all", num_bin, 1),
-        return_pointer_and_check_length(factors_all, "factors_all", num_bin, 1),
-        num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
-}
-
-void GBComputationGroupWrap::gb_wdm_get_ll(array_type<double>d_h_out, array_type<double>h_h_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, array_type<int>noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
-{
-    // from the parent class
-    gb_wdm_get_ll_wrap(
-        return_pointer_and_check_length(d_h_out, "d_h_out", num_bin, 1),
-        return_pointer_and_check_length(h_h_out, "h_h_out", num_bin, 1),
-        orbits_wrap->orbits,
-        tdi_config_wrap->tdi_config,
-        wdm_lookup_wrap->wdm_lookup,
-        wdm_wrap->wdm,
-        return_pointer_and_check_length(params_all, "params_all", nparams, num_bin),
-        return_pointer_and_check_length(data_index_all, "data_index_all", num_bin, 1),
-        return_pointer_and_check_length(noise_index_all, "noise_index_all", num_bin, 1),
-        num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
-}
-
-void GBComputationGroupWrap::gb_wdm_swap_ll(array_type<double>d_h_add_out, array_type<double>d_h_remove_out, array_type<double>add_add_out, array_type<double>remove_remove_out, array_type<double>add_remove_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_add_all, array_type<double>params_remove_all, array_type<int>data_index_all, array_type<int>noise_index_all, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
-{
-    // from the parent class
-    gb_wdm_swap_ll_wrap(
-        return_pointer_and_check_length(d_h_add_out,       "d_h_add_out",       num_bin, 1),
-        return_pointer_and_check_length(d_h_remove_out,    "d_h_remove_out",    num_bin, 1),
-        return_pointer_and_check_length(add_add_out,       "add_add_out",       num_bin, 1),
-        return_pointer_and_check_length(remove_remove_out, "remove_remove_out", num_bin, 1),
-        return_pointer_and_check_length(add_remove_out,    "add_remove_out",    num_bin, 1),
-        orbits_wrap->orbits,
-        tdi_config_wrap->tdi_config,
-        wdm_lookup_wrap->wdm_lookup,
-        wdm_wrap->wdm,
-        return_pointer_and_check_length(params_add_all,    "params_add_all",    nparams, num_bin),
-        return_pointer_and_check_length(params_remove_all, "params_remove_all", nparams, num_bin),
-        return_pointer_and_check_length(data_index_all,    "data_index_all",    num_bin, 1),
-        return_pointer_and_check_length(noise_index_all,   "noise_index_all",   num_bin, 1),
-        num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
-}
 
 
-void GBComputationGroupWrap::gb_wdm_get_ll_grad(array_type<double>grad_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_all, array_type<int>data_index_all, array_type<int>noise_index_all, array_type<double>param_eps, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
-{
-    gb_wdm_get_ll_grad_wrap(
-        return_pointer_and_check_length(grad_out,          "grad_out",          nparams,  num_bin),
-        orbits_wrap->orbits,
-        tdi_config_wrap->tdi_config,
-        wdm_lookup_wrap->wdm_lookup,
-        wdm_wrap->wdm,
-        return_pointer_and_check_length(params_all,        "params_all",        nparams,  num_bin),
-        return_pointer_and_check_length(data_index_all,    "data_index_all",    num_bin,  1),
-        return_pointer_and_check_length(noise_index_all,   "noise_index_all",   num_bin,  1),
-        return_pointer_and_check_length(param_eps,         "param_eps",         nparams,  1),
-        num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
-}
-
-void GBComputationGroupWrap::gb_wdm_swap_ll_grad(array_type<double>grad_add_out, array_type<double>grad_remove_out, OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap, WaveletLookupTableWrap* wdm_lookup_wrap, WDMDomainWrap* wdm_wrap, array_type<double>params_add_all, array_type<double>params_remove_all, array_type<int>data_index_all, array_type<int>noise_index_all, array_type<double>param_eps_add, array_type<double>param_eps_remove, int num_bin, int nparams, double T, double t_ref, int tdi_type, double deriv_delta_t)
-{
-    gb_wdm_swap_ll_grad_wrap(
-        return_pointer_and_check_length(grad_add_out,      "grad_add_out",      nparams, num_bin),
-        return_pointer_and_check_length(grad_remove_out,   "grad_remove_out",   nparams, num_bin),
-        orbits_wrap->orbits,
-        tdi_config_wrap->tdi_config,
-        wdm_lookup_wrap->wdm_lookup,
-        wdm_wrap->wdm,
-        return_pointer_and_check_length(params_add_all,    "params_add_all",    nparams, num_bin),
-        return_pointer_and_check_length(params_remove_all, "params_remove_all", nparams, num_bin),
-        return_pointer_and_check_length(data_index_all,    "data_index_all",    num_bin, 1),
-        return_pointer_and_check_length(noise_index_all,   "noise_index_all",   num_bin, 1),
-        return_pointer_and_check_length(param_eps_add,     "param_eps_add",     nparams, 1),
-        return_pointer_and_check_length(param_eps_remove,  "param_eps_remove",  nparams, 1),
-        num_bin, nparams, T, t_ref, tdi_type, deriv_delta_t);
-}
 
 
-void GBComputationGroupWrap::gb_wdm_eval_inputs(
-    OrbitsWrap_responselisa* orbits_wrap, TDIConfigWrap *tdi_config_wrap,
-    array_type<double> params_all, array_type<double> tn_arr,
-    int num_bin, int nparams, int num_t, int nchannels,
-    double T, double t_ref, double deriv_delta_t,
-    array_type<double> amp_out, array_type<double> phi_out,
-    array_type<double> f_out, array_type<double> fdot_out,
-    array_type<double> phase_ref_out)
-{
-    gb_wdm_eval_inputs_wrap(
-        orbits_wrap->orbits,
-        tdi_config_wrap->tdi_config,
-        return_pointer_and_check_length(params_all, "params_all", nparams, num_bin),
-        return_pointer_and_check_length(tn_arr, "tn_arr", num_t, 1),
-        num_bin, nparams, num_t, nchannels,
-        T, t_ref, deriv_delta_t,
-        return_pointer_and_check_length(amp_out,       "amp_out",       num_bin * num_t * nchannels, 1),
-        return_pointer_and_check_length(phi_out,       "phi_out",       num_bin * num_t * nchannels, 1),
-        return_pointer_and_check_length(f_out,         "f_out",         num_bin * num_t * nchannels, 1),
-        return_pointer_and_check_length(fdot_out,      "fdot_out",      num_bin * num_t * nchannels, 1),
-        return_pointer_and_check_length(phase_ref_out, "phase_ref_out", num_bin * num_t, 1));
-}
+
+
+
 
 
 // ---- Spline-path bindings ---------------------------------------------------
@@ -1178,31 +1076,6 @@ void tdionthefly_part(py::module &m) {
     py::class_<GBComputationGroupWrap>(m, "GBComputationGroupWrapCPU")
 #endif
     .def(py::init<>())
-    .def("gb_wdm_get_ll", &GBComputationGroupWrap::gb_wdm_get_ll, "Log-likelihood computation.")
-    .def("gb_wdm_swap_ll", &GBComputationGroupWrap::gb_wdm_swap_ll,
-         "Swap-likelihood computation. Returns the five inner products <d|h_add>, "
-         "<d|h_remove>, <h_add|h_add>, <h_remove|h_remove>, <h_add|h_remove> needed "
-         "for an RJMCMC swap proposal between an 'add' and a 'remove' template.")
-    .def("gb_wdm_get_ll_grad", &GBComputationGroupWrap::gb_wdm_get_ll_grad,
-         "Chain-rule parameter gradient of gb_wdm_get_ll. Per-binary central-difference "
-         "derivative of L = -1/2 <d-h|d-h> with respect to the 9 galactic-binary "
-         "parameters. param_eps[k] is the FD step for theta_k (pass <= 0 to freeze).")
-    .def("gb_wdm_swap_ll_grad", &GBComputationGroupWrap::gb_wdm_swap_ll_grad,
-         "Chain-rule parameter gradient of gb_wdm_swap_ll. Returns "
-         "(grad_add, grad_remove): per-binary central-difference derivatives of "
-         "the swap log-likelihood ratio ll_diff = L(after swap) - L(before swap) "
-         "with respect to theta_add and theta_remove respectively.")
-    .def("gb_wdm_fill_global", &GBComputationGroupWrap::gb_wdm_fill_global, "Generate a global template.")
-    .def("gb_wdm_eval_inputs", &GBComputationGroupWrap::gb_wdm_eval_inputs,
-         py::arg("orbits"), py::arg("tdi_config"),
-         py::arg("params_all"), py::arg("tn_arr"),
-         py::arg("num_bin"), py::arg("nparams"), py::arg("num_t"), py::arg("nchannels"),
-         py::arg("T"), py::arg("t_ref"), py::arg("deriv_delta_t"),
-         py::arg("amp_out"), py::arg("phi_out"),
-         py::arg("f_out"), py::arg("fdot_out"),
-         py::arg("phase_ref_out"),
-         "Diagnostic: evaluate the per-pixel inputs (|M|, arg(M_mod), f, fdot, phase_ref) "
-         "that the kernels feed into the WDM lookup, without doing the lookup itself.")
     .def("gb_fd_fill_global", &GBComputationGroupWrap::gb_fd_fill_global,
          "FD analog of gb_wdm_fill_global: scatter per-source heterodyne FD onto a "
          "global rfft-grid template (cmplx, shape (num_data, nchannels, n_rfft)).")

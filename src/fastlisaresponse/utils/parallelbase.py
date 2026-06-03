@@ -1,26 +1,20 @@
-from typing import Optional, Sequence, TypeVar, Union
-import types
+"""Deprecation shim. Moved to ``lisatools.response.parallelbase``.
 
+Phase 3 of the 2026 sprint reorg moved the LISA-response Python
+frontends into LISAanalysistools. This module re-exports
+``FastLISAResponseParallelModule`` from its new home and emits a
+``DeprecationWarning`` on first use. Scheduled for removal one release
+cycle after Phase 3 ships.
+"""
 
-from gpubackendtools import ParallelModuleBase
+import warnings
 
+warnings.warn(
+    "fastlisaresponse.utils.parallelbase has moved to "
+    "lisatools.response.parallelbase; import from there instead. "
+    "This shim will be removed in a future release.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
-class FastLISAResponseParallelModule(ParallelModuleBase):
-    def __init__(self, force_backend=None):
-        force_backend_in = ('fastlisaresponse', force_backend) if isinstance(force_backend, str) else force_backend
-        super().__init__(force_backend_in)
-
-    @staticmethod
-    def GPU_RECOMMENDED_WITH_JAX() -> list[str]:
-        """Same as GPU_RECOMMENDED() but with the JAX backend appended.
-
-        The JAX backend is a host-side pure-Python path (no compiled
-        wheel needed); we list it after the GPU options so the default
-        "first available" pick stays GPU when both are present.
-
-        Returns bare platform tags (``cuda13x`` / ``cpu`` / ...); the
-        consuming :meth:`supported_backends` prepends the
-        ``fastlisaresponse_`` namespace to match the names registered
-        in ``Globals().backends_manager``.
-        """
-        return ["cuda13x", "cuda12x", "cuda11x", "cpu", "jax"]
+from lisatools.response.parallelbase import FastLISAResponseParallelModule  # noqa: F401,E402
