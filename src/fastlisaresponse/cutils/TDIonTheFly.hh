@@ -5,11 +5,13 @@
 #include "Interpolate.hh"
 #include "LISAResponse.hh"
 #include "gbt_global.h"
-// Phase 3L (2026-06-02): FDDomain class moved to LAT
-// (lisatools/cutils/fd_domain.hh). The class definition + CPU/GPU alias
-// now live there; this include resolves both for the GBComputationGroup
-// methods that take FDDomain* arguments.
+// Phase 3L (2026-06-02): FDDomain + WDMSettings classes moved to LAT.
+// Their class definitions + CPU/GPU aliases now live in LAT headers
+// (fd_domain.hh, wdm_settings.hh). The remaining classes below
+// (WDMDomain, WaveletLookupTable) inherit from WDMSettings; the
+// include below makes the LAT-side definition visible.
 #include "fd_domain.hh"
+#include "wdm_settings.hh"
 
 
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
@@ -18,7 +20,6 @@
 #define FDSplineTDIWaveform FDSplineTDIWaveformGPU
 #define TDSplineTDIWaveform TDSplineTDIWaveformGPU
 #define WaveletLookupTable WaveletLookupTableGPU
-#define WDMSettings WDMSettingsGPU
 #define WDMDomain WDMDomainGPU
 #define GBComputationGroup GBComputationGroupGPU
 #else
@@ -27,7 +28,6 @@
 #define FDSplineTDIWaveform FDSplineTDIWaveformCPU
 #define TDSplineTDIWaveform TDSplineTDIWaveformCPU
 #define WaveletLookupTable WaveletLookupTableCPU
-#define WDMSettings WDMSettingsCPU
 #define WDMDomain WDMDomainCPU
 #define GBComputationGroup GBComputationGroupCPU
 #endif
@@ -459,36 +459,9 @@ class FDSplineTDIWaveform : public LISATDIonTheFly {
     double get_amp_f(double t, double *params, int spline_i);
 };
 
-class WDMSettings{
-  public:
-    int Nt;
-    int Nf;
-    int num_channel;
-    double layer_df;
-    double layer_dt;
-    int ind_min_t;
-    int ind_max_t;
-    int ind_min_f;
-    int ind_max_f;
-    int Nf_active;
-    int Nt_active;
-
-    // TODO: add to this?
-    CUDA_CALLABLE_MEMBER
-    WDMSettings(double layer_df_, double layer_dt_, int Nf_, int Nt_, int num_channel_, int ind_min_t_, int ind_max_t_, int ind_min_f_, int ind_max_f_){
-        Nf = Nf_;
-        Nt = Nt_;
-        num_channel = num_channel_;
-        layer_df = layer_df_;
-        layer_dt = layer_dt_;
-        ind_min_t = ind_min_t_;
-        ind_max_t = ind_max_t_;
-        ind_min_f = ind_min_f_;
-        ind_max_f = ind_max_f_;
-        Nf_active = ind_max_f - ind_min_f + 1; // inclusive
-        Nt_active = ind_max_t - ind_min_t + 1; // inclusive
-    };
-};
+// WDMSettings class moved to LAT at Phase 3L (2026-06-02). Definition
+// lives in lisatools/cutils/wdm_settings.hh; included at the top of
+// this header.
 
 class WDMDomain : public WDMSettings{
   public:

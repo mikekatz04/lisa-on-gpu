@@ -1170,17 +1170,9 @@ void tdionthefly_part(py::module &m) {
          py::arg("c_nm_all"), py::arg("s_nm_all"), py::arg("num_f"), py::arg("num_fdot"), py::arg("df_interp"), py::arg("dfdot_interp"), py::arg("min_f"), py::arg("min_fdot"), py::arg("layer_df"), py::arg("layer_dt"), py::arg("Nf"), py::arg("Nt"), py::arg("num_channel"), py::arg("ind_min_t"), py::arg("ind_max_t"), py::arg("ind_min_f"), py::arg("ind_max_f"), py::arg("m_ref"), py::arg("n_ref"), py::arg("kind"))
     ;
 
-#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
-    py::class_<WDMSettingsWrap>(m, "WDMSettingsWrapGPU")
-#else
-    py::class_<WDMSettingsWrap>(m, "WDMSettingsWrapCPU")
-#endif
-
-    // Bind the constructor
-    .def(py::init<double, double, int, int, int, int, int, int, int>(),
-         py::arg("layer_df"), py::arg("layer_dt"), py::arg("Nf"), py::arg("Nt"), py::arg("num_channel"), py::arg("ind_min_t"), py::arg("ind_max_t"), py::arg("ind_min_f"), py::arg("ind_max_f"))
-    .def_readwrite("wdm_settings", &WDMSettingsWrap::wdm_settings)
-    ;
+    // Phase 3L (2026-06-02): WDMSettingsWrap pybind11 registration moved
+    // to LAT's binding_flr.cxx (registered in pycppdetector via
+    // response_part(m)).
 
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
     py::class_<WDMDomainWrap, WDMSettingsWrap>(m, "WDMDomainWrapGPU")

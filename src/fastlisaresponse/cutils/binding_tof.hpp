@@ -23,7 +23,6 @@ namespace py = pybind11;
 #define FDSplineTDIWaveformWrap FDSplineTDIWaveformWrapGPU
 #define TDSplineTDIWaveformWrap TDSplineTDIWaveformWrapGPU
 #define WaveletLookupTableWrap WaveletLookupTableWrapGPU
-#define WDMSettingsWrap WDMSettingsWrapGPU
 #define WDMDomainWrap WDMDomainWrapGPU
 #define GBComputationGroupWrap GBComputationGroupWrapGPU
 #define SOBBHComputationGroupWrap SOBBHComputationGroupWrapGPU
@@ -33,16 +32,17 @@ namespace py = pybind11;
 #define FDSplineTDIWaveformWrap FDSplineTDIWaveformWrapCPU
 #define TDSplineTDIWaveformWrap TDSplineTDIWaveformWrapCPU
 #define WaveletLookupTableWrap WaveletLookupTableWrapCPU
-#define WDMSettingsWrap WDMSettingsWrapCPU
 #define WDMDomainWrap WDMDomainWrapCPU
 #define GBComputationGroupWrap GBComputationGroupWrapCPU
 #define SOBBHComputationGroupWrap SOBBHComputationGroupWrapCPU
 #endif
-// Phase 3L (2026-06-02): FDDomainWrap moved to LAT
-// (lisatools/cutils/binding_fd_domain.hpp). The class + CPU/GPU alias now
-// live there; this include resolves it for GBComputationGroupWrap method
-// signatures + the body of binding_tof.cxx that reads `FDDomainWrap *fd_wrap`.
+// Phase 3L (2026-06-02): FDDomainWrap + WDMSettingsWrap moved to LAT.
+// The class definitions + CPU/GPU aliases now live in
+// binding_fd_domain.hpp / binding_wdm_settings.hpp. WDMDomainWrap (still
+// here) inherits from WDMSettingsWrap; the LAT include makes the base
+// class definition available.
 #include "binding_fd_domain.hpp"
+#include "binding_wdm_settings.hpp"
 
 
 class LISATDIonTheFlyWrap : public ReturnPointerBase {
@@ -224,24 +224,9 @@ class WaveletLookupTableWrap : public ReturnPointerBase {
 };
 
 
-class WDMSettingsWrap : public ReturnPointerBase {
-  public:
-    WDMSettings *wdm_settings;
-
-    WDMSettingsWrap(double layer_df_, double layer_dt_, int Nf_, int Nt_,
-                    int num_channel_, int ind_min_t_, int ind_max_t_,
-                    int ind_min_f_, int ind_max_f_)
-    {
-        wdm_settings = new WDMSettings(
-            layer_df_, layer_dt_, Nf_, Nt_, num_channel_,
-            ind_min_t_, ind_max_t_, ind_min_f_, ind_max_f_
-        );
-    };
-    ~WDMSettingsWrap(){
-        delete wdm_settings;
-    };
-
-};
+// WDMSettingsWrap class moved to LAT at Phase 3L (2026-06-02). Definition
+// lives in lisatools/cutils/binding_wdm_settings.hpp; included at the top
+// of this header.
 
 
 class WDMDomainWrap : public WDMSettingsWrap {
