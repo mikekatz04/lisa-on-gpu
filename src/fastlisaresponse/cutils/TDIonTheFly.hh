@@ -5,13 +5,14 @@
 #include "Interpolate.hh"
 #include "LISAResponse.hh"
 #include "gbt_global.h"
-// Phase 3L (2026-06-02): FDDomain + WDMSettings classes moved to LAT.
-// Their class definitions + CPU/GPU aliases now live in LAT headers
-// (fd_domain.hh, wdm_settings.hh). The remaining classes below
-// (WDMDomain, WaveletLookupTable) inherit from WDMSettings; the
-// include below makes the LAT-side definition visible.
+// Phase 3L (2026-06-02): FDDomain + WDMSettings + WDMDomain classes moved
+// to LAT. Their class definitions + CPU/GPU aliases now live in LAT
+// headers (fd_domain.hh, wdm_settings.hh, wdm_domain.hh). WaveletLookupTable
+// still inherits from WDMSettings; the includes below make the LAT-side
+// definitions visible.
 #include "fd_domain.hh"
 #include "wdm_settings.hh"
+#include "wdm_domain.hh"
 
 
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
@@ -20,7 +21,6 @@
 #define FDSplineTDIWaveform FDSplineTDIWaveformGPU
 #define TDSplineTDIWaveform TDSplineTDIWaveformGPU
 // WaveletLookupTable disabled at Phase 3L (2026-06-02) -- lookup-table spline path is being retired.
-#define WDMDomain WDMDomainGPU
 #define GBComputationGroup GBComputationGroupGPU
 #else
 #define GBTDIonTheFly GBTDIonTheFlyCPU
@@ -28,7 +28,6 @@
 #define FDSplineTDIWaveform FDSplineTDIWaveformCPU
 #define TDSplineTDIWaveform TDSplineTDIWaveformCPU
 // WaveletLookupTable disabled at Phase 3L (2026-06-02) -- lookup-table spline path is being retired.
-#define WDMDomain WDMDomainCPU
 #define GBComputationGroup GBComputationGroupCPU
 #endif
 
@@ -463,66 +462,10 @@ class FDSplineTDIWaveform : public LISATDIonTheFly {
 // lives in lisatools/cutils/wdm_settings.hh; included at the top of
 // this header.
 
-class WDMDomain : public WDMSettings{
-  public:
-    
-    double *wdm_data;
-    double *wdm_noise;
-    int num_data;
-    int num_noise;
-
-    CUDA_CALLABLE_MEMBER
-    WDMDomain(double *wdm_data_, double *wdm_noise_, double layer_df_, double layer_dt_, int Nf_, int Nt_, int num_channel_, int ind_min_t_, int ind_max_t_, int ind_min_f_, int ind_max_f_, int num_data_, int num_noise_):
-    WDMSettings(layer_df_, layer_dt_, Nf_, Nt_, num_channel_, ind_min_t_, ind_max_t_, ind_min_f_, ind_max_f_)
-    {
-        wdm_data = wdm_data_;
-        wdm_noise = wdm_noise_;
-        num_data = num_data_;
-        num_noise = num_noise_;
-    };
-    CUDA_DEVICE
-    int get_pixel_index(int m, int n, int channel, int data_index);
-    CUDA_DEVICE
-    int get_pixel_index_noise(int m, int n, int channel, int noise_index);
-    CUDA_DEVICE
-    int get_pixel_index_noise_cross_channel(int m, int n, int channel_i, int channel_j, int noise_index);
-    CUDA_DEVICE
-    double get_pixel_data_value(int m, int n, int channel,  int data_index);
-    CUDA_DEVICE
-    double get_pixel_noise_value(int m, int n, int channel, int noise_index);
-    CUDA_DEVICE
-    double get_pixel_noise_value_cross_channel(int m, int n, int channel_i, int channel_j, int noise_index);
-    CUDA_DEVICE
-    void get_inner_product_value(double *d_h, double *h_h, double wdm_template_nm, int m, int n, int channel, int data_index, int noise_index);
-    CUDA_DEVICE
-    void get_inner_product_value_cross_channel(double *d_h, double *h_h, double wdm_template_nm_i, double wdm_template_nm_j, int m, int n, int channel_i, int channel_j, int data_index, int noise_index);
-    CUDA_DEVICE
-    void add_ip_contrib(double *d_h_tmp, double *h_h_tmp, double *wdm_nm, int layer_m, int n, int data_index, int noise_index, int tdi_type);
-    CUDA_DEVICE
-    void add_ip_swap_contrib(double *d_h_add_acc, double *d_h_remove_acc, double *add_add_acc, double *remove_remove_acc, double *add_remove_acc, double *wdm_nm_add, double *wdm_nm_remove, int layer_m, int n, int data_index, int noise_index, int tdi_type);
-    // Per-pixel chain-rule contribution:
-    //   grad_acc_k += sum_{c,c'} (w_d - w_h)_c * (dw_h/dtheta_k)_{c'} * N^{-1}_{cc'} * 0.25
-    // (XYZ cross-channel; the AET / AE branches use the diagonal noise).
-    // The caller passes the *un-perturbed* central template w_mn[c] and the
-    // central-FD parameter derivative dw_mn_dk[c] = (w_+ - w_-)/(2 eps_k);
-    // this matches the analytic chain rule whenever the FD of w is
-    // unbiased (polynomial-degree-2 dependence) and otherwise carries an
-    // O(eps^2 d^3 w / dtheta_k^3) truncation that is small for the tuned
-    // _DEFAULT_PARAM_EPS in GBWDMComputations.
-    CUDA_DEVICE
-    void add_grad_contrib(double *grad_acc_k, const double *w_mn, const double *dw_mn_dk,
-                          int layer_m, int n, int data_index, int noise_index, int tdi_type);
-    // Swap variant: accumulates +/- r_after * dw * N^{-1}, where
-    //   r_after = w_d - w_add_center + w_rem_center.
-    // `sign` selects between the add side (+1, dw = dw_add) and the remove
-    // side (-1, dw = dw_rem); the helper is called once per parameter and
-    // once per side.
-    CUDA_DEVICE
-    void add_swap_grad_contrib_one_side(double *grad_acc_k, double sign,
-                                        const double *w_mn_add, const double *w_mn_rem,
-                                        const double *dw_mn_dk,
-                                        int layer_m, int n, int data_index, int noise_index, int tdi_type);
-};
+// WDMDomain class moved to LAT at Phase 3L (2026-06-02). Definition
+// lives in lisatools/cutils/wdm_domain.hh; included at the top of
+// this header. All 12 method bodies are header-inline there (no
+// out-of-line .cu bodies remain).
 
 
 // ---------------------------------------------------------------------------

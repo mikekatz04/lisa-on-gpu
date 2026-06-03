@@ -1148,32 +1148,10 @@ void tdionthefly_part(py::module &m) {
     // to LAT's binding_flr.cxx (registered in pycppdetector via
     // response_part(m)).
 
-#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
-    py::class_<WDMDomainWrap, WDMSettingsWrap>(m, "WDMDomainWrapGPU")
-#else
-    py::class_<WDMDomainWrap, WDMSettingsWrap>(m, "WDMDomainWrapCPU")
-#endif
-
-    // Bind the constructor
-    .def(py::init<array_type<double>,array_type<double>, double, double, int, int, int, int, int, int, int, int, int>(),
-         py::arg("wdm_data"), py::arg("wdm_noise"), py::arg("layer_df"), py::arg("layer_dt"), py::arg("Nf"), py::arg("Nt"), py::arg("num_channel"), py::arg("ind_min_t"), py::arg("ind_max_t"), py::arg("ind_min_f"), py::arg("ind_max_f"), py::arg("num_data"), py::arg("num_noise"))
-    // Bind member functions
-
-    // You can also expose public data members directly using def_readwrite
-    .def_readwrite("wdm", &WDMDomainWrap::wdm)
-    // .def("get_link_ind", &OrbitsWrap::get_link_ind, "Get link index.")
-    ;
-
-#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
-    py::class_<WDMDomain>(m, "WDMDomainGPU")
-#else
-    py::class_<WDMDomain>(m, "WDMDomainCPU")
-#endif
-
-    // Bind the constructor
-    .def(py::init<double*,double*, double, double, int, int, int, int, int, int, int, int, int>(), 
-         py::arg("wdm_data"), py::arg("wdm_noise"), py::arg("layer_df"), py::arg("layer_dt"), py::arg("Nf"), py::arg("Nt"), py::arg("num_channel"), py::arg("ind_min_t"), py::arg("ind_max_t"), py::arg("ind_min_f"), py::arg("ind_max_f"), py::arg("num_data"), py::arg("num_noise"))
-    ;
+    // Phase 3L (2026-06-02): WDMDomainWrap + WDMDomain pybind11 registrations
+    // moved to LAT's binding_flr.cxx (registered in pycppdetector via
+    // response_part(m)). The static_assert(!LISATOOLS_IS_WRAPPER_OWNER, ...)
+    // at the top of this TU guards against any future re-registration here.
 
     // Phase 3L (2026-06-02): FDDomain + FDDomainWrap pybind11 registrations
     // moved to LAT's binding_flr.cxx (registered in pycppdetector via

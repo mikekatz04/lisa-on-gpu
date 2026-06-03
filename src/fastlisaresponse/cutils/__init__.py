@@ -117,7 +117,7 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
             TDIConfigWrap=_lat_pd.TDIConfigWrapCPU,
             CubicSplineWrap=_lat_pd.CubicSplineWrapCPU_responselisa,
             WDMSettingsWrap=_lat_pd.WDMSettingsWrapCPU,
-            WDMDomainWrap=fastlisaresponse_backend_cpu.tdionthefly.WDMDomainWrapCPU,
+            WDMDomainWrap=_lat_pd.WDMDomainWrapCPU,
             FDDomainWrap=_lat_pd.FDDomainWrapCPU,
             WaveletLookupTableWrap=None,  # Phase 3L (2026-06-02): lookup-table path retired.
             GBComputationGroupWrap=fastlisaresponse_backend_cpu.tdionthefly.GBComputationGroupWrapCPU,
@@ -173,7 +173,7 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
             TDIConfigWrap=_lat_pd.TDIConfigWrapGPU,
             CubicSplineWrap=_lat_pd.CubicSplineWrapGPU_responselisa,
             WDMSettingsWrap=_lat_pd.WDMSettingsWrapGPU,
-            WDMDomainWrap=fastlisaresponse_backend_cuda11x.tdionthefly.WDMDomainWrapGPU,
+            WDMDomainWrap=_lat_pd.WDMDomainWrapGPU,
             FDDomainWrap=_lat_pd.FDDomainWrapGPU,
             WaveletLookupTableWrap=None,  # Phase 3L (2026-06-02): lookup-table path retired.
             GBComputationGroupWrap=fastlisaresponse_backend_cuda11x.tdionthefly.GBComputationGroupWrapGPU,
@@ -226,7 +226,7 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
             TDIConfigWrap=_lat_pd.TDIConfigWrapGPU,
             CubicSplineWrap=_lat_pd.CubicSplineWrapGPU_responselisa,
             WDMSettingsWrap=_lat_pd.WDMSettingsWrapGPU,
-            WDMDomainWrap=fastlisaresponse_backend_cuda12x.tdionthefly.WDMDomainWrapGPU,
+            WDMDomainWrap=_lat_pd.WDMDomainWrapGPU,
             FDDomainWrap=_lat_pd.FDDomainWrapGPU,
             WaveletLookupTableWrap=None,  # Phase 3L (2026-06-02): lookup-table path retired.
             GBComputationGroupWrap=fastlisaresponse_backend_cuda12x.tdionthefly.GBComputationGroupWrapGPU,

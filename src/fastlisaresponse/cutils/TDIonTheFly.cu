@@ -378,6 +378,12 @@ LISATDIonTheFly::~LISATDIonTheFly()
 // }
 
 
+// === WDMDomain method bodies moved to LAT at Phase 3L (2026-06-02) ===
+// All 12 method bodies are now header-inline in
+//   LISAanalysistools/src/lisatools/cutils/wdm_domain.hh
+// The block below is retained as `#if 0` for historical reference and
+// will be removed once the carve-out is fully validated.
+#if 0
 CUDA_DEVICE
 int WDMDomain::get_pixel_index(int m, int n, int channel, int data_index)
 {
@@ -461,6 +467,8 @@ void WDMDomain::get_inner_product_value_cross_channel(double *d_h, double *h_h, 
     *d_h = val_d_h;
     *h_h = val_h_h;
 }
+
+#endif  // === end WDMDomain method bodies (first segment) moved to LAT ===
 
 #if 0  // === WaveletLookupTable disabled at Phase 3L (2026-06-02) -- lookup-table spline path retiring ===
 CUDA_DEVICE
@@ -603,6 +611,8 @@ double WaveletLookupTable::get_wdm_in_channel_over_layers(cmplx tdi_channel_val,
 }
 #endif  // === end WaveletLookupTable disabled ===
 
+// === WDMDomain method bodies (second segment) moved to LAT at Phase 3L ===
+#if 0
 CUDA_DEVICE
 void WDMDomain::add_ip_contrib(double *d_h_tmp, double *h_h_tmp, double *w_mn, int layer_m, int n, int data_index, int noise_index, int tdi_type)
 {
@@ -844,6 +854,7 @@ void WDMDomain::add_swap_grad_contrib_one_side(
     }
     *grad_acc_k += local_acc;
 }
+#endif  // === end WDMDomain method bodies (second segment) moved to LAT ===
 
 
 #define N_PARAMS_MAX 20

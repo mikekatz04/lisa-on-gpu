@@ -23,7 +23,6 @@ namespace py = pybind11;
 #define FDSplineTDIWaveformWrap FDSplineTDIWaveformWrapGPU
 #define TDSplineTDIWaveformWrap TDSplineTDIWaveformWrapGPU
 // WaveletLookupTableWrap disabled at Phase 3L (2026-06-02) -- lookup-table path retiring.
-#define WDMDomainWrap WDMDomainWrapGPU
 #define GBComputationGroupWrap GBComputationGroupWrapGPU
 #define SOBBHComputationGroupWrap SOBBHComputationGroupWrapGPU
 #else
@@ -32,17 +31,15 @@ namespace py = pybind11;
 #define FDSplineTDIWaveformWrap FDSplineTDIWaveformWrapCPU
 #define TDSplineTDIWaveformWrap TDSplineTDIWaveformWrapCPU
 // WaveletLookupTableWrap disabled at Phase 3L (2026-06-02) -- lookup-table path retiring.
-#define WDMDomainWrap WDMDomainWrapCPU
 #define GBComputationGroupWrap GBComputationGroupWrapCPU
 #define SOBBHComputationGroupWrap SOBBHComputationGroupWrapCPU
 #endif
-// Phase 3L (2026-06-02): FDDomainWrap + WDMSettingsWrap moved to LAT.
-// The class definitions + CPU/GPU aliases now live in
-// binding_fd_domain.hpp / binding_wdm_settings.hpp. WDMDomainWrap (still
-// here) inherits from WDMSettingsWrap; the LAT include makes the base
-// class definition available.
+// Phase 3L (2026-06-02): FDDomainWrap + WDMSettingsWrap + WDMDomainWrap moved
+// to LAT. The class definitions + CPU/GPU aliases now live in
+// binding_fd_domain.hpp / binding_wdm_settings.hpp / binding_wdm_domain.hpp.
 #include "binding_fd_domain.hpp"
 #include "binding_wdm_settings.hpp"
+#include "binding_wdm_domain.hpp"
 
 
 class LISATDIonTheFlyWrap : public ReturnPointerBase {
@@ -231,37 +228,9 @@ class WaveletLookupTableWrap : public ReturnPointerBase {
 // of this header.
 
 
-class WDMDomainWrap : public WDMSettingsWrap {
-  public:
-    WDMDomain *wdm;
-    // array_type<double> c_nm_all;
-    // array_type<double> s_nm_all;
-    // int num_f;
-    // int num_fdot;
-    // double df;
-    // double dfdot_interp;
-    // double min_f;
-    // double min_fdot;
-
-    WDMDomainWrap(array_type<double>wdm_data_, array_type<double>wdm_noise_, double layer_df_, double layer_dt_, int Nf_, int Nt_, int num_channel_, int ind_min_t_, int ind_max_t_, int ind_min_f_, int ind_max_f_, int num_data_, int num_noise_)
-      : WDMSettingsWrap(layer_df_, layer_dt_, Nf_, Nt_, num_channel_,
-                        ind_min_t_, ind_max_t_, ind_min_f_, ind_max_f_)
-    {
-        // TODO: adjust noise length check to TDI setups
-        int Nt_active = ind_max_t_ - ind_min_t_ + 1;
-        int Nf_active = ind_max_f_ - ind_min_f_ + 1;
-        wdm = new WDMDomain(
-            return_pointer_and_check_length(wdm_data_, "wdm_data", Nt_active * Nf_active * num_channel_ * num_data_, 1),
-            return_pointer(wdm_noise_, "wdm_noise"),  // return_pointer_and_check_length(wdm_noise_, "wdm_noise", Nt_ * Nf_ * num_channel_ * num_noise_, 1),
-            layer_df_, layer_dt_, Nf_, Nt_, num_channel_, ind_min_t_, ind_max_t_, ind_min_f_, ind_max_f_, num_data_, num_noise_
-        );
-    };
-    ~WDMDomainWrap(){
-        delete wdm;
-        // base dtor handles wdm_settings
-    };
-
-};
+// WDMDomainWrap class moved to LAT at Phase 3L (2026-06-02). Definition
+// lives in lisatools/cutils/binding_wdm_domain.hpp; included at the top
+// of this header.
 
 
 // FDDomainWrap: thin pybind11 holder for FDDomain, mirroring WDMDomainWrap.
