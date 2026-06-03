@@ -85,7 +85,12 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
     @staticmethod
     def cpu_methods_loader() -> FastLISAResponseBackendMethods:
         try:
-            import fastlisaresponse_backend_cpu.responselisa
+            # Phase 3E (2026-06-02): response classes (LISAResponseWrap,
+            # TDIConfigWrap, OrbitsWrap_responselisa, CubicSplineWrap_responselisa)
+            # were absorbed by LISAanalysistools and now live in
+            # `lisatools_backend_cpu.pycppdetector`. The `responselisa`
+            # pybind11 module no longer exists.
+            import lisatools_backend_cpu.pycppdetector as _lat_pd
             import fastlisaresponse_backend_cpu.tdionthefly
 
         except (ModuleNotFoundError, ImportError) as e:
@@ -105,12 +110,12 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
             FDSplineTDIWaveformWrap=fastlisaresponse_backend_cpu.tdionthefly.FDSplineTDIWaveformWrapCPU,
             GBTDIonTheFlyWrap=fastlisaresponse_backend_cpu.tdionthefly.GBTDIonTheFlyWrapCPU,
             SOBBHTDIonTheFlyWrap=fastlisaresponse_backend_cpu.tdionthefly.SOBBHTDIonTheFlyWrapCPU,
-            LISAResponseWrap=fastlisaresponse_backend_cpu.responselisa.LISAResponseWrapCPU,
-            LISAResponse=fastlisaresponse_backend_cpu.responselisa.LISAResponseCPU,
-            OrbitsWrap=fastlisaresponse_backend_cpu.responselisa.OrbitsWrapCPU_responselisa,
-            TDIConfig=fastlisaresponse_backend_cpu.responselisa.TDIConfigCPU,
-            TDIConfigWrap=fastlisaresponse_backend_cpu.responselisa.TDIConfigWrapCPU,
-            CubicSplineWrap=fastlisaresponse_backend_cpu.responselisa.CubicSplineWrapCPU_responselisa,
+            LISAResponseWrap=_lat_pd.LISAResponseWrapCPU,
+            LISAResponse=_lat_pd.LISAResponseCPU,
+            OrbitsWrap=_lat_pd.OrbitsWrapCPU_responselisa,
+            TDIConfig=_lat_pd.TDIConfigCPU,
+            TDIConfigWrap=_lat_pd.TDIConfigWrapCPU,
+            CubicSplineWrap=_lat_pd.CubicSplineWrapCPU_responselisa,
             WDMSettingsWrap=fastlisaresponse_backend_cpu.tdionthefly.WDMSettingsWrapCPU,
             WDMDomainWrap=fastlisaresponse_backend_cpu.tdionthefly.WDMDomainWrapCPU,
             FDDomainWrap=fastlisaresponse_backend_cpu.tdionthefly.FDDomainWrapCPU,
@@ -135,7 +140,8 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
     @staticmethod
     def cuda11x_module_loader():
         try:
-            import fastlisaresponse_backend_cuda11x.responselisa
+            # Phase 3E: response classes now in lisatools_backend_cuda11x.pycppdetector.
+            import lisatools_backend_cuda11x.pycppdetector as _lat_pd
             import fastlisaresponse_backend_cuda11x.tdionthefly
 
         except (ModuleNotFoundError, ImportError) as e:
@@ -160,12 +166,12 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
             FDSplineTDIWaveformWrap=fastlisaresponse_backend_cuda11x.tdionthefly.FDSplineTDIWaveformWrapGPU,
             GBTDIonTheFlyWrap=fastlisaresponse_backend_cuda11x.tdionthefly.GBTDIonTheFlyWrapGPU,
             SOBBHTDIonTheFlyWrap=fastlisaresponse_backend_cuda11x.tdionthefly.SOBBHTDIonTheFlyWrapGPU,
-            LISAResponseWrap=fastlisaresponse_backend_cuda11x.responselisa.LISAResponseWrapGPU,
-            LISAResponse=fastlisaresponse_backend_cuda11x.responselisa.LISAResponseGPU,
-            OrbitsWrap=fastlisaresponse_backend_cuda11x.responselisa.OrbitsWrapGPU_responselisa,
-            TDIConfig=fastlisaresponse_backend_cuda11x.responselisa.TDIConfigGPU,
-            TDIConfigWrap=fastlisaresponse_backend_cuda11x.responselisa.TDIConfigWrapGPU,
-            CubicSplineWrap=fastlisaresponse_backend_cuda11x.responselisa.CubicSplineWrapGPU_responselisa,
+            LISAResponseWrap=_lat_pd.LISAResponseWrapGPU,
+            LISAResponse=_lat_pd.LISAResponseGPU,
+            OrbitsWrap=_lat_pd.OrbitsWrapGPU_responselisa,
+            TDIConfig=_lat_pd.TDIConfigGPU,
+            TDIConfigWrap=_lat_pd.TDIConfigWrapGPU,
+            CubicSplineWrap=_lat_pd.CubicSplineWrapGPU_responselisa,
             WDMSettingsWrap=fastlisaresponse_backend_cuda11x.tdionthefly.WDMSettingsWrapGPU,
             WDMDomainWrap=fastlisaresponse_backend_cuda11x.tdionthefly.WDMDomainWrapGPU,
             FDDomainWrap=fastlisaresponse_backend_cuda11x.tdionthefly.FDDomainWrapGPU,
@@ -188,7 +194,8 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
     @staticmethod
     def cuda12x_module_loader():
         try:
-            import fastlisaresponse_backend_cuda12x.responselisa
+            # Phase 3E: response classes now in lisatools_backend_cuda12x.pycppdetector.
+            import lisatools_backend_cuda12x.pycppdetector as _lat_pd
             import fastlisaresponse_backend_cuda12x.tdionthefly
 
         except (ModuleNotFoundError, ImportError) as e:
@@ -212,12 +219,12 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
             FDSplineTDIWaveformWrap=fastlisaresponse_backend_cuda12x.tdionthefly.FDSplineTDIWaveformWrapGPU,
             GBTDIonTheFlyWrap=fastlisaresponse_backend_cuda12x.tdionthefly.GBTDIonTheFlyWrapGPU,
             SOBBHTDIonTheFlyWrap=fastlisaresponse_backend_cuda12x.tdionthefly.SOBBHTDIonTheFlyWrapGPU,
-            LISAResponseWrap=fastlisaresponse_backend_cuda12x.responselisa.LISAResponseWrapGPU,
-            LISAResponse=fastlisaresponse_backend_cuda12x.responselisa.LISAResponseGPU,
-            OrbitsWrap=fastlisaresponse_backend_cuda12x.responselisa.OrbitsWrapGPU_responselisa,
-            TDIConfig=fastlisaresponse_backend_cuda12x.responselisa.TDIConfigGPU,
-            TDIConfigWrap=fastlisaresponse_backend_cuda12x.responselisa.TDIConfigWrapGPU,
-            CubicSplineWrap=fastlisaresponse_backend_cuda12x.responselisa.CubicSplineWrapGPU_responselisa,
+            LISAResponseWrap=_lat_pd.LISAResponseWrapGPU,
+            LISAResponse=_lat_pd.LISAResponseGPU,
+            OrbitsWrap=_lat_pd.OrbitsWrapGPU_responselisa,
+            TDIConfig=_lat_pd.TDIConfigGPU,
+            TDIConfigWrap=_lat_pd.TDIConfigWrapGPU,
+            CubicSplineWrap=_lat_pd.CubicSplineWrapGPU_responselisa,
             WDMSettingsWrap=fastlisaresponse_backend_cuda12x.tdionthefly.WDMSettingsWrapGPU,
             WDMDomainWrap=fastlisaresponse_backend_cuda12x.tdionthefly.WDMDomainWrapGPU,
             FDDomainWrap=fastlisaresponse_backend_cuda12x.tdionthefly.FDDomainWrapGPU,
@@ -240,8 +247,9 @@ class FastLISAResponseCuda13xBackend(Cuda13xBackend, FastLISAResponseBackend):
     @staticmethod
     def cuda13x_module_loader():
         try:
-            import fastlisaresponse_backend_cuda13x.responselisa
-            
+            # Phase 3E: response classes now in lisatools_backend_cuda13x.pycppdetector.
+            import lisatools_backend_cuda13x.pycppdetector as _lat_pd
+
         except (ModuleNotFoundError, ImportError) as e:
             raise BackendUnavailableException(
                 "'cuda13x' backend could not be imported."
@@ -254,9 +262,9 @@ class FastLISAResponseCuda13xBackend(Cuda13xBackend, FastLISAResponseBackend):
                 "'cuda13x' backend requires cupy", pip_deps=["cupy-cuda13x"]
             ) from e
         return FastLISAResponseBackendMethods(
-            LISAResponseWrap=fastlisaresponse_backend_cuda13x.responselisa.LISAResponseWrapGPU,
-            LISAResponseBase=fastlisaresponse_backend_cuda13x.responselisa.LISAResponseBaseGPU,
-            OrbitsWrap=fastlisaresponse_backend_cuda13x.responselisa.OrbitsWrapGPU_responselisa,
+            LISAResponseWrap=_lat_pd.LISAResponseWrapGPU,
+            LISAResponseBase=_lat_pd.LISAResponseBaseGPU,
+            OrbitsWrap=_lat_pd.OrbitsWrapGPU_responselisa,
             xp=cupy,
         )
         

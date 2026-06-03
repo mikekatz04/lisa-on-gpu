@@ -156,64 +156,17 @@ endif()
 enable_language(Fortran)
 get_lapacke()
 
-# II. Declare the CPU backend
-if(FASTLISA_WITH_CPU)
-
-  add_custom_command(
-    OUTPUT "LISAResponse.cxx"
-    COMMENT "Copy LISAResponse.cu to LISAResponse.cxx"
-    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/LISAResponse.cu"
-            "${CMAKE_CURRENT_BINARY_DIR}/LISAResponse.cxx"
-    DEPENDS "LISAResponse.cu"
-    VERBATIM)
-
-  add_custom_command(
-    OUTPUT "Detector.cxx"
-    COMMENT "Copy Detector.cu to Detector.cxx"
-    COMMAND ${CMAKE_COMMAND} -E copy "${LISATOOLS_DIR}/cutils/Detector.cu"
-            "${CMAKE_CURRENT_BINARY_DIR}/Detector.cxx"
-    DEPENDS "${LISATOOLS_DIR}/cutils/Detector.cu"
-    VERBATIM)
-
-  if(NOT EXISTS "${LISATOOLS_DIR}/cutils/binding.hpp")
-    message(FATAL_ERROR "${LISATOOLS_DIR}/cutils/binding.hpp does not exist.")
-  endif()
-
-  add_library(fastlisaresponse_cpu_response_static STATIC Detector.cxx LISAResponse.cxx)
-  apply_cpu_backend_common_options(response fastlisaresponse fastlisaresponse true )
-  target_include_directories(fastlisaresponse_cpu_response_static PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})  
-  target_sources(fastlisaresponse_cpu_response_static PUBLIC FILE_SET HEADERS FILES
-                                        LISAResponse.hh)
-
-  pybind11_add_module(fastlisaresponse_cpu_responselisa "${LISATOOLS_DIR}/cutils/binding.cxx" binding_flr.cxx)
-  apply_cpu_backend_common_options(responselisa fastlisaresponse fastlisaresponse false)
-  
-  # Link your target to the imported target name
-  target_link_libraries(fastlisaresponse_cpu_responselisa PUBLIC fastlisaresponse_cpu_response_static)
-  target_include_directories(fastlisaresponse_cpu_responselisa PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})  
-  target_sources(fastlisaresponse_cpu_responselisa PUBLIC FILE_SET HEADERS FILES
-                                          binding_flr.hpp)
-
-endif()
-
-# III. Declare the GPU backend
-if(FASTLISA_WITH_GPU)
-
-  add_library(fastlisaresponse_gpu_response_gpu_static STATIC "${LISATOOLS_DIR}/cutils/Detector.cu" LISAResponse.cu)
-  apply_gpu_backend_common_options(response_gpu fastlisaresponse fastlisaresponse true)
-  target_sources(fastlisaresponse_gpu_response_gpu_static PUBLIC FILE_SET HEADERS FILES
-                                         LISAResponse.hh)
-
-  target_include_directories(fastlisaresponse_gpu_response_gpu_static PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})
-  pybind11_add_module(fastlisaresponse_gpu_responselisa "${LISATOOLS_DIR}/cutils/binding.cxx" binding_flr.cxx)
-  apply_gpu_backend_common_options(responselisa fastlisaresponse fastlisaresponse false)
-  target_sources(fastlisaresponse_gpu_responselisa PUBLIC FILE_SET HEADERS FILES
-                                         LISAResponse.hh
-                                         )
-  target_link_libraries(fastlisaresponse_gpu_responselisa PUBLIC fastlisaresponse_gpu_response_gpu_static)
-  target_include_directories(fastlisaresponse_gpu_responselisa PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})  
-  
-endif()
+# Phase 3E (2026-06-02): the responselisa pybind11 module was retired.
+# LISAResponse.cu / .hh and binding_flr.cxx / .hpp now live in
+# LISAanalysistools/src/lisatools/cutils/ and are compiled into LAT's
+# `pycppdetector` pybind11 module. The lisa-on-gpu `responselisa` module
+# is no longer built; lisa-on-gpu/src/fastlisaresponse/cutils/__init__.py
+# now sources LISAResponseWrap / TDIConfigWrap / OrbitsWrap_responselisa
+# / CubicSplineWrap_responselisa from `lisatools_backend_*.pycppdetector`.
+#
+# The `tdionthefly` module below still needs the LISAResponse C++ symbols
+# and binding_flr.hpp inlined wrapper classes at compile time (binding_tof.cxx
+# uses them extensively); it points at LAT's copies via ${LISATOOLS_DIR}.
 
 #####################
 ## tdi on the fly  ##
@@ -230,12 +183,13 @@ if(FASTLISA_WITH_CPU)
     DEPENDS "TDIonTheFly.cu"
     VERBATIM)
 
+  # Phase 3E: LISAResponse.cu now lives in LAT; copy from there into our build dir.
   add_custom_command(
     OUTPUT "LISAResponse.cxx"
-    COMMENT "Copy LISAResponse.cu to LISAResponse.cxx"
-    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/LISAResponse.cu"
+    COMMENT "Copy LISAResponse.cu (LAT) to LISAResponse.cxx"
+    COMMAND ${CMAKE_COMMAND} -E copy "${LISATOOLS_DIR}/cutils/LISAResponse.cu"
             "${CMAKE_CURRENT_BINARY_DIR}/LISAResponse.cxx"
-    DEPENDS "LISAResponse.cu"
+    DEPENDS "${LISATOOLS_DIR}/cutils/LISAResponse.cu"
     VERBATIM)
 
     add_custom_command(
@@ -265,7 +219,8 @@ if(FASTLISA_WITH_CPU)
   target_link_libraries(fastlisaresponse_cpu_tdionthefly_static LINK_PUBLIC ${GBT_LAPACKE_LIBS}
                         ${GBT_LAPACKE_EXTRA_LIBS})
 
-  pybind11_add_module(fastlisaresponse_cpu_tdionthefly "${LISATOOLS_DIR}/cutils/binding.cxx" "${GBT_DIR}/cutils/gbt_binding.cxx" binding_flr.cxx binding_tof.cxx)
+  # Phase 3E: binding_flr.cxx now lives in LAT.
+  pybind11_add_module(fastlisaresponse_cpu_tdionthefly "${LISATOOLS_DIR}/cutils/binding.cxx" "${GBT_DIR}/cutils/gbt_binding.cxx" "${LISATOOLS_DIR}/cutils/binding_flr.cxx" binding_tof.cxx)
   apply_cpu_backend_common_options(tdionthefly fastlisaresponse fastlisaresponse false)
   
   # Link your target to the imported target name
@@ -284,7 +239,8 @@ endif()
 
 # II. Declare the CPU backend
 if(FASTLISA_WITH_GPU)
-  add_library(fastlisaresponse_gpu_tdionthefly_gpu_static STATIC ${GBT_DIR}/cutils/Interpolate.cu ${LISATOOLS_DIR}/cutils/Detector.cu LISAResponse.cu TDIonTheFly.cu)
+  # Phase 3E: LISAResponse.cu moved to LAT.
+  add_library(fastlisaresponse_gpu_tdionthefly_gpu_static STATIC ${GBT_DIR}/cutils/Interpolate.cu ${LISATOOLS_DIR}/cutils/Detector.cu ${LISATOOLS_DIR}/cutils/LISAResponse.cu TDIonTheFly.cu)
   apply_gpu_backend_common_options(tdionthefly_gpu fastlisaresponse fastlisaresponse true )
   target_include_directories(fastlisaresponse_gpu_tdionthefly_gpu_static PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})
   target_sources(fastlisaresponse_gpu_tdionthefly_gpu_static PUBLIC FILE_SET HEADERS FILES
@@ -306,7 +262,8 @@ contain include/cufftdx.hpp -- cufftdx will NOT be enabled.")
     endif()
   endif()
 
-  pybind11_add_module(fastlisaresponse_gpu_tdionthefly "${LISATOOLS_DIR}/cutils/binding.cxx" "${GBT_DIR}/cutils/gbt_binding.cxx" binding_flr.cxx binding_tof.cxx)
+  # Phase 3E: binding_flr.cxx now lives in LAT.
+  pybind11_add_module(fastlisaresponse_gpu_tdionthefly "${LISATOOLS_DIR}/cutils/binding.cxx" "${GBT_DIR}/cutils/gbt_binding.cxx" "${LISATOOLS_DIR}/cutils/binding_flr.cxx" binding_tof.cxx)
   apply_gpu_backend_common_options(tdionthefly fastlisaresponse fastlisaresponse false)
 
   # Link your target to the imported target name
