@@ -632,6 +632,153 @@ void GBComputationGroupWrap::gb_wdm_het_get_fstat_ll(
 }
 
 
+// ---- Signal-heterodyne (v2 polyphase) pybind shim --------------------------
+//
+// Stage 1: takes precomputed FD (rfft(Tukey * td)) per binary, plus the
+// reference's c0_sparse and bin-folded A0/A1/B0/B1. Production target moves
+// FD generation into the kernel via a sparse-spline absolute-FD source class.
+void GBComputationGroupWrap::gb_signal_het_get_ll(
+    array_type<double> d_h_out, array_type<double> h_h_out,
+    array_type<std::complex<double>> fd_rfft_all,
+    array_type<std::complex<double>> c0_sparse_all,
+    array_type<std::complex<double>> A0_all,
+    array_type<std::complex<double>> A1_all,
+    array_type<std::complex<double>> B0_all,
+    array_type<std::complex<double>> B1_all,
+    array_type<double> wdm_window,
+    array_type<int> n_sparse_local_arr,
+    array_type<double> params_cand_all,
+    array_type<double> params_ref_all,
+    array_type<int> data_index_all,
+    int num_bin, int num_data,
+    int nparams, int f0_idx, int fdot_idx,
+    int Nf, int Nt, int Nf_active, int Nt_active,
+    int Nt_layer, int N_sparse_t, int stride,
+    int ind_min_t, int ind_min_f,
+    int m_active_half_width,
+    double layer_df, double dt,
+    int nchannels, int tdi_type,
+    int n_rfft)
+{
+    (void) Nt_layer;
+    const size_t b_xyz = (size_t) num_data * nchannels * nchannels
+                       * Nf_active * N_sparse_t;
+    const size_t b_diag = (size_t) num_data * nchannels * Nf_active * N_sparse_t;
+    gb_signal_het_get_ll_wrap(
+        return_pointer_and_check_length(d_h_out, "d_h_out", num_bin, 1),
+        return_pointer_and_check_length(h_h_out, "h_h_out", num_bin, 1),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            fd_rfft_all, "fd_rfft_all",
+            (size_t) num_bin * nchannels * n_rfft, 1)),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            c0_sparse_all, "c0_sparse_all",
+            (size_t) num_data * nchannels * Nf_active * N_sparse_t, 1)),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            A0_all, "A0_all",
+            (size_t) num_data * nchannels * Nf_active * N_sparse_t, 1)),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            A1_all, "A1_all",
+            (size_t) num_data * nchannels * Nf_active * N_sparse_t, 1)),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            B0_all, "B0_all",
+            (tdi_type == 0) ? b_xyz : b_diag, 1)),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            B1_all, "B1_all",
+            (tdi_type == 0) ? b_xyz : b_diag, 1)),
+        return_pointer_and_check_length(wdm_window, "wdm_window", Nt, 1),
+        return_pointer_and_check_length(n_sparse_local_arr, "n_sparse_local",
+                                         N_sparse_t, 1),
+        return_pointer_and_check_length(params_cand_all, "params_cand_all",
+                                         nparams, num_bin),
+        return_pointer_and_check_length(params_ref_all, "params_ref_all",
+                                         nparams, num_data),
+        return_pointer_and_check_length(data_index_all, "data_index_all",
+                                         num_bin, 1),
+        num_bin, num_data,
+        nparams, f0_idx, fdot_idx,
+        Nf, Nt, Nf_active, Nt_active,
+        Nt_layer, N_sparse_t, stride,
+        ind_min_t, ind_min_f,
+        m_active_half_width,
+        layer_df, dt,
+        nchannels, tdi_type,
+        n_rfft);
+}
+
+
+// Stage 2a: sparse-FD entry. X_het is the candidate's heterodyned sparse FD
+// (length N_sparse_fd per (binary, channel)); k_f0 is the absolute-FD bin
+// index of each binary's snapped carrier. Polyphase fold iterates only the
+// N_sparse_fd nonzero bins -- the rest are implicit zero.
+void GBComputationGroupWrap::gb_signal_het_get_ll_sparse(
+    array_type<double> d_h_out, array_type<double> h_h_out,
+    array_type<std::complex<double>> X_het_all,
+    array_type<int> k_f0_all,
+    array_type<std::complex<double>> c0_sparse_all,
+    array_type<std::complex<double>> A0_all,
+    array_type<std::complex<double>> A1_all,
+    array_type<std::complex<double>> B0_all,
+    array_type<std::complex<double>> B1_all,
+    array_type<double> wdm_window,
+    array_type<int> n_sparse_local_arr,
+    array_type<double> params_cand_all,
+    array_type<double> params_ref_all,
+    array_type<int> data_index_all,
+    int num_bin, int num_data,
+    int nparams, int f0_idx, int fdot_idx,
+    int Nf, int Nt, int Nf_active, int Nt_active,
+    int Nt_layer, int N_sparse_t, int stride,
+    int ind_min_t, int ind_min_f,
+    int m_active_half_width,
+    double layer_df, double dt,
+    int nchannels, int tdi_type,
+    int N_sparse_fd)
+{
+    (void) Nt_layer;
+    const size_t b_xyz = (size_t) num_data * nchannels * nchannels
+                       * Nf_active * N_sparse_t;
+    const size_t b_diag = (size_t) num_data * nchannels * Nf_active * N_sparse_t;
+    gb_signal_het_get_ll_sparse_wrap(
+        return_pointer_and_check_length(d_h_out, "d_h_out", num_bin, 1),
+        return_pointer_and_check_length(h_h_out, "h_h_out", num_bin, 1),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            X_het_all, "X_het_all",
+            (size_t) num_bin * nchannels * N_sparse_fd, 1)),
+        return_pointer_and_check_length(k_f0_all, "k_f0_all", num_bin, 1),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            c0_sparse_all, "c0_sparse_all",
+            (size_t) num_data * nchannels * Nf_active * N_sparse_t, 1)),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            A0_all, "A0_all",
+            (size_t) num_data * nchannels * Nf_active * N_sparse_t, 1)),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            A1_all, "A1_all",
+            (size_t) num_data * nchannels * Nf_active * N_sparse_t, 1)),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            B0_all, "B0_all", (tdi_type == 0) ? b_xyz : b_diag, 1)),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            B1_all, "B1_all", (tdi_type == 0) ? b_xyz : b_diag, 1)),
+        return_pointer_and_check_length(wdm_window, "wdm_window", Nt, 1),
+        return_pointer_and_check_length(n_sparse_local_arr, "n_sparse_local",
+                                         N_sparse_t, 1),
+        return_pointer_and_check_length(params_cand_all, "params_cand_all",
+                                         nparams, num_bin),
+        return_pointer_and_check_length(params_ref_all, "params_ref_all",
+                                         nparams, num_data),
+        return_pointer_and_check_length(data_index_all, "data_index_all",
+                                         num_bin, 1),
+        num_bin, num_data,
+        nparams, f0_idx, fdot_idx,
+        Nf, Nt, Nf_active, Nt_active,
+        Nt_layer, N_sparse_t, stride,
+        ind_min_t, ind_min_f,
+        m_active_half_width,
+        layer_df, dt,
+        nchannels, tdi_type,
+        N_sparse_fd);
+}
+
+
 // ---- SOBBH-flavored pybind shims -------------------------------------------
 void SOBBHComputationGroupWrap::sobbh_wdm_het_fill_global(
     array_type<double> template_fill,
@@ -1062,27 +1209,10 @@ void tdionthefly_part(py::module &m) {
          py::arg("wdm_data"), py::arg("wdm_noise"), py::arg("layer_df"), py::arg("layer_dt"), py::arg("Nf"), py::arg("Nt"), py::arg("num_channel"), py::arg("ind_min_t"), py::arg("ind_max_t"), py::arg("ind_min_f"), py::arg("ind_max_f"), py::arg("num_data"), py::arg("num_noise"))
     ;
 
-#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
-    py::class_<FDDomainWrap>(m, "FDDomainWrapGPU")
-#else
-    py::class_<FDDomainWrap>(m, "FDDomainWrapCPU")
-#endif
-    .def(py::init<array_type<std::complex<double>>, array_type<double>,
-                  int, int, int, int, int, int, double>(),
-         py::arg("fd_data"), py::arg("fd_invC"),
-         py::arg("n_rfft"), py::arg("num_channel"),
-         py::arg("num_data"), py::arg("num_noise"),
-         py::arg("ind_min"), py::arg("ind_max"), py::arg("df"))
-    .def_readwrite("fd", &FDDomainWrap::fd)
-    ;
-
-#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
-    py::class_<FDDomain>(m, "FDDomainGPU")
-#else
-    py::class_<FDDomain>(m, "FDDomainCPU")
-#endif
-    .def(py::init<cmplx*, double*, int, int, int, int, int, int, double>())
-    ;
+    // Phase 3L (2026-06-02): FDDomain + FDDomainWrap pybind11 registrations
+    // moved to LAT's binding_flr.cxx (registered in pycppdetector via
+    // response_part(m)). The static_assert(!LISATOOLS_IS_WRAPPER_OWNER, ...)
+    // at the top of this TU guards against any future re-registration here.
 
     #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
     py::class_<GBComputationGroupWrap>(m, "GBComputationGroupWrapGPU")
@@ -1156,6 +1286,17 @@ void tdionthefly_part(py::module &m) {
          "filters per Cornish & Crowder '05). Python computes "
          "F = N^T M^{-1} N / 2 from these. Imag outputs always 0 "
          "(WDM coefficients are real).")
+    .def("gb_signal_het_get_ll", &GBComputationGroupWrap::gb_signal_het_get_ll,
+         "Signal-heterodyne (v2 polyphase) get_ll. Takes precomputed "
+         "rfft(Tukey*td) per binary plus reference c0_sparse/A0/A1/B0/B1; "
+         "returns per-binary <d|h>, <h|h> via the bin-folded inner-product "
+         "accumulator. Stage 1: CPU only, FD as input. Stage 2 will move FD "
+         "generation in-kernel via a sparse-spline absolute-FD source.")
+    .def("gb_signal_het_get_ll_sparse", &GBComputationGroupWrap::gb_signal_het_get_ll_sparse,
+         "Stage 2a sparse-FD signal-het get_ll. Consumes X_het (length "
+         "N_sparse_fd per binary per channel) + per-binary k_f0. Polyphase "
+         "fold iterates only the N_sparse_fd nonzero bins. Stage 2b will fill "
+         "X_het in-kernel from the source-class heterodyned sparse rfft.")
     ;
 
     #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)

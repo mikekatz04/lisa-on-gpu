@@ -25,7 +25,6 @@ namespace py = pybind11;
 #define WaveletLookupTableWrap WaveletLookupTableWrapGPU
 #define WDMSettingsWrap WDMSettingsWrapGPU
 #define WDMDomainWrap WDMDomainWrapGPU
-#define FDDomainWrap FDDomainWrapGPU
 #define GBComputationGroupWrap GBComputationGroupWrapGPU
 #define SOBBHComputationGroupWrap SOBBHComputationGroupWrapGPU
 #else
@@ -36,10 +35,14 @@ namespace py = pybind11;
 #define WaveletLookupTableWrap WaveletLookupTableWrapCPU
 #define WDMSettingsWrap WDMSettingsWrapCPU
 #define WDMDomainWrap WDMDomainWrapCPU
-#define FDDomainWrap FDDomainWrapCPU
 #define GBComputationGroupWrap GBComputationGroupWrapCPU
 #define SOBBHComputationGroupWrap SOBBHComputationGroupWrapCPU
 #endif
+// Phase 3L (2026-06-02): FDDomainWrap moved to LAT
+// (lisatools/cutils/binding_fd_domain.hpp). The class + CPU/GPU alias now
+// live there; this include resolves it for GBComputationGroupWrap method
+// signatures + the body of binding_tof.cxx that reads `FDDomainWrap *fd_wrap`.
+#include "binding_fd_domain.hpp"
 
 
 class LISATDIonTheFlyWrap : public ReturnPointerBase {
@@ -278,25 +281,8 @@ class WDMDomainWrap : public WDMSettingsWrap {
 // invC array layout depends on tdi_type:
 //   tdi_type == TDI_XYZ   : (num_noise, num_channel, num_channel, n_rfft)
 //   tdi_type == TDI_AET/AE: (num_noise, num_channel, n_rfft)
-class FDDomainWrap : public ReturnPointerBase {
-  public:
-    FDDomain *fd;
-    FDDomainWrap(
-        array_type<std::complex<double>> fd_data_,
-        array_type<double>               fd_invC_,
-        int n_rfft_, int num_channel_, int num_data_, int num_noise_,
-        int ind_min_, int ind_max_, double df_)
-    {
-        fd = new FDDomain(
-            (cmplx*) return_pointer_and_check_length(
-                fd_data_, "fd_data",
-                n_rfft_ * num_channel_ * num_data_, 1),
-            return_pointer(fd_invC_, "fd_invC"),
-            n_rfft_, num_channel_, num_data_, num_noise_,
-            ind_min_, ind_max_, df_);
-    };
-    ~FDDomainWrap(){ delete fd; };
-};
+// FDDomainWrap class moved to LAT at Phase 3L (2026-06-02). Definition lives
+// in lisatools/cutils/binding_fd_domain.hpp; included at the top of this header.
 
 
 class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBase {
@@ -466,6 +452,61 @@ class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBas
         int nchannels, int n_rfft_chunk,
         double T_chunk, double dt, double T, double t_ref, int tdi_type,
         double tukey_alpha, int grid_dim, int m_band_half_width);
+
+    // Signal-heterodyne (v2 polyphase) -- Stage 1 (CPU-only):
+    // takes precomputed rfft(Tukey * td_cand) as input. Production will move
+    // FD generation into the kernel via a sparse-spline absolute-FD source
+    // (Stage 2 -- GBAbsoluteFD; ~256-1024 knots/year, no per-source global FD).
+    void gb_signal_het_get_ll(
+        array_type<double> d_h_out, array_type<double> h_h_out,
+        array_type<std::complex<double>> fd_rfft_all,
+        array_type<std::complex<double>> c0_sparse_all,
+        array_type<std::complex<double>> A0_all,
+        array_type<std::complex<double>> A1_all,
+        array_type<std::complex<double>> B0_all,
+        array_type<std::complex<double>> B1_all,
+        array_type<double> wdm_window,
+        array_type<int> n_sparse_local_arr,
+        array_type<double> params_cand_all,
+        array_type<double> params_ref_all,
+        array_type<int> data_index_all,
+        int num_bin, int num_data,
+        int nparams, int f0_idx, int fdot_idx,
+        int Nf, int Nt, int Nf_active, int Nt_active,
+        int Nt_layer, int N_sparse_t, int stride,
+        int ind_min_t, int ind_min_f,
+        int m_active_half_width,
+        double layer_df, double dt,
+        int nchannels, int tdi_type,
+        int n_rfft);
+
+    // Stage 2a -- sparse-FD entry: consumes X_het (length N_sparse_fd per
+    // binary per channel) + per-binary k_f0 instead of the dense rfft.
+    // The polyphase fold iterates only the N_sparse_fd bins (the source's
+    // intrinsic spectral support around f0).
+    void gb_signal_het_get_ll_sparse(
+        array_type<double> d_h_out, array_type<double> h_h_out,
+        array_type<std::complex<double>> X_het_all,
+        array_type<int> k_f0_all,
+        array_type<std::complex<double>> c0_sparse_all,
+        array_type<std::complex<double>> A0_all,
+        array_type<std::complex<double>> A1_all,
+        array_type<std::complex<double>> B0_all,
+        array_type<std::complex<double>> B1_all,
+        array_type<double> wdm_window,
+        array_type<int> n_sparse_local_arr,
+        array_type<double> params_cand_all,
+        array_type<double> params_ref_all,
+        array_type<int> data_index_all,
+        int num_bin, int num_data,
+        int nparams, int f0_idx, int fdot_idx,
+        int Nf, int Nt, int Nf_active, int Nt_active,
+        int Nt_layer, int N_sparse_t, int stride,
+        int ind_min_t, int ind_min_f,
+        int m_active_half_width,
+        double layer_df, double dt,
+        int nchannels, int tdi_type,
+        int N_sparse_fd);
 };
 
 

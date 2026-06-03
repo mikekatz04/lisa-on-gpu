@@ -5,6 +5,11 @@
 #include "Interpolate.hh"
 #include "LISAResponse.hh"
 #include "gbt_global.h"
+// Phase 3L (2026-06-02): FDDomain class moved to LAT
+// (lisatools/cutils/fd_domain.hh). The class definition + CPU/GPU alias
+// now live there; this include resolves both for the GBComputationGroup
+// methods that take FDDomain* arguments.
+#include "fd_domain.hh"
 
 
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
@@ -15,7 +20,6 @@
 #define WaveletLookupTable WaveletLookupTableGPU
 #define WDMSettings WDMSettingsGPU
 #define WDMDomain WDMDomainGPU
-#define FDDomain FDDomainGPU
 #define GBComputationGroup GBComputationGroupGPU
 #else
 #define GBTDIonTheFly GBTDIonTheFlyCPU
@@ -25,7 +29,6 @@
 #define WaveletLookupTable WaveletLookupTableCPU
 #define WDMSettings WDMSettingsCPU
 #define WDMDomain WDMDomainCPU
-#define FDDomain FDDomainCPU
 #define GBComputationGroup GBComputationGroupCPU
 #endif
 
@@ -558,56 +561,8 @@ class WDMDomain : public WDMSettings{
 // the lisatools rfft grid (df = 1/Tobs), with the active band specified by
 // [ind_min, ind_max] inclusive.  Inner products are the standard lisatools
 // formula  (a|b) = 4 Re sum_{c1,c2} sum_k conj(a_c1[k]) b_c2[k] invC[c1,c2][k] * df.
-class FDDomain {
-  public:
-    cmplx  *fd_data;   // (num_data, num_channel, n_rfft) complex
-    double *fd_invC;   // tdi_type=TDI_XYZ: (num_noise, num_channel, num_channel, n_rfft)
-                       // tdi_type=TDI_AET/AE: (num_noise, num_channel, n_rfft)
-    int    n_rfft;
-    int    num_channel;
-    int    num_data;
-    int    num_noise;
-    int    ind_min;    // inclusive
-    int    ind_max;    // inclusive
-    double df;
-    double Tobs;       // = 1/df, kept for convenience
-
-    CUDA_CALLABLE_MEMBER
-    FDDomain(cmplx *fd_data_, double *fd_invC_, int n_rfft_,
-             int num_channel_, int num_data_, int num_noise_,
-             int ind_min_, int ind_max_, double df_)
-    {
-        fd_data     = fd_data_;
-        fd_invC     = fd_invC_;
-        n_rfft      = n_rfft_;
-        num_channel = num_channel_;
-        num_data    = num_data_;
-        num_noise   = num_noise_;
-        ind_min     = ind_min_;
-        ind_max     = ind_max_;
-        df          = df_;
-        Tobs        = 1.0 / df_;
-    };
-    CUDA_DEVICE inline cmplx get_data(int k, int channel, int data_index) const
-    {
-        return fd_data[(size_t) data_index * num_channel * n_rfft
-                       + (size_t) channel * n_rfft + k];
-    }
-    CUDA_DEVICE inline double get_invC_diag(int k, int channel, int noise_index) const
-    {
-        return fd_invC[(size_t) noise_index * num_channel * n_rfft
-                       + (size_t) channel * n_rfft + k];
-    }
-    CUDA_DEVICE inline double get_invC_cross(int k, int c1, int c2, int noise_index) const
-    {
-        return fd_invC[(((size_t) noise_index * num_channel + c1)
-                        * num_channel + c2) * n_rfft + k];
-    }
-    CUDA_DEVICE inline bool in_band(int k) const
-    {
-        return (k >= ind_min) && (k <= ind_max);
-    }
-};
+// FDDomain class moved to LAT at Phase 3L (2026-06-02). Definition lives
+// in lisatools/cutils/fd_domain.hh; included at the top of this header.
 
 
 // Lookup table kind. Selects how linear_interp indexes the coefficient buffer
@@ -875,6 +830,87 @@ class GBComputationGroup{
         double *param_eps_add, double *param_eps_remove,
         int num_bin, int nparams, double T, double t_start, double t_ref,
         int N_sparse, int nchannels, int tdi_type);
+
+    // ------------------------------------------------------------------
+    // Signal-heterodyne (v2 polyphase) family.
+    //
+    // First port of the v2 polyphase signal-het Python prototype at
+    // ``LISAanalysistools/scripts/gb_chunked_het/gb_signal_het_wdm_v2.py``.
+    // Takes the candidate's precomputed ``rfft(Tukey * td)`` and the
+    // reference's precomputed ``c0_sparse / A0 / A1 / B0 / B1`` (bin-folded
+    // at construction) and returns per-binary ``<d|h>``, ``<h|h>`` from
+    // the bin-folded inner-product accumulator (v1-style sparse path:
+    //    <d|h> = sum_{c',m,b} A0[c',m,b] * r[c',m,b] + A1[c',m,b] * dr/dn[c',m,b]
+    // where r and dr/dn are evaluated at sparse bin centres without
+    // carrier de-rotation; matches the Python prototype to FP precision
+    // at DF0=0 and ~1% relative residual at DF0/layer_df=0.05).
+    //
+    // Active m-band = m_floor +/- m_active_half_width (m_floor =
+    // floor(f0/layer_df), default half-width = 2 => 5 layers).
+    //
+    // Per-channel-index conventions (XYZ tdi_type=0; AE/AET tdi_type=1
+    // uses diagonal B0/B1 of shape (num_data, nch, Nf_active, Nt_layer)
+    // instead of (num_data, nch, nch, Nf_active, Nt_layer)).
+    void gb_signal_het_get_ll_wrap(
+        double *d_h_out,
+        double *h_h_out,
+        cmplx  *fd_rfft_all,
+        cmplx  *c0_sparse_all,
+        cmplx  *A0_all,
+        cmplx  *A1_all,
+        cmplx  *B0_all,
+        cmplx  *B1_all,
+        double *wdm_window,
+        int    *n_sparse_local_arr,
+        double *params_cand_all,
+        double *params_ref_all,
+        int    *data_index_all,
+        int     num_bin, int num_data,
+        int     nparams, int f0_idx, int fdot_idx,
+        int     Nf, int Nt, int Nf_active, int Nt_active,
+        int     Nt_layer, int N_sparse_t, int stride,
+        int     ind_min_t, int ind_min_f,
+        int     m_active_half_width,
+        double  layer_df, double dt,
+        int     nchannels, int tdi_type,
+        int     n_rfft);
+
+    // Stage 2a: signal_het_get_ll consuming the SPARSE carrier-removed FD
+    // (the output of GBTDIonTheFly::run_fd_wave_tdi -- length N_sparse_fd per
+    // (binary, channel), centred at the per-binary k_f0 absolute-FD bin).
+    // Polyphase fold iterates only over the N_sparse_fd nonzero bins,
+    // implicit zero everywhere else. Eliminates per-source dense FD storage.
+    //
+    // X_het_all[bin, ch, i] is the absolute FD value at bin
+    //     k_abs = k_f0_all[bin] + (i - N_sparse_fd/2)
+    // i.e. the dense rfft restricted to a window of N_sparse_fd bins around
+    // f0. In production (Stage 2b) this array is filled in-kernel from the
+    // source-class heterodyned sparse rfft; here it is an input for
+    // validation against the dense-FD path.
+    void gb_signal_het_get_ll_sparse_wrap(
+        double *d_h_out,
+        double *h_h_out,
+        cmplx  *X_het_all,
+        int    *k_f0_all,
+        cmplx  *c0_sparse_all,
+        cmplx  *A0_all,
+        cmplx  *A1_all,
+        cmplx  *B0_all,
+        cmplx  *B1_all,
+        double *wdm_window,
+        int    *n_sparse_local_arr,
+        double *params_cand_all,
+        double *params_ref_all,
+        int    *data_index_all,
+        int     num_bin, int num_data,
+        int     nparams, int f0_idx, int fdot_idx,
+        int     Nf, int Nt, int Nf_active, int Nt_active,
+        int     Nt_layer, int N_sparse_t, int stride,
+        int     ind_min_t, int ind_min_f,
+        int     m_active_half_width,
+        double  layer_df, double dt,
+        int     nchannels, int tdi_type,
+        int     N_sparse_fd);
 };
 
 
