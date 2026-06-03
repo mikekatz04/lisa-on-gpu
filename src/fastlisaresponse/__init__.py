@@ -28,6 +28,26 @@ try:
 except (ModuleNotFoundError, ImportError):
     _is_editable = False
 
+# Phase 3H (2026-06-02): top-level deprecation notice. The `fastlisaresponse`
+# package is being absorbed into the sprint reorg -- generic LISA-response
+# code lives in `lisatools.response`, GB-specific code in `gbgpu`, and
+# SOBBH-specific code in `bbhx`. Each individual moved symbol still works
+# via per-module deprecation shims (and emits its own DeprecationWarning on
+# first import), but this notice lets users see the broader picture at
+# `import fastlisaresponse` time.
+import warnings as _warnings
+_warnings.warn(
+    "`fastlisaresponse` is being deprecated in favor of `lisatools.response` "
+    "(generic LISA response/TDI), `gbgpu` (GB-specific kernels) and `bbhx` "
+    "(SOBBH-specific kernels). The native modules still work and existing "
+    "imports keep functioning via shims, but every shim emits its own "
+    "DeprecationWarning telling you where the new home is. Plan for a one-"
+    "release-cycle deprecation window before the package is retired.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+del _warnings
+
 from . import cutils, utils
 
 from gpubackendtools import Globals
