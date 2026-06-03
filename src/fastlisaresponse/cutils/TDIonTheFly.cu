@@ -28,11 +28,20 @@
 #define NUM_THREADS_HERE 1
 #endif
 
+// === LISATDIonTheFly method bodies moved to LAT at Phase 3L.5 (2026-06-03) ===
+// All ~26 method bodies now live in
+//   LISAanalysistools/src/lisatools/cutils/lat_tdi_on_the_fly.cu
+// (copy-compiled in-place by this repo's CMakeLists, same pattern
+// as LISAResponse.cu since Phase 3E). The blocks below are retained
+// as #if 0 for historical reference and will be removed once the
+// carve-out is fully validated.
+#if 0
 CUDA_DEVICE
 LISATDIonTheFly::~LISATDIonTheFly()
 {
     return;
 }
+#endif  // === end LISATDIonTheFly dtor moved to LAT ===
 
 // CUDA_DEVICE
 // void LISATDIonTheFly::get_t_tdi(double *t_out, double *kr, double *Larm, double t, int a, int b, int c, int n)
@@ -1664,6 +1673,14 @@ inline void populate_orbit_spline_cache(
 }
 
 
+// === OrbitsSplineCache evaluation helpers moved to LAT at Phase 3L.5 ===
+// _orbit_cache_seg, _orbit_cache_link_index, cache_get_light_travel_time,
+// cache_get_pos now live in
+//   LISAanalysistools/src/lisatools/cutils/lat_tdi_on_the_fly.cu
+// (copy-compiled in-place by this repo's CMakeLists). The only callers
+// were the LISATDIonTheFly cached method bodies, which also moved to LAT.
+// The block below is retained as #if 0 for historical reference.
+#if 0
 // Inline helper: locate the segment index for an arbitrary t in the cache's
 // uniform grid, clamped to [0, N_cp - 2].
 CUDA_DEVICE
@@ -1720,6 +1737,7 @@ inline Vec cache_get_pos(const OrbitsSplineCache *c, double t, int sc)
     }
     return Vec(v[0], v[1], v[2]);
 }
+#endif  // === end OrbitsSplineCache helpers moved to LAT ===
 
 
 // ============================================================================
@@ -6410,6 +6428,8 @@ void GBComputationGroup::gb_wdm_spline_get_ll_grad_wrap(
 
 #define NLINKS 6
 
+// === LISATDIonTheFly methods (first block) moved to LAT at Phase 3L.5 ===
+#if 0
 CUDA_DEVICE
 void LISATDIonTheFly::get_sky_vectors(Vec *k, Vec *u, Vec *v, double *params)
 {
@@ -7627,6 +7647,7 @@ void LISATDIonTheFly::get_tdi_heterodyned(void *buffer, int buffer_length, cmplx
     }
     CUDA_SYNC_THREADS;
 }
+#endif  // === end LISATDIonTheFly first-block methods moved to LAT ===
 
 
 CUDA_DEVICE
@@ -7737,9 +7758,11 @@ GBTDIonTheFly::~GBTDIonTheFly()
 //     printf("tdi_config inside: %d\n", this->tdi_config->num_channels);
 // }
 
+// === LISATDIonTheFly::run_wave_tdi moved to LAT at Phase 3L.5 ===
+#if 0
 CUDA_DEVICE
-void LISATDIonTheFly::run_wave_tdi(void *buffer, int buffer_length, cmplx *tdi_channels_arr, 
-    double *tdi_amp, double *tdi_phase, double *phi_ref, 
+void LISATDIonTheFly::run_wave_tdi(void *buffer, int buffer_length, cmplx *tdi_channels_arr,
+    double *tdi_amp, double *tdi_phase, double *phi_ref,
     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels)
 {
     N_store = N;
@@ -7803,16 +7826,17 @@ void LISATDIonTheFly::run_wave_tdi(void *buffer, int buffer_length, cmplx *tdi_c
             &tdi_amp[bin_i * nchannels * N], &tdi_phase[bin_i * nchannels * N],
             &phi_ref[bin_i * N],
             params_here, t_here, N, bin_i, nchannels);
-        CUDA_SYNC_THREADS;   
+        CUDA_SYNC_THREADS;
     }
     return;
 }
+#endif  // === end LISATDIonTheFly::run_wave_tdi moved to LAT ===
 
 
 
 #ifdef __CUDACC__
 CUDA_KERNEL
-void gb_run_wave_tdi_kernel(GBTDIonTheFly *tdi_on_fly, int buffer_length, cmplx *tdi_channels_arr, 
+void gb_run_wave_tdi_kernel(GBTDIonTheFly *tdi_on_fly, int buffer_length, cmplx *tdi_channels_arr,
     double *tdi_amp, double *tdi_phase, double *phi_ref, 
     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels)
 {

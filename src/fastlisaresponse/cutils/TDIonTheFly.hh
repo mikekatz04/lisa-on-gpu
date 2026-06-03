@@ -5,14 +5,17 @@
 #include "Interpolate.hh"
 #include "LISAResponse.hh"
 #include "gbt_global.h"
-// Phase 3L (2026-06-02): FDDomain + WDMSettings + WDMDomain classes moved
-// to LAT. Their class definitions + CPU/GPU aliases now live in LAT
-// headers (fd_domain.hh, wdm_settings.hh, wdm_domain.hh). WaveletLookupTable
-// still inherits from WDMSettings; the includes below make the LAT-side
-// definitions visible.
+// Phase 3L (2026-06-02..03): FDDomain + WDMSettings + WDMDomain +
+// LISATDIonTheFly (base class) + OrbitsSplineCache moved to LAT. Their
+// class definitions + CPU/GPU aliases now live in LAT headers
+// (fd_domain.hh, wdm_settings.hh, wdm_domain.hh, lat_tdi_on_the_fly.hh).
+// WaveletLookupTable still inherits from WDMSettings; the derived classes
+// below (GBTDIonTheFly, SOBBHTDIonTheFly, FDSplineTDIWaveform,
+// TDSplineTDIWaveform) inherit from LISATDIonTheFly via the LAT include.
 #include "fd_domain.hh"
 #include "wdm_settings.hh"
 #include "wdm_domain.hh"
+#include "lat_tdi_on_the_fly.hh"
 
 
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
@@ -36,30 +39,20 @@
 #define TDI_AE 3
 
 
-// In-kernel orbit spline cache (see TDIonTheFly.cu for builder + eval
-// helpers). Holds cubic-spline coefficients for the 6 link LTTs and 9
-// spacecraft-xyz positions, sampled at N_cp uniform times within a chunk.
-// Populated once per chunk per block; reused across all binaries.
-//
-// Cached evaluation replaces ``orbits->get_light_travel_time`` /
-// ``orbits->get_pos`` global-mem lookups (~32-64 per TDI sample per binary)
-// with cheap shared-mem cubic evals.
-struct OrbitsSplineCache
-{
-    double  t_cp0;           // chunk_t_start (absolute s)
-    double  dt_cp;           // uniform cp spacing (s)
-    int     N_cp;
-    double *t_cp;            // [N_cp]
-    double *ltt_y;           // [6 * N_cp]  per-link LTT y0
-    double *ltt_c1;          // [6 * N_cp]
-    double *ltt_c2;          // [6 * N_cp]
-    double *ltt_c3;          // [6 * N_cp]
-    double *pos_y;           // [9 * N_cp]  (sc, xyz) row-major: pos_y[(sc*3+xyz)*N_cp + i]
-    double *pos_c1;
-    double *pos_c2;
-    double *pos_c3;
-};
+// OrbitsSplineCache struct moved to LAT at Phase 3L.5 (2026-06-03).
+// Definition lives in lisatools/cutils/lat_tdi_on_the_fly.hh; included
+// at the top of this header.
 
+// LISATDIonTheFly base class moved to LAT at Phase 3L.5 (2026-06-03).
+// Class definition + method declarations + CPU/GPU alias for
+// LISATDIonTheFly + OrbitsSplineCache live in
+// lisatools/cutils/lat_tdi_on_the_fly.hh; method bodies are compiled
+// out of lisatools/cutils/lat_tdi_on_the_fly.cu (copy-compiled
+// in-place by this repo's CMakeLists, same pattern as LISAResponse.cu).
+//
+// Stub kept ONLY so the historical class declaration is the canonical
+// reference for change-history purposes; the actual class lives in LAT.
+#if 0
 class LISATDIonTheFly{
     public:
         Orbits *orbits;
@@ -70,13 +63,13 @@ class LISATDIonTheFly{
         int beta_index;
         int N_store;
 
-        CUDA_DEVICE 
+        CUDA_DEVICE
         void run_wave_tdi(
-            void *buffer, int buffer_length, cmplx *tdi_channels_arr, 
-            double *tdi_amp, double *tdi_phase, double *phi_ref, 
+            void *buffer, int buffer_length, cmplx *tdi_channels_arr,
+            double *tdi_amp, double *tdi_phase, double *phi_ref,
             double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels
         );
-        CUDA_CALLABLE_MEMBER 
+        CUDA_CALLABLE_MEMBER
         LISATDIonTheFly(Orbits *orbits_, TDIConfig *tdi_config_, int inc_index_, int psi_index_, int lam_index_, int beta_index_)
         {
             orbits = orbits_;
@@ -86,7 +79,7 @@ class LISATDIonTheFly{
             lam_index = lam_index_;
             beta_index = beta_index_;
         };
-        CUDA_CALLABLE_MEMBER 
+        CUDA_CALLABLE_MEMBER
         ~LISATDIonTheFly();
         CUDA_DEVICE
         void print_orbits_tdi();
@@ -202,6 +195,7 @@ class LISATDIonTheFly{
         CUDA_DEVICE
         virtual double get_fdot(double t, double *params, int bin_i);
 };
+#endif // === end LISATDIonTheFly stub (moved to LAT) ===
 
 class GBTDIonTheFly : public LISATDIonTheFly{
     public:
