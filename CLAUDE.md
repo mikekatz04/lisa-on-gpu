@@ -23,25 +23,33 @@ release cycle, after which this package retires entirely.
 | `responselisa` pybind11 module + `OrbitsWrap_responselisa` / `CubicSplineWrap_responselisa` / `TDIConfigWrap` / `LISAResponseWrap` registrations | LAT's `pycppdetector` module via `response_part(m)` | 3E | **Module retired**; lisa-on-gpu's `cutils/__init__.py` sources these from `lisatools_backend_*.pycppdetector` |
 | `fastlisaresponse.jax.sources.ucb`, `fastlisaresponse.jax.wdm.{kernels,heterodyne_kernels,fast_inner_heterodyne}` | `gbgpu.jax.{sources,wdm}.*` | 3F | Moved, shim re-exports |
 | `fastlisaresponse.jax.sources.sobbh` | `bbhx.jax.sources.sobbh` | 3G | Moved, shim re-exports |
+| `FDDomain[Wrap]`, `WDMSettings[Wrap]`, `WDMDomain[Wrap]` (in `TDIonTheFly.{hh,cu}` + `binding_tof.{hpp,cxx}`) | LAT's `cutils/{fd_domain,wdm_settings,wdm_domain}.hh` + `binding_{fd_domain,wdm_settings,wdm_domain}.hpp` | 3L.1/.2/.4 | Header-inline; Wraps in LAT's `pycppdetector` via `response_part(m)`; `_lat_pd`-routed in `cutils/__init__.py` |
+| `WaveletLookupTable` + `gb_wdm_spline_*` kernels (lookup-table spline path) | RETIRED | 3L.3 | Commented `#if 0` in-place (per user direction); chunked-heterodyne `gb_wdm_het_*` is the sole WDM path |
+| `LISATDIonTheFly` base + `OrbitsSplineCache` + cache eval helpers (TDIonTheFly.{hh,cu}) | LAT's `cutils/lat_tdi_on_the_fly.{hh,cu}` | 3L.5 | `.hh + .cu` split; this repo's CMake copy-compiles the `.cu` in-place same as `LISAResponse.cu` since Phase 3E |
+| `FDSplineTDIWaveform`, `TDSplineTDIWaveform` + their `*Wrap` + `LISATDIonTheFlyWrap` base | LAT's `cutils/lat_spline_tdi_waveform.{hh,cu}` + `binding_lat_spline_tdi.hpp` | 3L.6 | Same split pattern; wraps registered in LAT's `pycppdetector`; the still-here `GBTDIonTheFlyWrap` + `SOBBHTDIonTheFlyWrap` inherit from the LAT-owned `LISATDIonTheFlyWrap` |
 
-**Still here (deferred to future C++ TDIonTheFly carve-out session):**
-- `cutils/TDIonTheFly.cu` (~11k lines), `cutils/TDIonTheFly.hh`,
-  `cutils/binding_tof.{cxx,hpp}` — contain the LISATDIonTheFly base class
-  (generic), the GB/SOBBH-derived classes, the WDM*Wrap family, and the
-  GBComputationGroupWrap / SOBBHComputationGroupWrap with all their
-  chunked-het kernels.
+**Still here (Phase 3L.7 + 3L.8 — pending GBGPU/BBHx pybind11 infra prereq):**
+- `cutils/TDIonTheFly.cu` + `.hh` + `binding_tof.{cxx,hpp}` — the
+  GBTDIonTheFly + GBComputationGroup + their `*Wrap` + the gb_wdm_het_*
+  kernels (Phase 3L.7 target -> GBGPU) and SOBBHTDIonTheFly +
+  SOBBHComputationGroup (Phase 3L.8 -> BBHx). Generic LISATDIonTheFly +
+  spline/WDM/FD pieces have already been carved out (Phase 3L.1-3L.6,
+  see deprecation table above); the remaining content is the
+  source-class-specific machinery. Many `#if 0` blocks mark the carved-
+  out historical bodies as reference; remove after full validation.
 - `fastlisaresponse.gbcomps` (GBWDMComputations, GBFDComputations Python
-  frontends).
+  frontends) — Phase 3L.7 target.
 - `fastlisaresponse.jax.wdm.computation_group` (GBComputationGroupWrapJAX +
   SOBBHComputationGroupWrapJAX).
 - `fastlisaresponse.jax.tdi_on_the_fly` (`gb_run_wave_tdi`, `sobbh_run_wave_tdi`).
 - `fastlisaresponse.jax.wrappers` (mixed Jax wrappers).
 
-When the carve-out lands, generic chunks go to LAT; GB chunks to GBGPU;
-SOBBH chunks to BBHx. The Phase 3J `LISATOOLS_IS_WRAPPER_OWNER`
-static_assert in `binding_tof.cxx` + the sprint-root grep gate
-(`tools/check_single_registrant.sh`) catch any accidental duplicate
-registration at compile time during that work.
+Phase 3L.7 + 3L.8 blocker: GBGPU and BBHx currently use Cython bindings
+(`.pyx`), so the destination packages need pybind11 module infrastructure
+equivalent to LAT's `pycppdetector` before the GB/SOBBH `*TDIonTheFly`
+machinery can move. Until then, those classes stay registered in this
+repo's `tdionthefly` module — the Phase 3J/3K enforcement keeps anything
+else from accidentally re-registering them elsewhere.
 
 ## Backend implementation hierarchy (sprint-wide rule)
 
