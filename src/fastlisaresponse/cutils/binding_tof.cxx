@@ -10,6 +10,20 @@
 #include "gbt_global.h"
 #include "binding_flr.hpp"
 #include "binding_tof.hpp"
+// Phase 3J: lisa-on-gpu is a CONSUMER of LAT-owned shared wrappers (OrbitsWrap,
+// LISAResponseWrap, TDIConfigWrap, CubicSplineWrap_responselisa). It must NOT
+// register them with pybind11 -- that would re-introduce the past duplicate-
+// registration pain (LAT's pycppdetector + lisa-on-gpu's tdionthefly both
+// trying to claim the same C++ type, pybind11 throwing
+// "type already registered" at import). The static_assert below makes that
+// violation a compile-time error if someone ever adds the registration here.
+#include "lisatools_header_abi.hpp"
+static_assert(!LISATOOLS_IS_WRAPPER_OWNER,
+    "Single-registrant rule: lisa-on-gpu (binding_tof.cxx) must NOT register "
+    "OrbitsWrap / LISAResponseWrap / TDIConfigWrap / CubicSplineWrap_responselisa. "
+    "Those are owned by LISAanalysistools (pycppdetector). "
+    "See plan section 'OrbitsWrap-symbol-unification' and "
+    "memory project_phase3_efg_shipped for context.");
 
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
 #include "pybind11_cuda_array_interface.hpp"
