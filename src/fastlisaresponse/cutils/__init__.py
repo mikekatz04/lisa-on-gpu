@@ -106,8 +106,8 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
             "AE": fastlisaresponse_backend_cpu.tdionthefly.TDI_AE,
         }
         return FastLISAResponseBackendMethods(
-            TDSplineTDIWaveformWrap=fastlisaresponse_backend_cpu.tdionthefly.TDSplineTDIWaveformWrapCPU,
-            FDSplineTDIWaveformWrap=fastlisaresponse_backend_cpu.tdionthefly.FDSplineTDIWaveformWrapCPU,
+            TDSplineTDIWaveformWrap=_lat_pd.TDSplineTDIWaveformWrapCPU,
+            FDSplineTDIWaveformWrap=_lat_pd.FDSplineTDIWaveformWrapCPU,
             GBTDIonTheFlyWrap=fastlisaresponse_backend_cpu.tdionthefly.GBTDIonTheFlyWrapCPU,
             SOBBHTDIonTheFlyWrap=fastlisaresponse_backend_cpu.tdionthefly.SOBBHTDIonTheFlyWrapCPU,
             LISAResponseWrap=_lat_pd.LISAResponseWrapCPU,
@@ -162,8 +162,8 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
             "AE": fastlisaresponse_backend_cuda11x.tdionthefly.TDI_AE,
         }
         return FastLISAResponseBackendMethods(
-            TDSplineTDIWaveformWrap=fastlisaresponse_backend_cuda11x.tdionthefly.TDSplineTDIWaveformWrapGPU,
-            FDSplineTDIWaveformWrap=fastlisaresponse_backend_cuda11x.tdionthefly.FDSplineTDIWaveformWrapGPU,
+            TDSplineTDIWaveformWrap=_lat_pd.TDSplineTDIWaveformWrapGPU,
+            FDSplineTDIWaveformWrap=_lat_pd.FDSplineTDIWaveformWrapGPU,
             GBTDIonTheFlyWrap=fastlisaresponse_backend_cuda11x.tdionthefly.GBTDIonTheFlyWrapGPU,
             SOBBHTDIonTheFlyWrap=fastlisaresponse_backend_cuda11x.tdionthefly.SOBBHTDIonTheFlyWrapGPU,
             LISAResponseWrap=_lat_pd.LISAResponseWrapGPU,
@@ -215,8 +215,8 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
             "AE": fastlisaresponse_backend_cuda12x.tdionthefly.TDI_AE,
         }
         return FastLISAResponseBackendMethods(
-            TDSplineTDIWaveformWrap=fastlisaresponse_backend_cuda12x.tdionthefly.TDSplineTDIWaveformWrapGPU,
-            FDSplineTDIWaveformWrap=fastlisaresponse_backend_cuda12x.tdionthefly.FDSplineTDIWaveformWrapGPU,
+            TDSplineTDIWaveformWrap=_lat_pd.TDSplineTDIWaveformWrapGPU,
+            FDSplineTDIWaveformWrap=_lat_pd.FDSplineTDIWaveformWrapGPU,
             GBTDIonTheFlyWrap=fastlisaresponse_backend_cuda12x.tdionthefly.GBTDIonTheFlyWrapGPU,
             SOBBHTDIonTheFlyWrap=fastlisaresponse_backend_cuda12x.tdionthefly.SOBBHTDIonTheFlyWrapGPU,
             LISAResponseWrap=_lat_pd.LISAResponseWrapGPU,

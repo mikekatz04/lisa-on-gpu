@@ -16,20 +16,19 @@
 #include "wdm_settings.hh"
 #include "wdm_domain.hh"
 #include "lat_tdi_on_the_fly.hh"
+#include "lat_spline_tdi_waveform.hh"
 
 
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
 #define GBTDIonTheFly GBTDIonTheFlyGPU
 #define SOBBHTDIonTheFly SOBBHTDIonTheFlyGPU
-#define FDSplineTDIWaveform FDSplineTDIWaveformGPU
-#define TDSplineTDIWaveform TDSplineTDIWaveformGPU
+// FDSplineTDIWaveform + TDSplineTDIWaveform aliases moved to LAT at Phase 3L.6.
 // WaveletLookupTable disabled at Phase 3L (2026-06-02) -- lookup-table spline path is being retired.
 #define GBComputationGroup GBComputationGroupGPU
 #else
 #define GBTDIonTheFly GBTDIonTheFlyCPU
 #define SOBBHTDIonTheFly SOBBHTDIonTheFlyCPU
-#define FDSplineTDIWaveform FDSplineTDIWaveformCPU
-#define TDSplineTDIWaveform TDSplineTDIWaveformCPU
+// FDSplineTDIWaveform + TDSplineTDIWaveform aliases moved to LAT at Phase 3L.6.
 // WaveletLookupTable disabled at Phase 3L (2026-06-02) -- lookup-table spline path is being retired.
 #define GBComputationGroup GBComputationGroupCPU
 #endif
@@ -281,10 +280,15 @@ void gb_run_wave_tdi_wrap(GBTDIonTheFly *tdi_on_fly, cmplx *tdi_channels_arr,
 // Requires N_sparse to be a power of two and t_ref == t_start; the caller
 // should pass tau = t_local = absolute_t - t_start in t_arr_sparse (but the
 // kernel just reads f0, Tobs, N_sparse and t_start to rebuild tau).
+// tukey_alpha: scipy.signal.windows.tukey alpha applied to the slow
+// signal before the sparse FFT. 0.0 = rectangular. Pass the same alpha
+// used to window the dense rfft so the dense/sparse FD paths produce
+// matching inner products.
 void gb_run_fd_wave_tdi_wrap(GBTDIonTheFly *tdi_on_fly,
     cmplx *X_het, int *k_f0_out, double *f0_grid_out,
     double *params, double t_start, double Tobs,
-    int N_sparse, int num_bin, int n_params, int nchannels);
+    int N_sparse, int num_bin, int n_params, int nchannels,
+    double tukey_alpha);
 
 
 // Stellar-origin black-hole binary TDI-on-the-fly. Mirrors GBTDIonTheFly:
@@ -374,83 +378,12 @@ void sobbh_run_wave_tdi_wrap(SOBBHTDIonTheFly *tdi_on_fly, cmplx *tdi_channels_a
     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels);
 
 
-class TDSplineTDIWaveform : public LISATDIonTheFly{
-  public:
-    // Orbits *orbits;
-    // TDIConfig *tdi_config;
-    
-    CubicSpline *amp_spline;
-    CubicSpline *phase_spline;
-    int binary_index_storage;
-
-    CUDA_CALLABLE_MEMBER
-    TDSplineTDIWaveform(Orbits* orbits_, TDIConfig *tdi_config_, CubicSpline *amp_spline_, CubicSpline *phase_spline_): LISATDIonTheFly(orbits_, tdi_config_, 0, 1, 2, 3){
-        amp_spline = amp_spline_;
-        phase_spline = phase_spline_;
-    };
-    CUDA_CALLABLE_MEMBER
-    ~TDSplineTDIWaveform(){};
-    // CUDA_DEVICE
-    // void get_amp_and_phase(double t_ssb, double *t, double *amp, double *phase, double *params, int N, int spline_i);
-    // void run_wave_tdi(
-    //     cmplx *tdi_channels_arr, 
-    //     double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double *phi_ref, 
-    //     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels
-    // );
-    CUDA_CALLABLE_MEMBER
-    int get_td_spline_buffer_size(int N){return get_tdi_buffer_size(N);};
-    CUDA_DEVICE
-    void check_x();
-    CUDA_DEVICE
-    double get_amp(double t, double *params, int spline_i);
-    CUDA_DEVICE
-    double get_phase(double t, double *params, int spline_i);
-
-};
-
-void td_spline_run_wave_tdi_wrap(TDSplineTDIWaveform *tdi_on_fly, cmplx *tdi_channels_arr, 
-    double *tdi_amp, double *tdi_phase, double *phi_ref, 
-    double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels);
-
-
-class FDSplineTDIWaveform : public LISATDIonTheFly {
-    public:
-        CubicSpline *amp_spline;
-        CubicSpline *freq_spline;
-        // double *phase_ref_store;
-
-    CUDA_CALLABLE_MEMBER
-    FDSplineTDIWaveform(Orbits* orbits_, TDIConfig *tdi_config_, CubicSpline *amp_spline_, CubicSpline *freq_spline_): LISATDIonTheFly(orbits_, tdi_config_, 0, 1, 2, 3)
-    {
-        amp_spline = amp_spline_;
-        freq_spline = freq_spline_;
-    };
-
-    // CUDA_DEVICE
-    // FDSplineTDIWaveform(Orbits *orbits_, TDIConfig *tdi_config_, CubicSpline *amp_spline_, CubicSpline *freq_spline_, double *phase_ref_);
-    CUDA_CALLABLE_MEMBER
-    ~FDSplineTDIWaveform(){};
-    // CUDA_DEVICE
-    // void get_amp_and_phase(double t_ssb, double *t, double *amp, double *phase, double *params, int N, int spline_i);
-    // CUDA_DEVICE
-    // void run_wave_tdi(
-    //     cmplx *tdi_channels_arr, 
-    //     double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double *phi_ref, 
-    //     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels
-    // );
-    CUDA_CALLABLE_MEMBER
-    int get_fd_spline_buffer_size(int N){return get_tdi_buffer_size(N);};
-    CUDA_DEVICE
-    double get_phase_ref(double t, double *params, int bin_i);
-    CUDA_DEVICE
-    double get_amp(double t, double *params, int spline_i);
-    CUDA_DEVICE
-    double get_phase(double t, double *params, int spline_i);
-    CUDA_DEVICE
-    void get_tdi(void *buffer, int buffer_length, cmplx *tdi_channels_arr, double *tdi_amp, double *tdi_phase, double* phi_ref, double *params, double *t_arr, int N, int bin_i, int nchannels);
-    CUDA_DEVICE
-    double get_amp_f(double t, double *params, int spline_i);
-};
+// TDSplineTDIWaveform + FDSplineTDIWaveform classes moved to LAT at
+// Phase 3L.6 (2026-06-03). Class definitions + CPU/GPU aliases live in
+// lisatools/cutils/lat_spline_tdi_waveform.hh; method bodies + host
+// launchers (td_spline_run_wave_tdi_wrap, fd_spline_run_wave_tdi_wrap)
+// compile out of lat_spline_tdi_waveform.cu (copy-compiled in-place by
+// this repo's CMakeLists).
 
 // WDMSettings class moved to LAT at Phase 3L (2026-06-02). Definition
 // lives in lisatools/cutils/wdm_settings.hh; included at the top of
@@ -828,6 +761,9 @@ class GBComputationGroup{
     // bin-fold pipeline. X_het is allocated in a transient per-call buffer
     // (heap on CPU; would be per-block shared memory on GPU at Stage 3).
     // No per-source FD storage in global memory.
+    // tukey_alpha is set by the caller to match the alpha applied to the
+    // dense rfft(Tukey * td) on the analysis side; 0.05 is the
+    // recommended/default value pushed in from Python.
     void gb_signal_het_get_ll_in_kernel_wrap(
         GBTDIonTheFly *tdi_on_fly,
         double *d_h_out, double *h_h_out,
@@ -848,7 +784,7 @@ class GBComputationGroup{
         double  layer_df, double dt,
         double  T_obs, double t_start,
         int     nchannels, int tdi_type,
-        int     N_sparse_fd);
+        int     N_sparse_fd, double tukey_alpha);
 };
 
 

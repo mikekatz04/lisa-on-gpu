@@ -55,7 +55,8 @@ void GBTDIonTheFlyWrap::run_fd_wave_tdi_wrap(
     array_type<double> f0_grid_out,
     array_type<double> params,
     double t_start, double Tobs,
-    int N_sparse, int num_bin, int n_params, int nchannels
+    int N_sparse, int num_bin, int n_params, int nchannels,
+    double tukey_alpha
 )
 {
     gb_run_fd_wave_tdi_wrap(
@@ -68,7 +69,8 @@ void GBTDIonTheFlyWrap::run_fd_wave_tdi_wrap(
         return_pointer_and_check_length(params, "params",
                      n_params, num_bin),
         t_start, Tobs,
-        N_sparse, num_bin, n_params, nchannels
+        N_sparse, num_bin, n_params, nchannels,
+        tukey_alpha
     );
 }
 
@@ -92,41 +94,9 @@ void SOBBHTDIonTheFlyWrap::run_wave_tdi_wrap(
 }
 
 
-void TDSplineTDIWaveformWrap::run_wave_tdi_wrap(
-    array_type<std::complex<double>>tdi_channels_arr, 
-    array_type<double>tdi_amp, array_type<double>tdi_phase, array_type<double>phi_ref, 
-    array_type<double>params, array_type<double>t_arr, int N, int num_bin, int n_params, int nchannels
-)
-{
-    td_spline_run_wave_tdi_wrap(
-        waveform,
-        (cmplx*)return_pointer_and_check_length(tdi_channels_arr, "tdi_channels_arr", N, num_bin * nchannels), // TODO: add length check
-        return_pointer_and_check_length(tdi_amp, "tdi_amp", N, num_bin * nchannels),
-        return_pointer_and_check_length(tdi_phase, "tdi_phase", N, num_bin * nchannels),
-        return_pointer_and_check_length(phi_ref, "phi_ref", N, num_bin),
-        return_pointer_and_check_length(params, "params", n_params, num_bin),
-        return_pointer_and_check_length(t_arr, "t_arr", N, num_bin),
-        N, num_bin, n_params, nchannels
-    );
-}
-
-void FDSplineTDIWaveformWrap::run_wave_tdi_wrap(
-    array_type<std::complex<double>>tdi_channels_arr, 
-    array_type<double>tdi_amp, array_type<double>tdi_phase, array_type<double>phi_ref, 
-    array_type<double>params, array_type<double>t_arr, int N, int num_bin, int n_params, int nchannels
-)
-{
-    fd_spline_run_wave_tdi_wrap(
-        waveform,
-        (cmplx*)return_pointer_and_check_length(tdi_channels_arr, "tdi_channels_arr", N, num_bin * nchannels), // TODO: add length check
-        return_pointer_and_check_length(tdi_amp, "tdi_amp", N, num_bin * nchannels),
-        return_pointer_and_check_length(tdi_phase, "tdi_phase", N, num_bin * nchannels),
-        return_pointer_and_check_length(phi_ref, "phi_ref", N, num_bin),
-        return_pointer_and_check_length(params, "params", n_params, num_bin),
-        return_pointer_and_check_length(t_arr, "t_arr", N, num_bin),
-        N, num_bin, n_params, nchannels
-    );
-}
+// TDSplineTDIWaveformWrap::run_wave_tdi_wrap + FDSplineTDIWaveformWrap::run_wave_tdi_wrap
+// moved to LAT at Phase 3L.6 (2026-06-03). Bodies are now inline in
+// lisatools/cutils/binding_lat_spline_tdi.hpp.
 
 
 #if 0  // === WaveletLookupTableWrap::* + gb_wdm_spline_* impls disabled at Phase 3L (2026-06-02) ===
@@ -781,6 +751,79 @@ void GBComputationGroupWrap::gb_signal_het_get_ll_sparse(
 }
 
 
+// Stage 2b: in-kernel sparse-FD. The wrap takes a GBTDIonTheFlyWrap*
+// (Python-visible) and unboxes to the underlying GBTDIonTheFly* before
+// calling the engine. X_het is generated inside the wrap_in_kernel function
+// via gb_run_fd_wave_tdi_wrap, then immediately consumed by the same
+// polyphase + bin-fold pipeline that Stage 2a uses.
+void GBComputationGroupWrap::gb_signal_het_get_ll_in_kernel(
+    GBTDIonTheFlyWrap *tdi_wrap,
+    array_type<double> d_h_out, array_type<double> h_h_out,
+    array_type<std::complex<double>> c0_sparse_all,
+    array_type<std::complex<double>> A0_all,
+    array_type<std::complex<double>> A1_all,
+    array_type<std::complex<double>> B0_all,
+    array_type<std::complex<double>> B1_all,
+    array_type<double> wdm_window,
+    array_type<int> n_sparse_local_arr,
+    array_type<double> params_cand_all,
+    array_type<double> params_ref_all,
+    array_type<int> data_index_all,
+    int num_bin, int num_data,
+    int nparams, int f0_idx, int fdot_idx,
+    int Nf, int Nt, int Nf_active, int Nt_active,
+    int Nt_layer, int N_sparse_t, int stride,
+    int ind_min_t, int ind_min_f,
+    int m_active_half_width,
+    double layer_df, double dt,
+    double T_obs, double t_start,
+    int nchannels, int tdi_type,
+    int N_sparse_fd, double tukey_alpha)
+{
+    (void) Nt_layer;
+    const size_t b_xyz  = (size_t) num_data * nchannels * nchannels
+                        * Nf_active * N_sparse_t;
+    const size_t b_diag = (size_t) num_data * nchannels * Nf_active * N_sparse_t;
+
+    gb_signal_het_get_ll_in_kernel_wrap(
+        tdi_wrap->waveform,
+        return_pointer_and_check_length(d_h_out, "d_h_out", num_bin, 1),
+        return_pointer_and_check_length(h_h_out, "h_h_out", num_bin, 1),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            c0_sparse_all, "c0_sparse_all",
+            (size_t) num_data * nchannels * Nf_active * N_sparse_t, 1)),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            A0_all, "A0_all",
+            (size_t) num_data * nchannels * Nf_active * N_sparse_t, 1)),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            A1_all, "A1_all",
+            (size_t) num_data * nchannels * Nf_active * N_sparse_t, 1)),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            B0_all, "B0_all", (tdi_type == 0) ? b_xyz : b_diag, 1)),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            B1_all, "B1_all", (tdi_type == 0) ? b_xyz : b_diag, 1)),
+        return_pointer_and_check_length(wdm_window, "wdm_window", Nt, 1),
+        return_pointer_and_check_length(n_sparse_local_arr, "n_sparse_local",
+                                         N_sparse_t, 1),
+        return_pointer_and_check_length(params_cand_all, "params_cand_all",
+                                         nparams, num_bin),
+        return_pointer_and_check_length(params_ref_all, "params_ref_all",
+                                         nparams, num_data),
+        return_pointer_and_check_length(data_index_all, "data_index_all",
+                                         num_bin, 1),
+        num_bin, num_data,
+        nparams, f0_idx, fdot_idx,
+        Nf, Nt, Nf_active, Nt_active,
+        Nt_layer, N_sparse_t, stride,
+        ind_min_t, ind_min_f,
+        m_active_half_width,
+        layer_df, dt,
+        T_obs, t_start,
+        nchannels, tdi_type,
+        N_sparse_fd, tukey_alpha);
+}
+
+
 // ---- SOBBH-flavored pybind shims -------------------------------------------
 void SOBBHComputationGroupWrap::sobbh_wdm_het_fill_global(
     array_type<double> template_fill,
@@ -1017,70 +1060,11 @@ void tdionthefly_part(py::module &m) {
     m.attr("TDI_AET") = TDI_AET;
     m.attr("TDI_AE") = TDI_AE;
     
-#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
-    py::class_<FDSplineTDIWaveformWrap>(m, "FDSplineTDIWaveformWrapGPU")
-#else
-    py::class_<FDSplineTDIWaveformWrap>(m, "FDSplineTDIWaveformWrapCPU")
-#endif 
-
-    // Bind the constructor
-    .def(py::init<OrbitsWrap_responselisa *, TDIConfigWrap *, CubicSplineWrap_responselisa *, CubicSplineWrap_responselisa *>(), 
-         py::arg("orbits"), py::arg("tdi_config"), py::arg("amp_spline"), py::arg("freq_spline"))
-    // Bind member functions
-    .def("run_wave_tdi_wrap", &FDSplineTDIWaveformWrap::run_wave_tdi_wrap, "Preform TDI combinations.")
-    .def("get_buffer_size", &FDSplineTDIWaveformWrap::get_buffer_size, "Get needed buffer size.")
-    // You can also expose public data members directly using def_readwrite
-    .def_readwrite("orbits", &FDSplineTDIWaveformWrap::orbits)
-    .def_readwrite("tdi_config", &FDSplineTDIWaveformWrap::tdi_config)
-    .def_readwrite("amp_spline", &FDSplineTDIWaveformWrap::amp_spline)
-    .def_readwrite("freq_spline", &FDSplineTDIWaveformWrap::freq_spline)
-    
-    // .def("get_link_ind", &OrbitsWrap::get_link_ind, "Get link index.")
-    ;
-
-#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
-    py::class_<FDSplineTDIWaveform>(m, "FDSplineTDIWaveformGPU")
-#else
-    py::class_<FDSplineTDIWaveform>(m, "FDSplineTDIWaveformCPU")
-#endif
-
-    // Bind the constructor
-    .def(py::init<Orbits *, TDIConfig*, CubicSpline*, CubicSpline*>(), 
-         py::arg("orbits"), py::arg("tdi_config"), py::arg("amp_spline"), py::arg("freqs_spline"))
-    ;
-
-
-#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
-    py::class_<TDSplineTDIWaveformWrap>(m, "TDSplineTDIWaveformWrapGPU")
-#else
-    py::class_<TDSplineTDIWaveformWrap>(m, "TDSplineTDIWaveformWrapCPU")
-#endif 
-
-    // Bind the constructor
-    .def(py::init<OrbitsWrap_responselisa *, TDIConfigWrap *, CubicSplineWrap_responselisa *, CubicSplineWrap_responselisa *>(), 
-         py::arg("orbits"), py::arg("tdi_config"), py::arg("amp_spline"), py::arg("phase_spline"))
-    // Bind member functions
-    .def("run_wave_tdi_wrap", &TDSplineTDIWaveformWrap::run_wave_tdi_wrap, "Preform TDI combinations.")
-    .def("get_buffer_size", &TDSplineTDIWaveformWrap::get_buffer_size, "Get needed buffer size.")
-    // You can also expose public data members directly using def_readwrite
-    .def_readwrite("orbits", &TDSplineTDIWaveformWrap::orbits)
-    .def_readwrite("tdi_config", &TDSplineTDIWaveformWrap::tdi_config)
-    .def_readwrite("amp_spline", &TDSplineTDIWaveformWrap::amp_spline)
-    .def_readwrite("phase_spline", &TDSplineTDIWaveformWrap::phase_spline)
-    
-    // .def("get_link_ind", &OrbitsWrap::get_link_ind, "Get link index.")
-    ;
-
-#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
-    py::class_<TDSplineTDIWaveform>(m, "TDSplineTDIWaveformGPU")
-#else
-    py::class_<TDSplineTDIWaveform>(m, "TDSplineTDIWaveformCPU")
-#endif
-
-    // Bind the constructor
-    .def(py::init<Orbits *, TDIConfig*, CubicSpline*, CubicSpline*>(), 
-         py::arg("orbits"), py::arg("tdi_config"), py::arg("amp_spline"), py::arg("phase_spline"))
-    ;
+    // Phase 3L.6 (2026-06-03): FDSplineTDIWaveform[Wrap] + TDSplineTDIWaveform[Wrap]
+    // pybind11 registrations moved to LAT's binding_flr.cxx (registered in
+    // pycppdetector via response_part(m)). The
+    // static_assert(!LISATOOLS_IS_WRAPPER_OWNER, ...) at the top of this TU
+    // guards against any future re-registration here.
 
 
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
@@ -1095,7 +1079,14 @@ void tdionthefly_part(py::module &m) {
     // Bind member functions
     .def("run_wave_tdi_wrap", &GBTDIonTheFlyWrap::run_wave_tdi_wrap, "Preform TDI combinations.")
     .def("run_fd_wave_tdi_wrap", &GBTDIonTheFlyWrap::run_fd_wave_tdi_wrap,
-         "Heterodyne FD GB TDI on a sparse time grid.")
+         "Heterodyne FD GB TDI on a sparse time grid. tukey_alpha applies a "
+         "scipy.signal.windows.tukey(N_sparse, alpha) taper to the slow "
+         "signal before the in-place FFT; pass the same alpha used on the "
+         "dense rfft(Tukey*td) side so the two FD paths agree.",
+         py::arg("X_het"), py::arg("k_f0_out"), py::arg("f0_grid_out"),
+         py::arg("params"), py::arg("t_start"), py::arg("Tobs"),
+         py::arg("N_sparse"), py::arg("num_bin"), py::arg("n_params"),
+         py::arg("nchannels"), py::arg("tukey_alpha") = 0.0)
     .def("get_buffer_size", &GBTDIonTheFlyWrap::get_buffer_size, "Get needed buffer size.")
     .def("get_fd_buffer_size", &GBTDIonTheFlyWrap::get_fd_buffer_size,
          "Get shared-memory size for the heterodyne FD kernel.")
@@ -1220,6 +1211,33 @@ void tdionthefly_part(py::module &m) {
          "N_sparse_fd per binary per channel) + per-binary k_f0. Polyphase "
          "fold iterates only the N_sparse_fd nonzero bins. Stage 2b will fill "
          "X_het in-kernel from the source-class heterodyned sparse rfft.")
+    .def("gb_signal_het_get_ll_in_kernel", &GBComputationGroupWrap::gb_signal_het_get_ll_in_kernel,
+         "Stage 2b in-kernel sparse-FD signal-het get_ll. Fuses "
+         "gb_run_fd_wave_tdi (sparse heterodyned rfft from the GB source "
+         "class) with the polyphase + bin-fold pipeline. Takes a "
+         "GBTDIonTheFlyWrap; X_het is held in a transient per-call buffer. "
+         "tukey_alpha must match the alpha used to window the dense "
+         "rfft(Tukey*td) on the analysis side.",
+         py::arg("tdi_wrap"),
+         py::arg("d_h_out"), py::arg("h_h_out"),
+         py::arg("c0_sparse_all"),
+         py::arg("A0_all"), py::arg("A1_all"),
+         py::arg("B0_all"), py::arg("B1_all"),
+         py::arg("wdm_window"), py::arg("n_sparse_local_arr"),
+         py::arg("params_cand_all"), py::arg("params_ref_all"),
+         py::arg("data_index_all"),
+         py::arg("num_bin"), py::arg("num_data"),
+         py::arg("nparams"), py::arg("f0_idx"), py::arg("fdot_idx"),
+         py::arg("Nf"), py::arg("Nt"),
+         py::arg("Nf_active"), py::arg("Nt_active"),
+         py::arg("Nt_layer"), py::arg("N_sparse_t"), py::arg("stride"),
+         py::arg("ind_min_t"), py::arg("ind_min_f"),
+         py::arg("m_active_half_width"),
+         py::arg("layer_df"), py::arg("dt"),
+         py::arg("T_obs"), py::arg("t_start"),
+         py::arg("nchannels"), py::arg("tdi_type"),
+         py::arg("N_sparse_fd"),
+         py::arg("tukey_alpha") = 0.05)
     ;
 
     #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)

@@ -8504,13 +8504,20 @@ void gbfd_radix2_fft_inplace(cmplx *a, int N, int log2N)
 // The shared-mem layout is exactly the one `get_gb_fd_buffer_size` reserves.
 // `tdi_chan_out`, if non-NULL, also receives a pointer to the per-channel
 // heterodyne FD slab within shared (size = nchannels * N complex).
+// tukey_alpha: scipy.signal.windows.tukey alpha applied to the slow signal
+// before the in-place FFT. 0.0 = rectangular (no taper), match
+// FAST_WDM_TUKEY_ALPHA_HET_NARROW / _HET_WIDE (0.05 / 0.01) to mirror the
+// dense rfft(Tukey*td) convention. The same taper formula is used as in
+// the chunked-het sparse FD path (TDIonTheFly.cu:2074-2098) so cross-path
+// inner products line up at FP precision.
 CUDA_DEVICE
 void gbfd_build_one_source(GBTDIonTheFly *tof, void *shared_mem,
                            double *params_in, double t_start, double Tobs,
                            int N, int nchannels, int n_params, int bin_i,
                            int log2N,
                            cmplx **tdi_chan_out,
-                           int *kf0_out, double *f0g_out, double *dts_out)
+                           int *kf0_out, double *f0g_out, double *dts_out,
+                           double tukey_alpha)
 {
     // ---- carve up shared memory ------------------------------------------
     char *cur = (char*) shared_mem;
@@ -8559,16 +8566,33 @@ void gbfd_build_one_source(GBTDIonTheFly *tof, void *shared_mem,
                  params_here, t_arr_local, N, bin_i, nchannels);
 
     // ---- build slow positive-freq complex signal in-place over tdi_chan --
+    // Tukey window factored in-line: cosine taper on the first / last
+    // alpha/2 fraction of the N sparse samples (rectangular middle). Matches
+    // scipy.signal.windows.tukey(N, alpha) sample-by-sample so the sparse FD
+    // matches the dense rfft(Tukey*td) inner product. alpha=0 -> no taper.
+    const double n_taper_fd = 0.5 * tukey_alpha * (double) (N - 1);
+    const double dlast_fd   = (double) (N - 1);
     for (int n = THREAD_START_X; n < N; n += BLOCK_INCR_X)
     {
         const double tau     = (double) n * dts;
         const double carrier = 2.0 * M_PI * f0g * tau;
         const double phref   = phi_ref[n];
+        double w = 1.0;
+        if (tukey_alpha > 0.0 && n_taper_fd > 0.0) {
+            const double di = (double) n;
+            if (di < n_taper_fd) {
+                const double xn = di / n_taper_fd;
+                w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
+            } else if (di > dlast_fd - n_taper_fd) {
+                const double xn = (dlast_fd - di) / n_taper_fd;
+                w = 0.5 * (1.0 + cos(M_PI * (xn - 1.0)));
+            }
+        }
         for (int c = 0; c < nchannels; ++c)
         {
             const double th = tdi_phase[c * N + n] + phref - carrier;
             tdi_chan[c * N + n] =
-                gcmplx::polar(tdi_amp[c * N + n], th);  // +i sign
+                gcmplx::polar(tdi_amp[c * N + n] * w, th);  // +i sign
         }
     }
     CUDA_SYNC_THREADS;
@@ -8633,7 +8657,7 @@ void gbfd_run_one_source(GBTDIonTheFly *tof, void *shared_mem,
                          cmplx *X_het, int *k_f0_out, double *f0_grid_out,
                          double *params_in, double t_start, double Tobs,
                          int N, int nchannels, int n_params, int bin_i,
-                         int log2N)
+                         int log2N, double tukey_alpha)
 {
     cmplx *tdi_chan = NULL;
     int    kf0      = 0;
@@ -8641,7 +8665,7 @@ void gbfd_run_one_source(GBTDIonTheFly *tof, void *shared_mem,
     double dts      = 0.0;
     gbfd_build_one_source(tof, shared_mem, params_in, t_start, Tobs,
                           N, nchannels, n_params, bin_i, log2N,
-                          &tdi_chan, &kf0, &f0g, &dts);
+                          &tdi_chan, &kf0, &f0g, &dts, tukey_alpha);
 
     // Write heterodyne FD to global, in FFT order.
     for (int n = THREAD_START_X; n < N; n += BLOCK_INCR_X)
@@ -8666,7 +8690,8 @@ CUDA_KERNEL
 void gb_run_fd_wave_tdi_kernel(GBTDIonTheFly *tdi_on_fly,
     cmplx *X_het, int *k_f0_out, double *f0_grid_out,
     double *params, double t_start, double Tobs,
-    int N, int num_bin, int n_params, int nchannels, int log2N)
+    int N, int num_bin, int n_params, int nchannels, int log2N,
+    double tukey_alpha)
 {
     extern CUDA_SHARED char shared_mem[];
     GBTDIonTheFly tof(tdi_on_fly->orbits, tdi_on_fly->tdi_config,
@@ -8676,7 +8701,8 @@ void gb_run_fd_wave_tdi_kernel(GBTDIonTheFly *tdi_on_fly,
         gbfd_run_one_source(&tof, (void*) shared_mem,
                             X_het, k_f0_out, f0_grid_out,
                             params, t_start, Tobs,
-                            N, nchannels, n_params, bin_i, log2N);
+                            N, nchannels, n_params, bin_i, log2N,
+                            tukey_alpha);
     }
 }
 #endif
@@ -8684,7 +8710,8 @@ void gb_run_fd_wave_tdi_kernel(GBTDIonTheFly *tdi_on_fly,
 void gb_run_fd_wave_tdi_wrap(GBTDIonTheFly *tdi_on_fly,
     cmplx *X_het, int *k_f0_out, double *f0_grid_out,
     double *params, double t_start, double Tobs,
-    int N_sparse, int num_bin, int n_params, int nchannels)
+    int N_sparse, int num_bin, int n_params, int nchannels,
+    double tukey_alpha)
 {
     // Validate power-of-two
     int log2N = 0;
@@ -8737,7 +8764,7 @@ void gb_run_fd_wave_tdi_wrap(GBTDIonTheFly *tdi_on_fly,
     gb_run_fd_wave_tdi_kernel<<<num_bin, NUM_THREADS_HERE, shared_bytes>>>(
         d_gb, X_het, k_f0_out, f0_grid_out,
         params, t_start, Tobs,
-        N_sparse, num_bin, n_params, nchannels, log2N);
+        N_sparse, num_bin, n_params, nchannels, log2N, tukey_alpha);
 
     cudaDeviceSynchronize();
     gpuErrchk(cudaGetLastError());
@@ -8755,7 +8782,8 @@ void gb_run_fd_wave_tdi_wrap(GBTDIonTheFly *tdi_on_fly,
         gbfd_run_one_source(tdi_on_fly, (void*) shared_mem,
                             X_het, k_f0_out, f0_grid_out,
                             params, t_start, Tobs,
-                            N_sparse, nchannels, n_params, bin_i, log2N);
+                            N_sparse, nchannels, n_params, bin_i, log2N,
+                            tukey_alpha);
     }
     delete[] shared_mem;
 #endif
@@ -8868,7 +8896,7 @@ void gb_fd_get_ll_kernel(double *d_h_out, double *h_h_out,
         double dts      = 0.0;
         gbfd_build_one_source(&tof, (void*) shared_mem, params, t_start, Tobs,
                               N, nchannels, n_params, bin_i, log2N,
-                              &tdi_chan, &kf0, &f0g, &dts);
+                              &tdi_chan, &kf0, &f0g, &dts, 0.0);
 
         double dh_local = 0.0, hh_local = 0.0;
         gbfd_accumulate_ll(&dh_local, &hh_local, tdi_chan, N, nchannels,
@@ -8957,7 +8985,7 @@ void GBComputationGroup::gb_fd_get_ll_wrap(double *d_h_out, double *h_h_out,
         gbfd_build_one_source(&tof, (void*) shared_mem,
                               params_all, t_start, T,
                               N_sparse, nchannels, nparams, bin_i, log2N,
-                              &tdi_chan, &kf0, &f0g, &dts);
+                              &tdi_chan, &kf0, &f0g, &dts, 0.0);
 
         double dh = 0.0, hh = 0.0;
         gbfd_accumulate_ll(&dh, &hh, tdi_chan, N_sparse, nchannels, fd, kf0,
@@ -8994,7 +9022,7 @@ void gb_fd_fill_global_kernel(cmplx *template_fill,
         double dts      = 0.0;
         gbfd_build_one_source(&tof, (void*) shared_mem, params, t_start, Tobs,
                               N, nchannels, n_params, bin_i, log2N,
-                              &tdi_chan, &kf0, &f0g, &dts);
+                              &tdi_chan, &kf0, &f0g, &dts, 0.0);
 
         int data_index = data_index_all[bin_i];
         double factor  = factors_all[bin_i];
@@ -9081,7 +9109,7 @@ void GBComputationGroup::gb_fd_fill_global_wrap(cmplx *template_fill,
         gbfd_build_one_source(&tof, (void*) shared_mem,
                               params_all, t_start, T,
                               N_sparse, nchannels, nparams, bin_i, log2N,
-                              &tdi_chan, &kf0, &f0g, &dts);
+                              &tdi_chan, &kf0, &f0g, &dts, 0.0);
 
         int data_index = data_index_all[bin_i];
         double factor  = factors_all[bin_i];
@@ -9165,7 +9193,7 @@ void GBComputationGroup::gb_fd_swap_ll_wrap(
         double dts_a = 0.0;
         gbfd_build_one_source(&tof, (void*) shared_mem_a, params_add_all,
                               t_start, T, N_sparse, nchannels, nparams,
-                              bin_i, log2N, &h_add, &kf0_a, &f0g_a, &dts_a);
+                              bin_i, log2N, &h_add, &kf0_a, &f0g_a, &dts_a, 0.0);
         // (d|h_add), (h_add|h_add)
         double dh_a = 0.0, hh_aa = 0.0;
         gbfd_accumulate_ll(&dh_a, &hh_aa, h_add, N_sparse, nchannels, fd,
@@ -9178,7 +9206,7 @@ void GBComputationGroup::gb_fd_swap_ll_wrap(
         double dts_r = 0.0;
         gbfd_build_one_source(&tof, (void*) shared_mem_b, params_remove_all,
                               t_start, T, N_sparse, nchannels, nparams,
-                              bin_i, log2N, &h_rem, &kf0_r, &f0g_r, &dts_r);
+                              bin_i, log2N, &h_rem, &kf0_r, &f0g_r, &dts_r, 0.0);
         double dh_r = 0.0, hh_rr = 0.0;
         gbfd_accumulate_ll(&dh_r, &hh_rr, h_rem, N_sparse, nchannels, fd,
                            kf0_r, data_index_all[bin_i],
@@ -9395,7 +9423,7 @@ void GBComputationGroup::gb_fd_get_ll_grad_wrap(double *grad_out,
         gbfd_build_one_source(&tof, (void*) scratch, params_priv,
                               t_start, T, N_sparse, nchannels, nparams,
                               /*bin_i=*/0, log2N,
-                              &h_C_shared, &kf0_C, &f0g_C, &dts_C);
+                              &h_C_shared, &kf0_C, &f0g_C, &dts_C, 0.0);
         // The scratch's tdi_chan slab will be overwritten by perturbed builds
         // below, so stash the central signal in our own buffer.
         for (size_t idx = 0;
@@ -9424,7 +9452,7 @@ void GBComputationGroup::gb_fd_get_ll_grad_wrap(double *grad_out,
             gbfd_build_one_source(&tof, (void*) scratch, params_priv,
                                   t_start, T, N_sparse, nchannels, nparams,
                                   0, log2N,
-                                  &h_P_shared, &kf0_P, &f0g_P, &dts_P);
+                                  &h_P_shared, &kf0_P, &f0g_P, &dts_P, 0.0);
             double acc_p = gbfd_grad_one_sided_partial(
                 h_P_shared, kf0_P,
                 central_stash, kf0_C,
@@ -9440,7 +9468,7 @@ void GBComputationGroup::gb_fd_get_ll_grad_wrap(double *grad_out,
             gbfd_build_one_source(&tof, (void*) scratch, params_priv,
                                   t_start, T, N_sparse, nchannels, nparams,
                                   0, log2N,
-                                  &h_M_shared, &kf0_M, &f0g_M, &dts_M);
+                                  &h_M_shared, &kf0_M, &f0g_M, &dts_M, 0.0);
             double acc_m = gbfd_grad_one_sided_partial(
                 h_M_shared, kf0_M,
                 central_stash, kf0_C,
@@ -9516,7 +9544,7 @@ void GBComputationGroup::gb_fd_swap_ll_grad_wrap(
         gbfd_build_one_source(&tof, (void*) scratch, params_add_priv,
                               t_start, T, N_sparse, nchannels, nparams,
                               0, log2N,
-                              &h_addC_shared, &kf0_addC, &f0g_addC, &dts_addC);
+                              &h_addC_shared, &kf0_addC, &f0g_addC, &dts_addC, 0.0);
         for (size_t idx = 0;
              idx < (size_t) nchannels * (size_t) N_sparse; ++idx)
             add_stash[idx] = h_addC_shared[idx];
@@ -9527,7 +9555,7 @@ void GBComputationGroup::gb_fd_swap_ll_grad_wrap(
         gbfd_build_one_source(&tof, (void*) scratch, params_rem_priv,
                               t_start, T, N_sparse, nchannels, nparams,
                               0, log2N,
-                              &h_remC_shared, &kf0_remC, &f0g_remC, &dts_remC);
+                              &h_remC_shared, &kf0_remC, &f0g_remC, &dts_remC, 0.0);
         for (size_t idx = 0;
              idx < (size_t) nchannels * (size_t) N_sparse; ++idx)
             rem_stash[idx] = h_remC_shared[idx];
@@ -9553,7 +9581,7 @@ void GBComputationGroup::gb_fd_swap_ll_grad_wrap(
             gbfd_build_one_source(&tof, (void*) scratch, params_add_priv,
                                   t_start, T, N_sparse, nchannels, nparams,
                                   0, log2N,
-                                  &h_aP, &kf0_aP, &f0g_aP, &dts_aP);
+                                  &h_aP, &kf0_aP, &f0g_aP, &dts_aP, 0.0);
             double acc_p = gbfd_grad_one_sided_partial(
                 h_aP, kf0_aP,
                 add_stash, kf0_addC,
@@ -9567,7 +9595,7 @@ void GBComputationGroup::gb_fd_swap_ll_grad_wrap(
             gbfd_build_one_source(&tof, (void*) scratch, params_add_priv,
                                   t_start, T, N_sparse, nchannels, nparams,
                                   0, log2N,
-                                  &h_aM, &kf0_aM, &f0g_aM, &dts_aM);
+                                  &h_aM, &kf0_aM, &f0g_aM, &dts_aM, 0.0);
             double acc_m = gbfd_grad_one_sided_partial(
                 h_aM, kf0_aM,
                 add_stash, kf0_addC,
@@ -9598,7 +9626,7 @@ void GBComputationGroup::gb_fd_swap_ll_grad_wrap(
             gbfd_build_one_source(&tof, (void*) scratch, params_rem_priv,
                                   t_start, T, N_sparse, nchannels, nparams,
                                   0, log2N,
-                                  &h_rP, &kf0_rP, &f0g_rP, &dts_rP);
+                                  &h_rP, &kf0_rP, &f0g_rP, &dts_rP, 0.0);
             double acc_p = gbfd_grad_one_sided_partial(
                 h_rP, kf0_rP,
                 add_stash, kf0_addC,
@@ -9612,7 +9640,7 @@ void GBComputationGroup::gb_fd_swap_ll_grad_wrap(
             gbfd_build_one_source(&tof, (void*) scratch, params_rem_priv,
                                   t_start, T, N_sparse, nchannels, nparams,
                                   0, log2N,
-                                  &h_rM, &kf0_rM, &f0g_rM, &dts_rM);
+                                  &h_rM, &kf0_rM, &f0g_rM, &dts_rM, 0.0);
             double acc_m = gbfd_grad_one_sided_partial(
                 h_rM, kf0_rM,
                 add_stash, kf0_addC,
@@ -9656,6 +9684,11 @@ void GBComputationGroup::gb_fd_swap_ll_grad_wrap(
 // }
 
 
+// === FDSpline + TDSpline TDIWaveform method bodies + host launchers ===
+// Moved to LAT at Phase 3L.6 (2026-06-03). Now live in
+//   LISAanalysistools/src/lisatools/cutils/lat_spline_tdi_waveform.cu
+// (copy-compiled in-place via the LISAResponse.cu pattern).
+#if 0
 CUDA_DEVICE
 void FDSplineTDIWaveform::get_tdi(void *buffer, int buffer_length, cmplx *tdi_channels_arr, double *tdi_amp, double *tdi_phase, double* phi_ref, double *params, double *t_arr, int N, int bin_i, int nchannels)
 {
@@ -9966,7 +9999,7 @@ void fd_spline_run_wave_tdi_wrap(FDSplineTDIWaveform *tdi_on_fly, cmplx *tdi_cha
     delete wave_here;
 #else
 
-    // make buffer 
+    // make buffer
     int buffer_length = tdi_on_fly->get_fd_spline_buffer_size(N);
     char *buffer = new char[buffer_length];
     tdi_on_fly->run_wave_tdi((void*)buffer, buffer_length, tdi_channels_arr, tdi_amp, tdi_phase, phi_ref,
@@ -9974,6 +10007,7 @@ void fd_spline_run_wave_tdi_wrap(FDSplineTDIWaveform *tdi_on_fly, cmplx *tdi_cha
     delete[] buffer;
 #endif
 }
+#endif  // === end FDSpline + TDSpline TDIWaveform moved to LAT ===
 
 
 // CUDA_DEVICE
@@ -11770,7 +11804,7 @@ void GBComputationGroup::gb_signal_het_get_ll_in_kernel_wrap(
     double  layer_df, double dt,
     double  T_obs, double t_start,
     int     nchannels, int tdi_type,
-    int     N_sparse_fd)
+    int     N_sparse_fd, double tukey_alpha)
 {
 #ifdef __CUDACC__
     std::fprintf(stderr, "[gb_signal_het_get_ll_in_kernel_wrap] GPU branch "
@@ -11778,15 +11812,46 @@ void GBComputationGroup::gb_signal_het_get_ll_in_kernel_wrap(
     return;
 #endif
 
-    std::vector<cmplx>  X_het((size_t) num_bin * nchannels * N_sparse_fd);
+    std::vector<cmplx>  X_het_raw((size_t) num_bin * nchannels * N_sparse_fd);
     std::vector<int>    k_f0_buf(num_bin);
     std::vector<double> f0_grid_buf(num_bin);
 
     gb_run_fd_wave_tdi_wrap(
         tdi_on_fly,
-        X_het.data(), k_f0_buf.data(), f0_grid_buf.data(),
+        X_het_raw.data(), k_f0_buf.data(), f0_grid_buf.data(),
         params_cand_all, t_start, T_obs,
-        N_sparse_fd, num_bin, nparams, nchannels);
+        N_sparse_fd, num_bin, nparams, nchannels,
+        tukey_alpha);
+
+    // Convert gb_run_fd_wave_tdi output to the centered-slice / dense-rfft
+    // convention that gb_signal_het_get_ll_sparse_wrap expects:
+    //   * raw layout: X_het_raw[b,c,m_fft] = FFT-order, carrier-removed
+    //     sparse FFT, scaled by 0.5*dts where dts = T_obs/N_sparse_fd.
+    //   * target:     X_het[b,c,i] = dense_rfft(Tukey*td)[k_f0 + (i - half_NS)],
+    //                  i.e. centered slice of the absolute (carrier-intact)
+    //                  dense rfft.
+    // The continuous-FT representations differ by a 0.5 factor that is
+    // already absorbed in the raw 0.5*dts scale, leaving only the
+    // sparse-to-dense Riemann conversion (1/dt) and the FFT-order ->
+    // centered-slice reordering (an fftshift). Both signals share the
+    // t_start time origin so there is no extra linear-phase factor.
+    // Empirical bin-by-bin agreement is ~1% (Tukey vs no-window edge bias)
+    // which the polyphase fold averages out at the inner-product level.
+    std::vector<cmplx> X_het((size_t) num_bin * nchannels * N_sparse_fd);
+    const int    half_NS = N_sparse_fd / 2;
+    const double dt_inv  = 1.0 / dt;
+    for (int b = 0; b < num_bin; ++b) {
+        for (int c = 0; c < nchannels; ++c) {
+            const size_t base = ((size_t) b * nchannels + c) * N_sparse_fd;
+            for (int i = 0; i < N_sparse_fd; ++i) {
+                const int m_signed = i - half_NS;
+                const int m_fft    = (m_signed >= 0)
+                                         ? m_signed
+                                         : (m_signed + N_sparse_fd);
+                X_het[base + i] = X_het_raw[base + m_fft] * dt_inv;
+            }
+        }
+    }
 
     this->gb_signal_het_get_ll_sparse_wrap(
         d_h_out, h_h_out,

@@ -20,16 +20,14 @@ namespace py = pybind11;
 #include "pybind11_cuda_array_interface.hpp"
 #define GBTDIonTheFlyWrap GBTDIonTheFlyWrapGPU
 #define SOBBHTDIonTheFlyWrap SOBBHTDIonTheFlyWrapGPU
-#define FDSplineTDIWaveformWrap FDSplineTDIWaveformWrapGPU
-#define TDSplineTDIWaveformWrap TDSplineTDIWaveformWrapGPU
+// FDSplineTDIWaveformWrap + TDSplineTDIWaveformWrap aliases moved to LAT at Phase 3L.6.
 // WaveletLookupTableWrap disabled at Phase 3L (2026-06-02) -- lookup-table path retiring.
 #define GBComputationGroupWrap GBComputationGroupWrapGPU
 #define SOBBHComputationGroupWrap SOBBHComputationGroupWrapGPU
 #else
 #define GBTDIonTheFlyWrap GBTDIonTheFlyWrapCPU
 #define SOBBHTDIonTheFlyWrap SOBBHTDIonTheFlyWrapCPU
-#define FDSplineTDIWaveformWrap FDSplineTDIWaveformWrapCPU
-#define TDSplineTDIWaveformWrap TDSplineTDIWaveformWrapCPU
+// FDSplineTDIWaveformWrap + TDSplineTDIWaveformWrap aliases moved to LAT at Phase 3L.6.
 // WaveletLookupTableWrap disabled at Phase 3L (2026-06-02) -- lookup-table path retiring.
 #define GBComputationGroupWrap GBComputationGroupWrapCPU
 #define SOBBHComputationGroupWrap SOBBHComputationGroupWrapCPU
@@ -40,69 +38,24 @@ namespace py = pybind11;
 #include "binding_fd_domain.hpp"
 #include "binding_wdm_settings.hpp"
 #include "binding_wdm_domain.hpp"
+// Phase 3L.6: LISATDIonTheFlyWrap + FDSpline/TDSpline TDIWaveformWrap
+// moved to LAT. Class defs live in binding_lat_spline_tdi.hpp; the
+// underlying GBTDIonTheFlyWrap + SOBBHTDIonTheFlyWrap below (still in
+// this repo) inherit from LISATDIonTheFlyWrap via this include.
+#include "binding_lat_spline_tdi.hpp"
 
 
-class LISATDIonTheFlyWrap : public ReturnPointerBase {
-  public:
-    OrbitsWrap_responselisa *orbits;
-    TDIConfigWrap *tdi_config;
-    LISATDIonTheFlyWrap(OrbitsWrap_responselisa *orbits_, TDIConfigWrap *tdi_config_){
-        orbits = orbits_;
-        tdi_config = tdi_config_;
-    };
-};
+// LISATDIonTheFlyWrap class moved to LAT at Phase 3L.6 (2026-06-03).
+// Definition lives in lisatools/cutils/binding_lat_spline_tdi.hpp;
+// included above.
 
-class FDSplineTDIWaveformWrap : public LISATDIonTheFlyWrap {
-  public:
-    CubicSplineWrap_responselisa *amp_spline;
-    CubicSplineWrap_responselisa *freq_spline;
-    FDSplineTDIWaveform *waveform;
-    FDSplineTDIWaveformWrap(OrbitsWrap_responselisa *orbits_, TDIConfigWrap *tdi_config_, CubicSplineWrap_responselisa *amp_spline_, CubicSplineWrap_responselisa *freq_spline_): LISATDIonTheFlyWrap(orbits_, tdi_config_)
-    {
-        amp_spline = amp_spline_;
-        freq_spline = freq_spline_;
-        waveform = new FDSplineTDIWaveform(orbits_->orbits, tdi_config_->tdi_config, amp_spline_->spline, freq_spline_->spline);
-    };
-    ~FDSplineTDIWaveformWrap(){
-        delete waveform;
-    };
+// FDSplineTDIWaveformWrap class moved to LAT at Phase 3L.6 (2026-06-03).
+// Definition + inline run_wave_tdi_wrap body live in
+// lisatools/cutils/binding_lat_spline_tdi.hpp; included above.
 
-    void run_wave_tdi_wrap(
-        array_type<std::complex<double>>tdi_channels_arr, 
-        array_type<double>tdi_amp, array_type<double>tdi_phase, array_type<double>phi_ref, 
-        array_type<double>params, array_type<double>t_arr, int N, int num_bin, int n_params, int nchannels
-    );
-    
-    int get_buffer_size(int N){return waveform->get_fd_spline_buffer_size(N);};
-
-};
-
-
-
-class TDSplineTDIWaveformWrap : public LISATDIonTheFlyWrap {
-  public:
-    CubicSplineWrap_responselisa *amp_spline;
-    CubicSplineWrap_responselisa *phase_spline;
-    TDSplineTDIWaveform *waveform;
-    TDSplineTDIWaveformWrap(OrbitsWrap_responselisa *orbits_, TDIConfigWrap *tdi_config_, CubicSplineWrap_responselisa *amp_spline_, CubicSplineWrap_responselisa *phase_spline_): LISATDIonTheFlyWrap(orbits_, tdi_config_)
-    {
-        amp_spline = amp_spline_;
-        phase_spline = phase_spline_;
-        waveform = new TDSplineTDIWaveform(orbits_->orbits, tdi_config_->tdi_config, amp_spline_->spline, phase_spline_->spline);
-    };
-    ~TDSplineTDIWaveformWrap(){
-        delete waveform;
-    };
-
-    void run_wave_tdi_wrap(
-        array_type<std::complex<double>>tdi_channels_arr, 
-        array_type<double>tdi_amp, array_type<double>tdi_phase, array_type<double>phi_ref, 
-        array_type<double>params, array_type<double>t_arr, int N, int num_bin, int n_params, int nchannels
-    );
-    
-    int get_buffer_size(int N){return waveform->get_td_spline_buffer_size(N);};
-
-};
+// TDSplineTDIWaveformWrap class moved to LAT at Phase 3L.6 (2026-06-03).
+// Definition + inline run_wave_tdi_wrap body live in
+// lisatools/cutils/binding_lat_spline_tdi.hpp; included above.
 
 
 class GBTDIonTheFlyWrap : public LISATDIonTheFlyWrap {
@@ -133,13 +86,18 @@ class GBTDIonTheFlyWrap : public LISATDIonTheFlyWrap {
     // signal in shared memory, FFTs it, and returns (num_bin, nchannels,
     // N_sparse) complex doubles plus the per-source dense-bin index k_f0 and
     // snapped carrier frequency f0_grid.
+    // tukey_alpha: scipy.signal.windows.tukey alpha applied to the slow
+    // signal before the in-place sparse FFT. Pass 0.05 (matching the dense
+    // rfft path) when chaining into the v2 polyphase signal-het consumer;
+    // 0.0 = rectangular reproduces pre-2026-06-03 behavior.
     void run_fd_wave_tdi_wrap(
         array_type<std::complex<double>> X_het,
         array_type<int>    k_f0_out,
         array_type<double> f0_grid_out,
         array_type<double> params,
         double t_start, double Tobs,
-        int N_sparse, int num_bin, int n_params, int nchannels);
+        int N_sparse, int num_bin, int n_params, int nchannels,
+        double tukey_alpha);
 
     int get_fd_buffer_size(int N_sparse, int nchannels){
         return waveform->get_gb_fd_buffer_size(N_sparse, nchannels);
@@ -461,6 +419,36 @@ class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBas
         double layer_df, double dt,
         int nchannels, int tdi_type,
         int N_sparse_fd);
+
+    // Stage 2b -- in-kernel sparse-FD signal-het. Fuses gb_run_fd_wave_tdi
+    // with polyphase + bin-fold using a transient buffer for X_het (no
+    // per-source FD storage in global memory). Takes a GBTDIonTheFlyWrap*
+    // and unboxes to the underlying GBTDIonTheFly pointer internally.
+    // tukey_alpha: Python pushes the same alpha used on the dense
+    // rfft(Tukey*td) side so the sparse-FD heterodyne windowing matches.
+    void gb_signal_het_get_ll_in_kernel(
+        GBTDIonTheFlyWrap *tdi_wrap,
+        array_type<double> d_h_out, array_type<double> h_h_out,
+        array_type<std::complex<double>> c0_sparse_all,
+        array_type<std::complex<double>> A0_all,
+        array_type<std::complex<double>> A1_all,
+        array_type<std::complex<double>> B0_all,
+        array_type<std::complex<double>> B1_all,
+        array_type<double> wdm_window,
+        array_type<int> n_sparse_local_arr,
+        array_type<double> params_cand_all,
+        array_type<double> params_ref_all,
+        array_type<int> data_index_all,
+        int num_bin, int num_data,
+        int nparams, int f0_idx, int fdot_idx,
+        int Nf, int Nt, int Nf_active, int Nt_active,
+        int Nt_layer, int N_sparse_t, int stride,
+        int ind_min_t, int ind_min_f,
+        int m_active_half_width,
+        double layer_df, double dt,
+        double T_obs, double t_start,
+        int nchannels, int tdi_type,
+        int N_sparse_fd, double tukey_alpha);
 };
 
 
