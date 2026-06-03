@@ -3,6 +3,46 @@
 This file provides guidance to Claude Code (claude.ai/code) when working
 with code in this repository.
 
+## ⚠️ Deprecation notice (Phase 3, 2026-06-02)
+
+`fastlisaresponse` is being deprecated in favor of three target packages.
+**Do not add new code here**; new functionality goes into the target
+package directly. Existing imports still work (deprecation shims +
+DeprecationWarnings telling users where the new home is) for one
+release cycle, after which this package retires entirely.
+
+| Old location (this repo) | New home | Phase | Status |
+|---|---|---|---|
+| `fastlisaresponse.response` (was `pyResponseTDI`, `ResponseWrapper`, `ecliptic_to_icrs`) | `lisatools.response.directresponse` | 3C | Moved, shim re-exports |
+| `fastlisaresponse.tdionfly` (TDIonTheFly Python frontend) | `lisatools.response.tdionfly` | 3C | Moved, shim re-exports |
+| `fastlisaresponse.tdiconfig` (`TDIConfig`) | `lisatools.response.tdiconfig` | 3C | Moved, shim re-exports |
+| `fastlisaresponse.utils.parallelbase` (`FastLISAResponseParallelModule`) | `lisatools.response.parallelbase` | 3C | Moved, shim re-exports |
+| `fastlisaresponse.jax.{base,projection,tdi_config,amp_phase_extract}` | `lisatools.jax.response.*` | 3D | Moved, shim re-exports |
+| `fastlisaresponse.jax.wdm.{wavelet_lookup,wdm_settings,wdm_domain,fast_inner}` | `lisatools.jax.wdm.*` | 3D | Moved, shim re-exports |
+| `cutils/LISAResponse.cu`, `cutils/binding_flr.{cxx,hpp}` | `LISAanalysistools/src/lisatools/cutils/` | 3E | **Deleted from this repo**; CMake references `${LISATOOLS_DIR}` |
+| `responselisa` pybind11 module + `OrbitsWrap_responselisa` / `CubicSplineWrap_responselisa` / `TDIConfigWrap` / `LISAResponseWrap` registrations | LAT's `pycppdetector` module via `response_part(m)` | 3E | **Module retired**; lisa-on-gpu's `cutils/__init__.py` sources these from `lisatools_backend_*.pycppdetector` |
+| `fastlisaresponse.jax.sources.ucb`, `fastlisaresponse.jax.wdm.{kernels,heterodyne_kernels,fast_inner_heterodyne}` | `gbgpu.jax.{sources,wdm}.*` | 3F | Moved, shim re-exports |
+| `fastlisaresponse.jax.sources.sobbh` | `bbhx.jax.sources.sobbh` | 3G | Moved, shim re-exports |
+
+**Still here (deferred to future C++ TDIonTheFly carve-out session):**
+- `cutils/TDIonTheFly.cu` (~11k lines), `cutils/TDIonTheFly.hh`,
+  `cutils/binding_tof.{cxx,hpp}` — contain the LISATDIonTheFly base class
+  (generic), the GB/SOBBH-derived classes, the WDM*Wrap family, and the
+  GBComputationGroupWrap / SOBBHComputationGroupWrap with all their
+  chunked-het kernels.
+- `fastlisaresponse.gbcomps` (GBWDMComputations, GBFDComputations Python
+  frontends).
+- `fastlisaresponse.jax.wdm.computation_group` (GBComputationGroupWrapJAX +
+  SOBBHComputationGroupWrapJAX).
+- `fastlisaresponse.jax.tdi_on_the_fly` (`gb_run_wave_tdi`, `sobbh_run_wave_tdi`).
+- `fastlisaresponse.jax.wrappers` (mixed Jax wrappers).
+
+When the carve-out lands, generic chunks go to LAT; GB chunks to GBGPU;
+SOBBH chunks to BBHx. The Phase 3J `LISATOOLS_IS_WRAPPER_OWNER`
+static_assert in `binding_tof.cxx` + the sprint-root grep gate
+(`tools/check_single_registrant.sh`) catch any accidental duplicate
+registration at compile time during that work.
+
 ## Backend implementation hierarchy (sprint-wide rule)
 
 When implementing or modifying an algorithm that exists across multiple
