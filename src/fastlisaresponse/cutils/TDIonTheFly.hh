@@ -785,6 +785,78 @@ class GBComputationGroup{
         double  T_obs, double t_start,
         int     nchannels, int tdi_type,
         int     N_sparse_fd, double tukey_alpha);
+
+    // Signal-het fill_global. Same FD + polyphase + r_sparse machinery as
+    // get_ll, but reconstructs the dense template via the heterodyne
+    // identity (linear-interp r_demod -> re-rotate carrier -> multiply by
+    // stored c0_dense_complex on the full active band -> take real part)
+    // and scatters into template_fill at the (m_global, n_global) WDM
+    // positions of each active layer. Caller pre-zeroes / accumulates.
+    void gb_signal_het_fill_global_sparse_wrap(
+        double *template_fill,
+        cmplx  *X_het_all, int *k_f0_all,
+        cmplx  *c0_sparse_all,
+        cmplx  *c0_dense_complex_all,
+        double *wdm_window, int *n_sparse_local_arr,
+        double *params_cand_all, double *params_ref_all,
+        double *factors_all,
+        int    *data_index_all,
+        int     num_bin, int num_data,
+        int     nparams, int f0_idx, int fdot_idx,
+        int     Nf, int Nt, int Nf_active, int Nt_active,
+        int     Nt_layer, int N_sparse_t, int stride,
+        int     ind_min_t, int ind_min_f,
+        int     m_active_half_width,
+        double  layer_df, double dt,
+        int     nchannels,
+        int     N_sparse_fd);
+
+    void gb_signal_het_fill_global_in_kernel_wrap(
+        GBTDIonTheFly *tdi_on_fly,
+        double *template_fill,
+        cmplx  *c0_sparse_all,
+        cmplx  *c0_dense_complex_all,
+        double *wdm_window, int *n_sparse_local_arr,
+        double *params_cand_all, double *params_ref_all,
+        double *factors_all,
+        int    *data_index_all,
+        int     num_bin, int num_data,
+        int     nparams, int f0_idx, int fdot_idx,
+        int     Nf, int Nt, int Nf_active, int Nt_active,
+        int     Nt_layer, int N_sparse_t, int stride,
+        int     ind_min_t, int ind_min_f,
+        int     m_active_half_width,
+        double  layer_df, double dt,
+        double  T_obs, double t_start,
+        int     nchannels,
+        int     N_sparse_fd, double tukey_alpha);
+
+    // Signal-het central-difference gradient of logL = d_h - 0.5*h_h over
+    // candidate params. param_eps[k] is the per-parameter finite-difference
+    // step; eps_k <= 0 freezes dimension k. Also reports the central
+    // d_h_central/h_h_central so callers get logL alongside the gradient
+    // in a single pass.
+    void gb_signal_het_get_ll_grad_in_kernel_wrap(
+        GBTDIonTheFly *tdi_on_fly,
+        double *grad_out,
+        double *d_h_central, double *h_h_central,
+        cmplx  *c0_sparse_all,
+        cmplx  *A0_all, cmplx *A1_all,
+        cmplx  *B0_all, cmplx *B1_all,
+        double *wdm_window, int *n_sparse_local_arr,
+        double *params_cand_all, double *params_ref_all,
+        int    *data_index_all,
+        double *param_eps,
+        int     num_bin, int num_data,
+        int     nparams, int f0_idx, int fdot_idx,
+        int     Nf, int Nt, int Nf_active, int Nt_active,
+        int     Nt_layer, int N_sparse_t, int stride,
+        int     ind_min_t, int ind_min_f,
+        int     m_active_half_width,
+        double  layer_df, double dt,
+        double  T_obs, double t_start,
+        int     nchannels, int tdi_type,
+        int     N_sparse_fd, double tukey_alpha);
 };
 
 

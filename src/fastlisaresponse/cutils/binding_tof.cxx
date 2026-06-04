@@ -824,6 +824,143 @@ void GBComputationGroupWrap::gb_signal_het_get_ll_in_kernel(
 }
 
 
+// Signal-het fill_global pybind shim. template_fill is (num_data, nch, Nf,
+// Nt) and is accumulated into; c0_dense_complex_all is the FULL active-band
+// reference WDM complex coefficients (num_data, nch, Nf_active, Nt_active).
+void GBComputationGroupWrap::gb_signal_het_fill_global_in_kernel(
+    GBTDIonTheFlyWrap *tdi_wrap,
+    array_type<double> template_fill,
+    array_type<std::complex<double>> c0_sparse_all,
+    array_type<std::complex<double>> c0_dense_complex_all,
+    array_type<double> wdm_window,
+    array_type<int> n_sparse_local_arr,
+    array_type<double> params_cand_all,
+    array_type<double> params_ref_all,
+    array_type<double> factors_all,
+    array_type<int> data_index_all,
+    int num_bin, int num_data,
+    int nparams, int f0_idx, int fdot_idx,
+    int Nf, int Nt, int Nf_active, int Nt_active,
+    int Nt_layer, int N_sparse_t, int stride,
+    int ind_min_t, int ind_min_f,
+    int m_active_half_width,
+    double layer_df, double dt,
+    double T_obs, double t_start,
+    int nchannels,
+    int N_sparse_fd, double tukey_alpha)
+{
+    (void) Nt_layer;
+    gb_signal_het_fill_global_in_kernel_wrap(
+        tdi_wrap->waveform,
+        return_pointer_and_check_length(template_fill, "template_fill",
+            (size_t) num_data * nchannels * Nf * Nt, 1),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            c0_sparse_all, "c0_sparse_all",
+            (size_t) num_data * nchannels * Nf_active * N_sparse_t, 1)),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            c0_dense_complex_all, "c0_dense_complex_all",
+            (size_t) num_data * nchannels * Nf_active * Nt_active, 1)),
+        return_pointer_and_check_length(wdm_window, "wdm_window", Nt, 1),
+        return_pointer_and_check_length(n_sparse_local_arr, "n_sparse_local",
+                                         N_sparse_t, 1),
+        return_pointer_and_check_length(params_cand_all, "params_cand_all",
+                                         nparams, num_bin),
+        return_pointer_and_check_length(params_ref_all, "params_ref_all",
+                                         nparams, num_data),
+        return_pointer_and_check_length(factors_all, "factors_all",
+                                         num_bin, 1),
+        return_pointer_and_check_length(data_index_all, "data_index_all",
+                                         num_bin, 1),
+        num_bin, num_data,
+        nparams, f0_idx, fdot_idx,
+        Nf, Nt, Nf_active, Nt_active,
+        Nt_layer, N_sparse_t, stride,
+        ind_min_t, ind_min_f,
+        m_active_half_width,
+        layer_df, dt,
+        T_obs, t_start,
+        nchannels,
+        N_sparse_fd, tukey_alpha);
+}
+
+
+// Signal-het central-difference gradient pybind shim. grad_out has shape
+// (num_bin, nparams); d_h_central / h_h_central are (num_bin,) and report
+// the central evaluation. param_eps controls per-parameter step size with
+// 0 freezing the dimension.
+void GBComputationGroupWrap::gb_signal_het_get_ll_grad_in_kernel(
+    GBTDIonTheFlyWrap *tdi_wrap,
+    array_type<double> grad_out,
+    array_type<double> d_h_central, array_type<double> h_h_central,
+    array_type<std::complex<double>> c0_sparse_all,
+    array_type<std::complex<double>> A0_all,
+    array_type<std::complex<double>> A1_all,
+    array_type<std::complex<double>> B0_all,
+    array_type<std::complex<double>> B1_all,
+    array_type<double> wdm_window,
+    array_type<int> n_sparse_local_arr,
+    array_type<double> params_cand_all,
+    array_type<double> params_ref_all,
+    array_type<int> data_index_all,
+    array_type<double> param_eps,
+    int num_bin, int num_data,
+    int nparams, int f0_idx, int fdot_idx,
+    int Nf, int Nt, int Nf_active, int Nt_active,
+    int Nt_layer, int N_sparse_t, int stride,
+    int ind_min_t, int ind_min_f,
+    int m_active_half_width,
+    double layer_df, double dt,
+    double T_obs, double t_start,
+    int nchannels, int tdi_type,
+    int N_sparse_fd, double tukey_alpha)
+{
+    (void) Nt_layer;
+    const size_t b_xyz  = (size_t) num_data * nchannels * nchannels
+                        * Nf_active * N_sparse_t;
+    const size_t b_diag = (size_t) num_data * nchannels * Nf_active * N_sparse_t;
+
+    gb_signal_het_get_ll_grad_in_kernel_wrap(
+        tdi_wrap->waveform,
+        return_pointer_and_check_length(grad_out, "grad_out",
+                                         nparams, num_bin),
+        return_pointer_and_check_length(d_h_central, "d_h_central", num_bin, 1),
+        return_pointer_and_check_length(h_h_central, "h_h_central", num_bin, 1),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            c0_sparse_all, "c0_sparse_all",
+            (size_t) num_data * nchannels * Nf_active * N_sparse_t, 1)),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            A0_all, "A0_all",
+            (size_t) num_data * nchannels * Nf_active * N_sparse_t, 1)),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            A1_all, "A1_all",
+            (size_t) num_data * nchannels * Nf_active * N_sparse_t, 1)),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            B0_all, "B0_all", (tdi_type == 0) ? b_xyz : b_diag, 1)),
+        reinterpret_cast<cmplx*>(return_pointer_and_check_length(
+            B1_all, "B1_all", (tdi_type == 0) ? b_xyz : b_diag, 1)),
+        return_pointer_and_check_length(wdm_window, "wdm_window", Nt, 1),
+        return_pointer_and_check_length(n_sparse_local_arr, "n_sparse_local",
+                                         N_sparse_t, 1),
+        return_pointer_and_check_length(params_cand_all, "params_cand_all",
+                                         nparams, num_bin),
+        return_pointer_and_check_length(params_ref_all, "params_ref_all",
+                                         nparams, num_data),
+        return_pointer_and_check_length(data_index_all, "data_index_all",
+                                         num_bin, 1),
+        return_pointer_and_check_length(param_eps, "param_eps", nparams, 1),
+        num_bin, num_data,
+        nparams, f0_idx, fdot_idx,
+        Nf, Nt, Nf_active, Nt_active,
+        Nt_layer, N_sparse_t, stride,
+        ind_min_t, ind_min_f,
+        m_active_half_width,
+        layer_df, dt,
+        T_obs, t_start,
+        nchannels, tdi_type,
+        N_sparse_fd, tukey_alpha);
+}
+
+
 // ---- SOBBH-flavored pybind shims -------------------------------------------
 void SOBBHComputationGroupWrap::sobbh_wdm_het_fill_global(
     array_type<double> template_fill,
@@ -1216,28 +1353,29 @@ void tdionthefly_part(py::module &m) {
          "gb_run_fd_wave_tdi (sparse heterodyned rfft from the GB source "
          "class) with the polyphase + bin-fold pipeline. Takes a "
          "GBTDIonTheFlyWrap; X_het is held in a transient per-call buffer. "
-         "tukey_alpha must match the alpha used to window the dense "
-         "rfft(Tukey*td) on the analysis side.",
-         py::arg("tdi_wrap"),
-         py::arg("d_h_out"), py::arg("h_h_out"),
-         py::arg("c0_sparse_all"),
-         py::arg("A0_all"), py::arg("A1_all"),
-         py::arg("B0_all"), py::arg("B1_all"),
-         py::arg("wdm_window"), py::arg("n_sparse_local_arr"),
-         py::arg("params_cand_all"), py::arg("params_ref_all"),
-         py::arg("data_index_all"),
-         py::arg("num_bin"), py::arg("num_data"),
-         py::arg("nparams"), py::arg("f0_idx"), py::arg("fdot_idx"),
-         py::arg("Nf"), py::arg("Nt"),
-         py::arg("Nf_active"), py::arg("Nt_active"),
-         py::arg("Nt_layer"), py::arg("N_sparse_t"), py::arg("stride"),
-         py::arg("ind_min_t"), py::arg("ind_min_f"),
-         py::arg("m_active_half_width"),
-         py::arg("layer_df"), py::arg("dt"),
-         py::arg("T_obs"), py::arg("t_start"),
-         py::arg("nchannels"), py::arg("tdi_type"),
-         py::arg("N_sparse_fd"),
-         py::arg("tukey_alpha") = 0.05)
+         "tukey_alpha must be supplied by the caller and match the alpha "
+         "used to window the dense rfft(Tukey*td) on the analysis side -- "
+         "NO default is provided so the C++ and Python sides cannot fall "
+         "out of sync.")
+    .def("gb_signal_het_fill_global_in_kernel",
+         &GBComputationGroupWrap::gb_signal_het_fill_global_in_kernel,
+         "Signal-het fill_global. Same FD + polyphase + r_sparse path as "
+         "get_ll_in_kernel, but reconstructs the dense candidate template "
+         "via r_dense = interp(r_sparse * e^{-i phi_pred}) * e^{+i phi_pred}, "
+         "multiplies by stored c0_dense_complex on the active band, takes "
+         "the real part, and scatters factor * Re(c1_dense) into "
+         "template_fill at the absolute (m, n_global) WDM positions. "
+         "Caller pre-zeroes / accumulates into template_fill. tukey_alpha "
+         "must be supplied by the caller (no default).")
+    .def("gb_signal_het_get_ll_grad_in_kernel",
+         &GBComputationGroupWrap::gb_signal_het_get_ll_grad_in_kernel,
+         "Signal-het central-difference gradient of logL = d_h - 0.5*h_h. "
+         "param_eps[k] is the per-parameter finite-difference step; "
+         "eps_k <= 0 freezes dimension k. Returns grad[num_bin, nparams] "
+         "alongside d_h_central / h_h_central for the unperturbed point "
+         "so callers get logL + grad in one pass. Per binary cost is "
+         "1 central + 2*nparams perturbed get_ll_in_kernel calls; reuses "
+         "the supplied A0/A1/B0/B1 bin-fold tables for all calls.")
     ;
 
     #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)

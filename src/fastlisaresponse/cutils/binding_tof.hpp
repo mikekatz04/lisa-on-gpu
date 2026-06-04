@@ -449,6 +449,68 @@ class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBas
         double T_obs, double t_start,
         int nchannels, int tdi_type,
         int N_sparse_fd, double tukey_alpha);
+
+    // Signal-het fill_global. Reuses Stage 2b's FD + polyphase machinery to
+    // build r at sparse n, then linear-interpolates r to the dense WDM
+    // time grid, re-rotates the carrier, multiplies by the stored full
+    // c0_dense_complex on the active band, takes Re, and scatters into the
+    // (num_data, nchannels, Nf, Nt) template_fill buffer. factors_all
+    // scales each binary's contribution; data_index_all routes each binary
+    // to a template slab. tukey_alpha is required, no default -- pass the
+    // value used to window the dense rfft on the analysis side.
+    void gb_signal_het_fill_global_in_kernel(
+        GBTDIonTheFlyWrap *tdi_wrap,
+        array_type<double> template_fill,
+        array_type<std::complex<double>> c0_sparse_all,
+        array_type<std::complex<double>> c0_dense_complex_all,
+        array_type<double> wdm_window,
+        array_type<int> n_sparse_local_arr,
+        array_type<double> params_cand_all,
+        array_type<double> params_ref_all,
+        array_type<double> factors_all,
+        array_type<int> data_index_all,
+        int num_bin, int num_data,
+        int nparams, int f0_idx, int fdot_idx,
+        int Nf, int Nt, int Nf_active, int Nt_active,
+        int Nt_layer, int N_sparse_t, int stride,
+        int ind_min_t, int ind_min_f,
+        int m_active_half_width,
+        double layer_df, double dt,
+        double T_obs, double t_start,
+        int nchannels,
+        int N_sparse_fd, double tukey_alpha);
+
+    // Signal-het central-difference gradient of logL = d_h - 0.5*h_h. Per
+    // binary, performs 1 central + 2*nparams perturbed get_ll_in_kernel
+    // evaluations. grad_out is (num_bin, nparams); d_h_central /
+    // h_h_central are (num_bin,) and report the central evaluation so the
+    // caller gets logL alongside the gradient in one pass. param_eps[k] <=
+    // 0 freezes dimension k.
+    void gb_signal_het_get_ll_grad_in_kernel(
+        GBTDIonTheFlyWrap *tdi_wrap,
+        array_type<double> grad_out,
+        array_type<double> d_h_central, array_type<double> h_h_central,
+        array_type<std::complex<double>> c0_sparse_all,
+        array_type<std::complex<double>> A0_all,
+        array_type<std::complex<double>> A1_all,
+        array_type<std::complex<double>> B0_all,
+        array_type<std::complex<double>> B1_all,
+        array_type<double> wdm_window,
+        array_type<int> n_sparse_local_arr,
+        array_type<double> params_cand_all,
+        array_type<double> params_ref_all,
+        array_type<int> data_index_all,
+        array_type<double> param_eps,
+        int num_bin, int num_data,
+        int nparams, int f0_idx, int fdot_idx,
+        int Nf, int Nt, int Nf_active, int Nt_active,
+        int Nt_layer, int N_sparse_t, int stride,
+        int ind_min_t, int ind_min_f,
+        int m_active_half_width,
+        double layer_df, double dt,
+        double T_obs, double t_start,
+        int nchannels, int tdi_type,
+        int N_sparse_fd, double tukey_alpha);
 };
 
 

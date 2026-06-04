@@ -11870,3 +11870,445 @@ void GBComputationGroup::gb_signal_het_get_ll_in_kernel_wrap(
         nchannels, tdi_type,
         N_sparse_fd);
 }
+
+
+// ============================================================================
+// Signal-heterodyne (v2 polyphase) -- fill_global path.
+// ============================================================================
+//
+// Same FD generation + polyphase + r_sparse machinery as
+// gb_signal_het_get_ll_sparse_wrap, but instead of bin-folding r against
+// precomputed A0/A1/B0/B1 to produce <d|h>/<h|h>, we reconstruct the dense
+// candidate WDM template via the heterodyne identity:
+//
+//   1. r_sparse(c, m_active, n_sparse) = c1_sparse / c0_sparse
+//   2. r_demod_sparse = r_sparse * exp(-i * phase_pred(n_sparse))
+//      where phase_pred(t) = 2pi Df0 t + pi Dfdot t^2 from
+//      params_cand - params_ref (the KNOWN analytic carrier).
+//   3. Linear interpolate r_demod onto dense n.
+//   4. r_dense = r_demod_dense * exp(+i * phase_pred(n_dense))  -- re-rotated.
+//   5. c1_dense = r_dense * c0_dense_complex  (full active band).
+//   6. template_fill[data_idx, c, m_global, n_global] += factor * Re(c1_dense)
+//
+// c0_dense_complex_all is shape (num_data, nch, Nf_active, Nt_active);
+// template_fill is shape (num_data, nch, Nf, Nt) and is accumulated into
+// (caller pre-zeroes / atomic-adds to support multiple binaries colliding
+// at the same WDM pixel).
+// ============================================================================
+
+void GBComputationGroup::gb_signal_het_fill_global_sparse_wrap(
+    double *template_fill,
+    cmplx  *X_het_all, int *k_f0_all,
+    cmplx  *c0_sparse_all,
+    cmplx  *c0_dense_complex_all,
+    double *wdm_window, int *n_sparse_local_arr,
+    double *params_cand_all, double *params_ref_all,
+    double *factors_all,
+    int    *data_index_all,
+    int     num_bin, int num_data,
+    int     nparams, int f0_idx, int fdot_idx,
+    int     Nf, int Nt, int Nf_active, int Nt_active,
+    int     Nt_layer, int N_sparse_t, int stride,
+    int     ind_min_t, int ind_min_f,
+    int     m_active_half_width,
+    double  layer_df, double dt,
+    int     nchannels,
+    int     N_sparse_fd)
+{
+    (void) num_data;
+
+#ifdef __CUDACC__
+    std::fprintf(stderr, "[gb_signal_het_fill_global_sparse_wrap] GPU branch "
+                         "TODO -- use CPU backend (force_backend=\"cpu\")\n");
+    return;
+#endif
+
+    const int M = 2 * m_active_half_width + 1;
+    const int Nf_active_idx_max = Nf_active - 1;
+    const double FLOOR_EPS = 1e-12;
+    const double TWO_PI = 2.0 * M_PI;
+    const cmplx I_c = cmplx(0.0, 1.0);
+    const int   half_Nt = Nt / 2;
+    const int   half_NS = N_sparse_fd / 2;
+    const double kappa = 2.0 * std::sqrt(M_PI * dt) / (double) Nf;
+    const int   n_start = ind_min_t + n_sparse_local_arr[0];
+    const double layer_dt = (double) Nf * dt;
+
+    std::vector<cmplx> fold((size_t) nchannels * M * Nt_layer);
+    std::vector<cmplx> c1_sparse((size_t) nchannels * M * N_sparse_t);
+    std::vector<cmplx> r_sparse((size_t)  nchannels * M * N_sparse_t);
+
+    for (int bin = 0; bin < num_bin; ++bin) {
+        const double f0_cand   = params_cand_all[(size_t) bin * nparams + f0_idx];
+        const double fdot_cand = params_cand_all[(size_t) bin * nparams + fdot_idx];
+        const int    m_floor   = (int) std::floor(f0_cand / layer_df);
+        int m_active[16];
+        for (int im = 0; im < M; ++im) {
+            int m_g = m_floor + (im - m_active_half_width);
+            if (m_g < ind_min_f) m_g = ind_min_f;
+            if (m_g > ind_min_f + Nf_active_idx_max) m_g = ind_min_f + Nf_active_idx_max;
+            m_active[im] = m_g;
+        }
+        const int    data_idx = data_index_all[bin];
+        const int    k_f0     = k_f0_all[bin];
+        const double factor   = factors_all[bin];
+
+        const double f0_ref   = params_ref_all[(size_t) data_idx * nparams + f0_idx];
+        const double fdot_ref = params_ref_all[(size_t) data_idx * nparams + fdot_idx];
+        const double Df0      = f0_cand   - f0_ref;
+        const double Dfdot    = fdot_cand - fdot_ref;
+
+        // ---- Polyphase fold + iFFT + c1_sparse (identical to Stage 2a) ----
+        std::fill(fold.begin(), fold.end(), cmplx(0.0, 0.0));
+        for (int c = 0; c < nchannels; ++c) {
+            const cmplx *X_chan = X_het_all + (size_t) bin * nchannels * N_sparse_fd
+                                            + (size_t) c * N_sparse_fd;
+            for (int i = 0; i < N_sparse_fd; ++i) {
+                const cmplx Xi = X_chan[i];
+                if (Xi.real() == 0.0 && Xi.imag() == 0.0) continue;
+                const int k_abs = k_f0 + (i - half_NS);
+                for (int im = 0; im < M; ++im) {
+                    const int j = k_abs - m_active[im] * half_Nt + half_Nt;
+                    if (j < 0 || j >= Nt) continue;
+                    const int j_off = j - half_Nt;
+                    const double phase_arg = TWO_PI * (double) j_off
+                                             * (double) n_start / (double) Nt;
+                    const cmplx prephase = gcmplx::exp(I_c * phase_arg);
+                    const cmplx weighted = Xi * wdm_window[j] * prephase;
+                    const int r = j % Nt_layer;
+                    fold[(size_t) c * M * Nt_layer
+                       + (size_t) im * Nt_layer + r] += weighted;
+                }
+            }
+        }
+
+        for (int c = 0; c < nchannels; ++c) {
+            for (int im = 0; im < M; ++im) {
+                const cmplx *fold_cm = fold.data()
+                    + (size_t) c * M * Nt_layer + (size_t) im * Nt_layer;
+                for (int n_layer = 0; n_layer < N_sparse_t; ++n_layer) {
+                    cmplx acc(0.0, 0.0);
+                    for (int rr = 0; rr < Nt_layer; ++rr) {
+                        const double pa = TWO_PI * (double) rr
+                                          * (double) n_layer / (double) Nt_layer;
+                        acc += fold_cm[rr] * gcmplx::exp(I_c * pa);
+                    }
+                    acc *= (1.0 / (double) Nt_layer);
+                    const int n_global = n_start + n_layer * stride;
+                    const double sign_scale = ((n_global & 1) ? -1.0 : 1.0)
+                                              / (double) stride;
+                    const cmplx after_ifft_lt = acc * sign_scale;
+                    const int  m_global = m_active[im];
+                    const int  m_plus_n = (m_global + n_global) & 1;
+                    const cmplx conj_cmn = (m_plus_n == 0) ? cmplx(1.0, 0.0)
+                                                           : cmplx(0.0, -1.0);
+                    const int  sign_mn_int = ((m_global + 1) * n_global) & 1;
+                    const double sign_mn = sign_mn_int ? -1.0 : 1.0;
+                    const cmplx coef = kappa * sign_mn * conj_cmn;
+                    c1_sparse[(size_t) c * M * N_sparse_t
+                            + (size_t) im * N_sparse_t + n_layer] = after_ifft_lt * coef;
+                }
+            }
+        }
+
+        // ---- r_sparse = c1_sparse / c0_sparse (with safe-divide floor) ----
+        for (int c = 0; c < nchannels; ++c) {
+            for (int im = 0; im < M; ++im) {
+                const int m_local = m_active[im] - ind_min_f;
+                double max_mag = 0.0;
+                for (int b = 0; b < N_sparse_t; ++b) {
+                    const cmplx c0v = c0_sparse_all[
+                        ((size_t) data_idx * nchannels + c) * Nf_active * N_sparse_t
+                        + (size_t) m_local * N_sparse_t + b];
+                    const double mag = gcmplx::abs(c0v);
+                    if (mag > max_mag) max_mag = mag;
+                }
+                const double floor_th = std::max(FLOOR_EPS * max_mag, 1e-300);
+                for (int b = 0; b < N_sparse_t; ++b) {
+                    const cmplx c0v = c0_sparse_all[
+                        ((size_t) data_idx * nchannels + c) * Nf_active * N_sparse_t
+                        + (size_t) m_local * N_sparse_t + b];
+                    const cmplx c1v = c1_sparse[
+                        (size_t) c * M * N_sparse_t + (size_t) im * N_sparse_t + b];
+                    const size_t r_idx = (size_t) c * M * N_sparse_t
+                                       + (size_t) im * N_sparse_t + b;
+                    if (gcmplx::abs(c0v) > floor_th) r_sparse[r_idx] = c1v / c0v;
+                    else                              r_sparse[r_idx] = cmplx(0.0, 0.0);
+                }
+            }
+        }
+
+        // ---- Carrier de-rotate r_sparse (in place) ----
+        // phase_pred(t_n) = 2*pi*Df0*t_n + pi*Dfdot*t_n^2, t_n at sparse n.
+        for (int b = 0; b < N_sparse_t; ++b) {
+            const int n_sparse_local = n_sparse_local_arr[b];
+            const double t_n = (double)(ind_min_t + n_sparse_local) * layer_dt;
+            const double phase_pred = TWO_PI * Df0 * t_n
+                                    + M_PI * Dfdot * t_n * t_n;
+            const cmplx rot = gcmplx::exp(I_c * (-phase_pred));
+            for (int c = 0; c < nchannels; ++c) {
+                for (int im = 0; im < M; ++im) {
+                    const size_t idx = (size_t) c * M * N_sparse_t
+                                     + (size_t) im * N_sparse_t + b;
+                    r_sparse[idx] = r_sparse[idx] * rot;
+                }
+            }
+        }
+
+        // ---- For each dense n: linear-interp r_demod, re-rotate, multiply
+        //      c0_dense_complex, take real, scatter into template_fill.
+        //      Assumes n_sparse_local[b] = n_sparse_local[0] + b*stride.
+        const int n_sparse_local_0 = n_sparse_local_arr[0];
+        for (int n_dense = 0; n_dense < Nt_active; ++n_dense) {
+            const int    n_off = n_dense - n_sparse_local_0;
+            int    b_lo  = n_off / stride;
+            double frac = (double)(n_off - b_lo * stride) / (double) stride;
+            // Clamp to interpolation domain; extrapolate-as-flat at edges.
+            if (b_lo < 0) { b_lo = 0; frac = 0.0; }
+            if (b_lo >= N_sparse_t - 1) { b_lo = N_sparse_t - 1; frac = 0.0; }
+            const int b_hi = (b_lo + 1 < N_sparse_t) ? (b_lo + 1) : b_lo;
+
+            const double t_n_dense = (double)(ind_min_t + n_dense) * layer_dt;
+            const double phase_dense = TWO_PI * Df0 * t_n_dense
+                                     + M_PI * Dfdot * t_n_dense * t_n_dense;
+            const cmplx rot_back = gcmplx::exp(I_c * phase_dense);
+
+            const int n_global = ind_min_t + n_dense;
+
+            for (int c = 0; c < nchannels; ++c) {
+                for (int im = 0; im < M; ++im) {
+                    const cmplx r_lo = r_sparse[(size_t) c * M * N_sparse_t
+                                             + (size_t) im * N_sparse_t + b_lo];
+                    const cmplx r_hi = r_sparse[(size_t) c * M * N_sparse_t
+                                             + (size_t) im * N_sparse_t + b_hi];
+                    const cmplx r_demod_dense = r_lo * (1.0 - frac) + r_hi * frac;
+                    const cmplx r_dense = r_demod_dense * rot_back;
+
+                    const int m_local = m_active[im] - ind_min_f;
+                    const cmplx c0v = c0_dense_complex_all[
+                        ((size_t) data_idx * nchannels + c) * Nf_active * Nt_active
+                        + (size_t) m_local * Nt_active + n_dense];
+                    const cmplx c1_dense = r_dense * c0v;
+
+                    const int m_global = m_active[im];
+                    const size_t out_idx =
+                        ((size_t) data_idx * nchannels + c) * Nf * Nt
+                        + (size_t) m_global * Nt + n_global;
+                    template_fill[out_idx] += factor * c1_dense.real();
+                }
+            }
+        }
+    }
+}
+
+
+// In-kernel variant: takes a GBTDIonTheFly* and generates X_het via the
+// existing gb_run_fd_wave_tdi_wrap (Tukey-aware), applies the same
+// fftshift + (1/dt) conversion as Stage 2b's get_ll path, then calls the
+// sparse fill_global. Mirrors gb_signal_het_get_ll_in_kernel_wrap.
+void GBComputationGroup::gb_signal_het_fill_global_in_kernel_wrap(
+    GBTDIonTheFly *tdi_on_fly,
+    double *template_fill,
+    cmplx  *c0_sparse_all,
+    cmplx  *c0_dense_complex_all,
+    double *wdm_window, int *n_sparse_local_arr,
+    double *params_cand_all, double *params_ref_all,
+    double *factors_all,
+    int    *data_index_all,
+    int     num_bin, int num_data,
+    int     nparams, int f0_idx, int fdot_idx,
+    int     Nf, int Nt, int Nf_active, int Nt_active,
+    int     Nt_layer, int N_sparse_t, int stride,
+    int     ind_min_t, int ind_min_f,
+    int     m_active_half_width,
+    double  layer_df, double dt,
+    double  T_obs, double t_start,
+    int     nchannels,
+    int     N_sparse_fd, double tukey_alpha)
+{
+#ifdef __CUDACC__
+    std::fprintf(stderr, "[gb_signal_het_fill_global_in_kernel_wrap] GPU branch "
+                         "TODO -- use CPU backend (force_backend=\"cpu\")\n");
+    return;
+#endif
+
+    std::vector<cmplx>  X_het_raw((size_t) num_bin * nchannels * N_sparse_fd);
+    std::vector<int>    k_f0_buf(num_bin);
+    std::vector<double> f0_grid_buf(num_bin);
+
+    gb_run_fd_wave_tdi_wrap(
+        tdi_on_fly,
+        X_het_raw.data(), k_f0_buf.data(), f0_grid_buf.data(),
+        params_cand_all, t_start, T_obs,
+        N_sparse_fd, num_bin, nparams, nchannels,
+        tukey_alpha);
+
+    // Same convention conversion as Stage 2b get_ll: fftshift + (1/dt).
+    std::vector<cmplx> X_het((size_t) num_bin * nchannels * N_sparse_fd);
+    const int    half_NS = N_sparse_fd / 2;
+    const double dt_inv  = 1.0 / dt;
+    for (int b = 0; b < num_bin; ++b) {
+        for (int c = 0; c < nchannels; ++c) {
+            const size_t base = ((size_t) b * nchannels + c) * N_sparse_fd;
+            for (int i = 0; i < N_sparse_fd; ++i) {
+                const int m_signed = i - half_NS;
+                const int m_fft    = (m_signed >= 0)
+                                         ? m_signed
+                                         : (m_signed + N_sparse_fd);
+                X_het[base + i] = X_het_raw[base + m_fft] * dt_inv;
+            }
+        }
+    }
+
+    this->gb_signal_het_fill_global_sparse_wrap(
+        template_fill,
+        X_het.data(), k_f0_buf.data(),
+        c0_sparse_all,
+        c0_dense_complex_all,
+        wdm_window, n_sparse_local_arr,
+        params_cand_all, params_ref_all, factors_all, data_index_all,
+        num_bin, num_data,
+        nparams, f0_idx, fdot_idx,
+        Nf, Nt, Nf_active, Nt_active,
+        Nt_layer, N_sparse_t, stride,
+        ind_min_t, ind_min_f,
+        m_active_half_width,
+        layer_df, dt,
+        nchannels,
+        N_sparse_fd);
+}
+
+
+// ============================================================================
+// Signal-heterodyne (v2 polyphase) -- get_ll_grad path.
+// ============================================================================
+//
+// Central-difference gradient of logL = d_h - 0.5 * h_h over each candidate
+// param. Mirrors the convention of gb_fd_get_ll_grad_wrap: param_eps is a
+// per-parameter finite-difference step (eps_k <= 0 -> freeze that dim).
+// Per binary, performs (1 central + 2 * nparams perturbed) calls into the
+// Stage 2b get_ll_in_kernel pipeline. Each call regenerates X_het via
+// gb_run_fd_wave_tdi_wrap so the FD reflects the perturbed params; the
+// shared bin-fold A0/A1/B0/B1 are reused across all perturbations.
+// ============================================================================
+
+void GBComputationGroup::gb_signal_het_get_ll_grad_in_kernel_wrap(
+    GBTDIonTheFly *tdi_on_fly,
+    double *grad_out,
+    double *d_h_central, double *h_h_central,
+    cmplx  *c0_sparse_all,
+    cmplx  *A0_all, cmplx *A1_all,
+    cmplx  *B0_all, cmplx *B1_all,
+    double *wdm_window, int *n_sparse_local_arr,
+    double *params_cand_all, double *params_ref_all,
+    int    *data_index_all,
+    double *param_eps,
+    int     num_bin, int num_data,
+    int     nparams, int f0_idx, int fdot_idx,
+    int     Nf, int Nt, int Nf_active, int Nt_active,
+    int     Nt_layer, int N_sparse_t, int stride,
+    int     ind_min_t, int ind_min_f,
+    int     m_active_half_width,
+    double  layer_df, double dt,
+    double  T_obs, double t_start,
+    int     nchannels, int tdi_type,
+    int     N_sparse_fd, double tukey_alpha)
+{
+#ifdef __CUDACC__
+    std::fprintf(stderr, "[gb_signal_het_get_ll_grad_in_kernel_wrap] GPU branch "
+                         "TODO -- use CPU backend (force_backend=\"cpu\")\n");
+    return;
+#endif
+
+    std::vector<double> params_priv((size_t) nparams);
+    double d_h_C = 0.0, h_h_C = 0.0;
+    double d_h_P = 0.0, h_h_P = 0.0;
+    double d_h_M = 0.0, h_h_M = 0.0;
+    int data_idx_local = 0;
+
+    for (int bin = 0; bin < num_bin; ++bin) {
+        data_idx_local = data_index_all[bin];
+
+        // ---- Central evaluation ----
+        for (int i = 0; i < nparams; ++i)
+            params_priv[i] = params_cand_all[(size_t) bin * nparams + i];
+
+        this->gb_signal_het_get_ll_in_kernel_wrap(
+            tdi_on_fly,
+            &d_h_C, &h_h_C,
+            c0_sparse_all,
+            A0_all, A1_all, B0_all, B1_all,
+            wdm_window, n_sparse_local_arr,
+            params_priv.data(), params_ref_all, &data_idx_local,
+            1, num_data,
+            nparams, f0_idx, fdot_idx,
+            Nf, Nt, Nf_active, Nt_active,
+            Nt_layer, N_sparse_t, stride,
+            ind_min_t, ind_min_f,
+            m_active_half_width,
+            layer_df, dt,
+            T_obs, t_start,
+            nchannels, tdi_type,
+            N_sparse_fd, tukey_alpha);
+
+        d_h_central[bin] = d_h_C;
+        h_h_central[bin] = h_h_C;
+        const double ll_C = d_h_C - 0.5 * h_h_C;
+        (void) ll_C;
+
+        for (int k = 0; k < nparams; ++k) {
+            const double eps = param_eps[k];
+            if (eps <= 0.0) {
+                grad_out[(size_t) bin * nparams + k] = 0.0;
+                continue;
+            }
+            const double saved = params_priv[k];
+
+            // +eps
+            params_priv[k] = saved + eps;
+            this->gb_signal_het_get_ll_in_kernel_wrap(
+                tdi_on_fly,
+                &d_h_P, &h_h_P,
+                c0_sparse_all,
+                A0_all, A1_all, B0_all, B1_all,
+                wdm_window, n_sparse_local_arr,
+                params_priv.data(), params_ref_all, &data_idx_local,
+                1, num_data,
+                nparams, f0_idx, fdot_idx,
+                Nf, Nt, Nf_active, Nt_active,
+                Nt_layer, N_sparse_t, stride,
+                ind_min_t, ind_min_f,
+                m_active_half_width,
+                layer_df, dt,
+                T_obs, t_start,
+                nchannels, tdi_type,
+                N_sparse_fd, tukey_alpha);
+
+            // -eps
+            params_priv[k] = saved - eps;
+            this->gb_signal_het_get_ll_in_kernel_wrap(
+                tdi_on_fly,
+                &d_h_M, &h_h_M,
+                c0_sparse_all,
+                A0_all, A1_all, B0_all, B1_all,
+                wdm_window, n_sparse_local_arr,
+                params_priv.data(), params_ref_all, &data_idx_local,
+                1, num_data,
+                nparams, f0_idx, fdot_idx,
+                Nf, Nt, Nf_active, Nt_active,
+                Nt_layer, N_sparse_t, stride,
+                ind_min_t, ind_min_f,
+                m_active_half_width,
+                layer_df, dt,
+                T_obs, t_start,
+                nchannels, tdi_type,
+                N_sparse_fd, tukey_alpha);
+
+            params_priv[k] = saved;
+
+            const double ll_P = d_h_P - 0.5 * h_h_P;
+            const double ll_M = d_h_M - 0.5 * h_h_M;
+            grad_out[(size_t) bin * nparams + k] = (ll_P - ll_M) / (2.0 * eps);
+        }
+    }
+}
