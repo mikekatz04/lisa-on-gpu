@@ -11,6 +11,11 @@ requires = [
   #@FASTLISA_CUDA@,
   "lisaanalysistools>=1.2.8",  #  @ file:///home/mlkatz/LISAanalysistools",  # /Users/mlkatz/Research/LISAanalysistools
   #@LISATOOLS_CUDA@,
+  # Phase 3L.7c (2026-06-04): build-time dep on gbgpu so the
+  # gb_tdi_on_the_fly.hh include (sourced via gbgpu.get_include()
+  # shell-out in cutils/CMakeLists.txt) resolves. Transitional --
+  # once Phase 3L.7 fully completes, lisa-on-gpu retires.
+  "gbgpu>=1.2.4",
 ]
 build-backend = "scikit_build_core.build"
 

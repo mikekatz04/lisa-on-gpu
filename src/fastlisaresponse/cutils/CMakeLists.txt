@@ -55,6 +55,17 @@ execute_process(
   OUTPUT_VARIABLE LISATOOLS_DIR
   OUTPUT_STRIP_TRAILING_WHITESPACE)
 
+# Phase 3L.7c (2026-06-04): pull GBGPU's cutils directory so the
+# GBTDIonTheFly class declaration (sourced from gb_tdi_on_the_fly.hh
+# via `#include` in TDIonTheFly.hh) resolves. Transitional dep --
+# lisa-on-gpu retires once Phase 3L.7/3L.8 finish carving out the
+# GB and SOBBH source classes.
+execute_process(
+  COMMAND "${PYTHON_EXECUTABLE}" -c "import gbgpu; print(gbgpu.get_include())"
+  OUTPUT_VARIABLE GBGPU_CUTILS
+  OUTPUT_STRIP_TRAILING_WHITESPACE)
+message(STATUS "GBGPU location is ${GBGPU_CUTILS}.")
+
 execute_process(
   COMMAND "${PYTHON_EXECUTABLE}" -c "if True:
     import gpubackendtools
@@ -229,7 +240,7 @@ if(FASTLISA_WITH_CPU)
   add_library(fastlisaresponse_cpu_tdionthefly_static STATIC Interpolate.cxx Detector.cxx LISAResponse.cxx lat_tdi_on_the_fly.cxx lat_spline_tdi_waveform.cxx TDIonTheFly.cxx)
   apply_cpu_backend_common_options(tdionthefly fastlisaresponse fastlisaresponse true )
   message(STATUS "GBT_LAPACKE_INCLUDE_DIR: ${GBT_LAPACKE_INCLUDE_DIR}")
-  target_include_directories(fastlisaresponse_cpu_tdionthefly_static PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS} ${GBT_LAPACKE_INCLUDE_DIR})  
+  target_include_directories(fastlisaresponse_cpu_tdionthefly_static PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS} ${GBGPU_CUTILS} ${GBT_LAPACKE_INCLUDE_DIR})  
   # target_link_libraries(fastlisaresponse_cpu_tdionthefly_static PUBLIC ${LISATOOLS_DETECTOR_STATIC_LIB_CPU})
   # target_link_directories(fastlisaresponse_cpu_tdionthefly_static PUBLIC ${LISATOOLS_DETECTOR_CPU_DIR})
   target_sources(fastlisaresponse_cpu_tdionthefly_static PUBLIC FILE_SET HEADERS FILES
@@ -244,7 +255,7 @@ if(FASTLISA_WITH_CPU)
   # Link your target to the imported target name
   target_link_libraries(fastlisaresponse_cpu_tdionthefly PUBLIC fastlisaresponse_cpu_tdionthefly_static)  #  ${LISATOOLS_DETECTOR_STATIC_LIB_CPU})
   # target_link_directories(fastlisaresponse_cpu_tdionthefly PUBLIC ${LISATOOLS_DETECTOR_CPU_DIR})  
-  target_include_directories(fastlisaresponse_cpu_tdionthefly PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS} ${GBT_LAPACKE_INCLUDE_DIR})  
+  target_include_directories(fastlisaresponse_cpu_tdionthefly PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS} ${GBGPU_CUTILS} ${GBT_LAPACKE_INCLUDE_DIR})  
   target_sources(fastlisaresponse_cpu_tdionthefly PUBLIC FILE_SET HEADERS FILES
                                           binding_tof.hpp)
   target_link_libraries(fastlisaresponse_cpu_tdionthefly LINK_PUBLIC ${GBT_LAPACKE_LIBS}
@@ -262,7 +273,7 @@ if(FASTLISA_WITH_GPU)
   # Phase 3L.6: lat_spline_tdi_waveform.cu (FDSpline/TDSpline subclasses) also from LAT.
   add_library(fastlisaresponse_gpu_tdionthefly_gpu_static STATIC ${GBT_DIR}/cutils/Interpolate.cu ${LISATOOLS_DIR}/cutils/Detector.cu ${LISATOOLS_DIR}/cutils/LISAResponse.cu ${LISATOOLS_DIR}/cutils/lat_tdi_on_the_fly.cu ${LISATOOLS_DIR}/cutils/lat_spline_tdi_waveform.cu TDIonTheFly.cu)
   apply_gpu_backend_common_options(tdionthefly_gpu fastlisaresponse fastlisaresponse true )
-  target_include_directories(fastlisaresponse_gpu_tdionthefly_gpu_static PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})
+  target_include_directories(fastlisaresponse_gpu_tdionthefly_gpu_static PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS} ${GBGPU_CUTILS})
   target_sources(fastlisaresponse_gpu_tdionthefly_gpu_static PUBLIC FILE_SET HEADERS FILES
                                         TDIonTheFly.hh)
 
@@ -288,7 +299,7 @@ contain include/cufftdx.hpp -- cufftdx will NOT be enabled.")
 
   # Link your target to the imported target name
   target_link_libraries(fastlisaresponse_gpu_tdionthefly PUBLIC fastlisaresponse_gpu_tdionthefly_gpu_static)  #  ${LISATOOLS_DETECTOR_STATIC_LIB_CPU})
-  target_include_directories(fastlisaresponse_gpu_tdionthefly PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS})
+  target_include_directories(fastlisaresponse_gpu_tdionthefly PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS} ${GBGPU_CUTILS})
   target_sources(fastlisaresponse_gpu_tdionthefly PUBLIC FILE_SET HEADERS FILES
                                           binding_tof.hpp)
 

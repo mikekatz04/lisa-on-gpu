@@ -17,16 +17,28 @@
 #include "wdm_domain.hh"
 #include "lat_tdi_on_the_fly.hh"
 #include "lat_spline_tdi_waveform.hh"
+// Phase 3L.7c (2026-06-04): GBTDIonTheFly class declaration + its
+// aliasing macros + gb_run_wave_tdi_wrap / gb_run_fd_wave_tdi_wrap
+// function decls now live in GBGPU's gb_tdi_on_the_fly.hh. The
+// include path for ${GBGPU_CUTILS} is wired into the four
+// fastlisaresponse_{cpu,gpu}_tdionthefly{,_static} CMake targets so
+// the include below resolves. GBTDIonTheFly method bodies +
+// gb_run_wave_tdi kernel/wrap + gb_run_fd_wave_tdi kernel/wrap +
+// FD helpers (gbfd_*) all STILL live in this repo's TDIonTheFly.cu
+// for now -- subsequent Phase 3L.7 slices move them to GBGPU.
+#include "gb_tdi_on_the_fly.hh"
 
 
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
-#define GBTDIonTheFly GBTDIonTheFlyGPU
+// GBTDIonTheFly aliasing moved to GBGPU's gb_tdi_on_the_fly.hh
+// (Phase 3L.7c, 2026-06-04). Included transitively above.
 #define SOBBHTDIonTheFly SOBBHTDIonTheFlyGPU
 // FDSplineTDIWaveform + TDSplineTDIWaveform aliases moved to LAT at Phase 3L.6.
 // WaveletLookupTable disabled at Phase 3L (2026-06-02) -- lookup-table spline path is being retired.
 #define GBComputationGroup GBComputationGroupGPU
 #else
-#define GBTDIonTheFly GBTDIonTheFlyCPU
+// GBTDIonTheFly aliasing moved to GBGPU's gb_tdi_on_the_fly.hh
+// (Phase 3L.7c, 2026-06-04). Included transitively above.
 #define SOBBHTDIonTheFly SOBBHTDIonTheFlyCPU
 // FDSplineTDIWaveform + TDSplineTDIWaveform aliases moved to LAT at Phase 3L.6.
 // WaveletLookupTable disabled at Phase 3L (2026-06-02) -- lookup-table spline path is being retired.
@@ -196,99 +208,17 @@ class LISATDIonTheFly{
 };
 #endif // === end LISATDIonTheFly stub (moved to LAT) ===
 
-class GBTDIonTheFly : public LISATDIonTheFly{
-    public:
-        double T;
-        double t_ref;
-        int amplitude_index;
-        int f0_index;
-        int fdot0_index;
-        int fddot0_index;
-        int phi0_index;
-
-        CUDA_CALLABLE_MEMBER
-        GBTDIonTheFly(Orbits *orbits_, TDIConfig *tdi_config_, double T_, double t_ref_) : LISATDIonTheFly(orbits_, tdi_config_, 5, 6, 7, 8)
-        {
-            T = T_;
-            t_ref = t_ref_;
-            amplitude_index = 0;
-            f0_index = 1;
-            fdot0_index = 2;
-            fddot0_index = 3;
-            phi0_index = 4;
-        };
-        CUDA_CALLABLE_MEMBER
-        ~GBTDIonTheFly();
-        // CUDA_DEVICE
-        // void get_amp_and_phase(double t_ssb, double *t, double *amp, double *phase, double *params, int N, int bin_i) override;
-        CUDA_DEVICE
-        double ucb_amplitude(double t, double *params);
-        CUDA_DEVICE
-        double ucb_phase(double t, double *params);
-        CUDA_DEVICE
-        double ucb_fdot(double t, double *params);
-        CUDA_DEVICE
-        double ucb_f(double t, double *params);
-        CUDA_CALLABLE_MEMBER
-	int get_gb_buffer_size(int N);
-        // Total bytes of dynamic shared memory needed by the heterodyne FD
-        // kernel: params + tdi_channels_arr (complex, also FFT scratch) +
-        // tdi_amp + tdi_phase + phi_ref + get_tdi scratch.  N here is the
-        // sparse FFT length (must be a power of two).
-        CUDA_CALLABLE_MEMBER
-	int get_gb_fd_buffer_size(int N, int nchannels);
-        // double get_phase_ref(double t, double *params, int bin_i);
-        // CUDA_DEVICE
-        // void run_wave_tdi(
-        //     cmplx *tdi_channels_arr, 
-        //     double *Xamp, double *Xphase, double *Yamp, double *Yphase, double *Zamp, double *Zphase, double *phi_ref, 
-        //     double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels
-        // );
-        CUDA_DEVICE
-        double get_amp(double t, double *params, int bin_i);
-        CUDA_DEVICE
-        double get_phase(double t, double *params, int bin_i);
-        CUDA_DEVICE
-        double get_f(double t, double *params, int bin_i);
-        CUDA_DEVICE
-        double get_fdot(double t, double *params, int bin_i);
-};
-
-void gb_run_wave_tdi_wrap(GBTDIonTheFly *tdi_on_fly, cmplx *tdi_channels_arr,
-    double *tdi_amp, double *tdi_phase, double *phi_ref,
-    double *params, double *t_arr, int N, int num_bin, int n_params, int nchannels);
-
-// Heterodyned frequency-domain GB TDI on the fly.
+// `class GBTDIonTheFly : public LISATDIonTheFly` moved to GBGPU at Phase
+// 3L.7c (2026-06-04). Declaration now lives in
+// `gbgpu/src/gbgpu/cutils/gb_tdi_on_the_fly.hh`, consumed transitively
+// via the `#include "gb_tdi_on_the_fly.hh"` near the top of this file.
 //
-//   For each GB binary, builds the slow positive-frequency complex signal
-//     s_c(tau) = A_c(tau) * exp(+i (phi_c(tau) + phi_ref(tau) - 2*pi*f0_grid*tau))
-//   on a sparse, power-of-two-length time grid tau_n = n * dt_sparse, with
-//   dt_sparse = Tobs / N_sparse and f0_grid = round(f0/df) * df,
-//   df = 1/Tobs.  All three (or `nchannels`) channels live in shared memory
-//   simultaneously so any XYZ-style cross-channel post-processing can happen
-//   before the data hits global memory.  An in-place shared-memory radix-2
-//   FFT then yields
-//     X_het_c[m] = 0.5 * dt_sparse * FFT[s_c][m],
-//   which equals the dense rfft of the real GB time series at dense bin
-//   (k_f0 + m), bins outside +/- N_sparse/2 of f0_grid being zero.
-//
-// X_het output layout: (num_bin, nchannels, N_sparse) complex doubles,
-//                       FFT-order (DC at index 0).
-// k_f0_out: (num_bin,) integer dense rfft bin closest to f0.
-// f0_grid_out: (num_bin,) double snapped carrier frequency [Hz].
-//
-// Requires N_sparse to be a power of two and t_ref == t_start; the caller
-// should pass tau = t_local = absolute_t - t_start in t_arr_sparse (but the
-// kernel just reads f0, Tobs, N_sparse and t_start to rebuild tau).
-// tukey_alpha: scipy.signal.windows.tukey alpha applied to the slow
-// signal before the sparse FFT. 0.0 = rectangular. Pass the same alpha
-// used to window the dense rfft so the dense/sparse FD paths produce
-// matching inner products.
-void gb_run_fd_wave_tdi_wrap(GBTDIonTheFly *tdi_on_fly,
-    cmplx *X_het, int *k_f0_out, double *f0_grid_out,
-    double *params, double t_start, double Tobs,
-    int N_sparse, int num_bin, int n_params, int nchannels,
-    double tukey_alpha);
+// `gb_run_wave_tdi_wrap` + `gb_run_fd_wave_tdi_wrap` function
+// declarations also moved to that header. Method bodies (ucb_*,
+// get_*, dtor, get_gb_buffer_size, get_gb_fd_buffer_size) + kernel
+// launchers (gb_run_wave_tdi_kernel, gb_run_fd_wave_tdi_kernel) +
+// FD helpers (gbfd_*) all STILL live in this repo's TDIonTheFly.cu
+// pending the next Phase 3L.7 slice.
 
 
 // Stellar-origin black-hole binary TDI-on-the-fly. Mirrors GBTDIonTheFly:
