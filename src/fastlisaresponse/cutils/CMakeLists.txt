@@ -221,6 +221,18 @@ if(FASTLISA_WITH_CPU)
     DEPENDS "${LISATOOLS_DIR}/cutils/lat_spline_tdi_waveform.cu"
     VERBATIM)
 
+  # Phase 3L.7d: GBTDIonTheFly method bodies + gb_run_wave_tdi
+  # kernel/wrap moved to GBGPU; copy-compile here so the still-resident
+  # gb_run_fd_wave_tdi + GBComputationGroup code in TDIonTheFly.cu /
+  # binding_tof.cxx can still link against them.
+  add_custom_command(
+    OUTPUT "gb_tdi_on_the_fly.cxx"
+    COMMENT "Copy gb_tdi_on_the_fly.cu (GBGPU) to gb_tdi_on_the_fly.cxx"
+    COMMAND ${CMAKE_COMMAND} -E copy "${GBGPU_CUTILS}/gb_tdi_on_the_fly.cu"
+            "${CMAKE_CURRENT_BINARY_DIR}/gb_tdi_on_the_fly.cxx"
+    DEPENDS "${GBGPU_CUTILS}/gb_tdi_on_the_fly.cu"
+    VERBATIM)
+
     add_custom_command(
     OUTPUT "Detector.cxx"
     COMMENT "Copy Detector.cu to Detector.cxx"
@@ -237,7 +249,7 @@ if(FASTLISA_WITH_CPU)
     DEPENDS "${GBT_DIR}/cutils/Interpolate.cu"
     VERBATIM)
 
-  add_library(fastlisaresponse_cpu_tdionthefly_static STATIC Interpolate.cxx Detector.cxx LISAResponse.cxx lat_tdi_on_the_fly.cxx lat_spline_tdi_waveform.cxx TDIonTheFly.cxx)
+  add_library(fastlisaresponse_cpu_tdionthefly_static STATIC Interpolate.cxx Detector.cxx LISAResponse.cxx lat_tdi_on_the_fly.cxx lat_spline_tdi_waveform.cxx gb_tdi_on_the_fly.cxx TDIonTheFly.cxx)
   apply_cpu_backend_common_options(tdionthefly fastlisaresponse fastlisaresponse true )
   message(STATUS "GBT_LAPACKE_INCLUDE_DIR: ${GBT_LAPACKE_INCLUDE_DIR}")
   target_include_directories(fastlisaresponse_cpu_tdionthefly_static PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS} ${GBGPU_CUTILS} ${GBT_LAPACKE_INCLUDE_DIR})  
@@ -271,7 +283,7 @@ if(FASTLISA_WITH_GPU)
   # Phase 3E: LISAResponse.cu moved to LAT.
   # Phase 3L.5: lat_tdi_on_the_fly.cu (LISATDIonTheFly base class) also from LAT.
   # Phase 3L.6: lat_spline_tdi_waveform.cu (FDSpline/TDSpline subclasses) also from LAT.
-  add_library(fastlisaresponse_gpu_tdionthefly_gpu_static STATIC ${GBT_DIR}/cutils/Interpolate.cu ${LISATOOLS_DIR}/cutils/Detector.cu ${LISATOOLS_DIR}/cutils/LISAResponse.cu ${LISATOOLS_DIR}/cutils/lat_tdi_on_the_fly.cu ${LISATOOLS_DIR}/cutils/lat_spline_tdi_waveform.cu TDIonTheFly.cu)
+  add_library(fastlisaresponse_gpu_tdionthefly_gpu_static STATIC ${GBT_DIR}/cutils/Interpolate.cu ${LISATOOLS_DIR}/cutils/Detector.cu ${LISATOOLS_DIR}/cutils/LISAResponse.cu ${LISATOOLS_DIR}/cutils/lat_tdi_on_the_fly.cu ${LISATOOLS_DIR}/cutils/lat_spline_tdi_waveform.cu ${GBGPU_CUTILS}/gb_tdi_on_the_fly.cu TDIonTheFly.cu)
   apply_gpu_backend_common_options(tdionthefly_gpu fastlisaresponse fastlisaresponse true )
   target_include_directories(fastlisaresponse_gpu_tdionthefly_gpu_static PUBLIC "${LISATOOLS_DIR}/cutils/" ${GBT_CUTILS} ${GBGPU_CUTILS})
   target_sources(fastlisaresponse_gpu_tdionthefly_gpu_static PUBLIC FILE_SET HEADERS FILES
