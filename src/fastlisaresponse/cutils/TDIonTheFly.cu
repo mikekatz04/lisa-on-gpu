@@ -2,12 +2,19 @@
 #include "Detector.hpp"
 #include "LISAResponse.hh"
 #include "Interpolate.hh"
+// LAT-owned chunked-het ABI constants + WDMHet*Bufs shared-memory PODs
+// (Phase 3L.7a slice 1, 2026-06-04). Macros + structs that used to live
+// in this file are now consumed here. FAST_WDM_K_PER_THREAD_MAX is still
+// defined locally below because it references NUM_THREADS_HERE
+// (file-scoped); it moves to LAT in Slice 2 alongside the templated
+// chunked-het kernels.
+#include "lat_chunked_het_kernels.hh"
 #define WDM_SPLINE_HELPERS_IMPLEMENTATION
 #include "WDMSplineHelpers.hh"
 #include <string>
 #include <unistd.h>
 #ifdef __CUDACC__
-#include <cub/cub.cuh> 
+#include <cub/cub.cuh>
 #endif
 
 // TODO: GET RID OF THIS ??!!!
@@ -1424,98 +1431,19 @@ CUDA_DEVICE
 // the heterodyne-band requirement.
 // ----------------------------------------------------------------------------
 
-// Recommended Tukey alphas (see Test G in check_shortened_wdm.py for the
-// sweep that fixes these values).
-#define FAST_WDM_TUKEY_ALPHA_TD          0.02   // TD-based chunked stitch
-#define FAST_WDM_TUKEY_ALPHA_HET_WIDE    0.01   // FD heterodyne, N_sparse >= 512
-#define FAST_WDM_TUKEY_ALPHA_HET_NARROW  0.05   // FD heterodyne, N_sparse  < 512
-#define FAST_WDM_TUKEY_ALPHA_AUTO       -1.0   // sentinel: auto-pick
+// FAST_WDM_TUKEY_ALPHA_* + FAST_WDM_N_SPARSE_MAX + FAST_WDM_NCHANNELS_MAX
+// + FAST_WDM_NT_SUB_MAX + FAST_WDM_N_CP_SIG_MAX + FAST_WDM_HET_GRID_DIM_X_DEFAULT
+// moved to LAT at Phase 3L.7a slice 1 (2026-06-04). They live in
+// `lisatools/cutils/lat_chunked_het_kernels.hh`, already included near
+// the top of this file.
 
-// Shared-memory budget for the chunked heterodyne kernel. The Tukey
-// results (Test G) put us at N_sparse <= 256, which fits in shared
-// memory for nchannels=3: ~40 KB per block (2 KB t_sparse + 6 KB
-// tdi_amp + 6 KB tdi_phase + 2 KB phi_ref + 12 KB tdi_channels + 12 KB
-// slow). Stays well under the 48-100 KB CUDA shared-memory budget.
-//
-// On CPU the CUDA_SHARED macro stubs to nothing (per
-// GPUBackendTools/gbt_global.h), so these arrays land on the
-// stack/heap with no shared-mem budget constraint. That lets the
-// CPU build use a much larger N_sparse for the "1 chunk for the
-// whole obs" experiment (N_sparse must scale with T_chunk so the
-// sparse slow-signal control points still resolve year-scale GB
-// Doppler); the GPU build keeps the original 256 cap to respect
-// the shared-mem budget. JAX is independent.
-#ifdef __CUDACC__
-#define FAST_WDM_N_SPARSE_MAX  512
-#else
-#define FAST_WDM_N_SPARSE_MAX  4096
-#endif
-#define FAST_WDM_NCHANNELS_MAX 3
-
-// Max Nt_sub for the per-chunk WDM iFFT scratch (``layer_scratch``).
-// On GPU this scratch lives in CUDA_SHARED memory. On CPU it becomes a
-// stack array; 4096-cmplx = 65 KB, fine on the default 8 MB stack.
-// GPU max raised to 1024 to support the (Nt_sub=512, N_sparse=128) and
-// (Nt_sub=1024, N_sparse=512) configs. Note: at Nt_sub=1024 only
-// get_ll/fill_global fit; swap_ll/fstat exceed A100's ~99 KB per-block
-// shared-mem cap and require the shared-mem-conserving paths below.
-#ifdef __CUDACC__
-#define FAST_WDM_NT_SUB_MAX  1024
-#else
-#define FAST_WDM_NT_SUB_MAX  4096
-#endif
-
-// Upper bound on the number of thread-strided iterations any per-thread
-// register array sees when sweeping [0, Nt_sub) at blockDim.x =
-// NUM_THREADS_HERE. Compile-time so it can size constexpr arrays.
-//   GPU: ceil(256 / 64) = 4   -> arrays stay in registers
-//   CPU: ceil(4096 / 1) = 4096 (CPU has one virtual thread iterating fully)
-// The previous formula ``FAST_WDM_NT_SUB_MAX / FAST_WDM_NCHANNELS_MAX``
-// produced 85 on GPU which spilled the register arrays to local memory
-// (the divisor should be the thread stride, not channel count).
+// FAST_WDM_K_PER_THREAD_MAX stays here for now: it references
+// `NUM_THREADS_HERE`, the file-scoped chunked-het block-size knob (see
+// the macro definition near the top of this file). It will move to LAT
+// in Slice 2 alongside the templated chunked-het kernel bodies, since
+// those are the only consumers.
 #define FAST_WDM_K_PER_THREAD_MAX \
     ((FAST_WDM_NT_SUB_MAX + NUM_THREADS_HERE - 1) / NUM_THREADS_HERE)
-
-// Source-signal spline cache (within-(chunk, binary) optimization).
-// Selected at RUNTIME per kernel call via the ``N_cp_sig`` parameter:
-//   N_cp_sig <= 0  -> direct path: source->get_tdi at all N_sparse points.
-//   N_cp_sig >  0  -> spline cache: source->get_tdi_heterodyned at N_cp_sig
-//                     points, cubic-spline-interpolate to the N_sparse grid.
-//
-// The spline-cache buffers are statically sized at FAST_WDM_N_CP_SIG_MAX,
-// so they always occupy shared mem (cost: ~25 KB extra per block at max).
-// The direct-path buffers also stay allocated; the kernel just branches
-// on N_cp_sig at the inner heterodyne call. This trades a bit of shared-mem
-// for runtime flexibility (= no rebuild to switch between modes).
-//
-// Per the density study at the half-day-wavelet baseline,
-// N_cp_sig=48 -> mm < 4e-11 (GB) / 4e-9 (SOBBH) vs lisatools.
-// See CHUNKED_HET_DESIGN_NOTES.md.
-//
-// GPU keeps the validated 48-point cap to keep CUDA_SHARED tight. CPU
-// bumps to 2048 so 1-chunk-per-obs configs (where T_chunk grows from
-// ~28 d to ~1 yr) can keep the same ~6-hour control-point spacing
-// the 13-chunk run had. Gated by ``#ifdef __CUDACC__`` -- on CPU,
-// CUDA_SHARED stubs to nothing so the larger cap costs only
-// stack/heap.
-#ifdef __CUDACC__
-#define FAST_WDM_N_CP_SIG_MAX 48
-#else
-#define FAST_WDM_N_CP_SIG_MAX 2048
-#endif
-
-// Default cap on gridDim.x for the chunked-het kernels (binaries axis).
-// Each (x, z) block keeps its own per-(chunk, binary) heap scratch slot
-// (chunk_fd / chunk_wdm / tdi_channels / get_tdi_scratch), so total heap
-// scratch scales as ``gd_x * n_chunks * per_slot_size``. A small default
-// keeps heap bounded; the host can pass ``grid_dim`` explicitly to
-// override. With Nf=4096 / Nt_sub=256 / nch=3 / N_sparse=256 a single
-// per-(chunk, binary) slot is ~24 MB for w_chunk, so the default of 4
-// keeps total at ~1.5 GB for n_chunks=16. TODO: tune by occupancy and
-// (a) move ``w_chunk`` to per-block shared memory if it fits or
-// (b) shrink ``w_chunk`` to per-group active-band width, which would
-//     let us raise this default substantially.
-#define FAST_WDM_HET_GRID_DIM_X_DEFAULT 4
 
 // ---------------------------------------------------------------------------
 // Threading model notes for upcoming gb_wdm_het_* kernels
@@ -1586,7 +1514,8 @@ inline void wdm_fit_cubic_spline(double *x, double *y,
 //   0 = 12, 1 = 23, 2 = 31, 3 = 13, 4 = 32, 5 = 21.
 // ===========================================================================
 
-#define FAST_WDM_N_CP_ORBIT_MAX 48
+// FAST_WDM_N_CP_ORBIT_MAX moved to LAT at Phase 3L.7a slice 1 (2026-06-04);
+// see lisatools/cutils/lat_chunked_het_kernels.hh included near the top.
 
 // OrbitsSplineCache struct is declared in TDIonTheFly.hh so that
 // LISATDIonTheFly's cached member functions can take it as a parameter.
@@ -2451,70 +2380,12 @@ inline void gb_chunk_fd_to_wdm(
 }
 
 
-// ============================================================================
-// Shared-memory layout for the three chunked-het kernels
-// (wdm_het_fill_global_kernel / wdm_het_get_ll_kernel /
-//  wdm_het_swap_ll_kernel).
-//
-// The direct-path and spline-path buffer sets are MUTUALLY EXCLUSIVE per
-// (chunk, binary) invocation -- ``use_spline_cache`` picks exactly one --
-// so they share the same physical shared memory. The amp/phase
-// coefficient stacks inside the spline struct are single-channel (the
-// spline path fits + evaluates one channel at a time inside
-// fast_wdm_inner_heterodyne_spline), reusing a single-channel buffer
-// across the c-loop instead of carrying 3 channels' worth simultaneously.
-//
-// We overlay the two struct types onto a single raw ``__shared__ char``
-// arena and use ``reinterpret_cast`` to view it as the right type per
-// branch -- rather than a C++ ``union`` -- because the cmplx field in
-// WDMHetSplineBufs has a user-defined constructor, which historically
-// makes NVCC mis-handle ``__shared__ union`` of those types. ``__shared__``
-// memory is uninitialised at runtime (no constructors run), so the
-// reinterpret_cast view is well-defined: every kernel branch is the
-// FIRST writer to its own subset of bytes.
-// ============================================================================
-struct WDMHetDirectBufs {
-    double t_sparse_buf  [FAST_WDM_N_SPARSE_MAX];
-    double tdi_amp_buf   [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
-    double tdi_phase_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_SPARSE_MAX];
-    double phi_ref_buf   [FAST_WDM_N_SPARSE_MAX];
-};
-struct WDMHetSplineBufs {
-    double t_cp_buf            [FAST_WDM_N_CP_SIG_MAX];
-    double amp_y_buf           [FAST_WDM_N_CP_SIG_MAX];
-    double amp_c1_buf          [FAST_WDM_N_CP_SIG_MAX];
-    double amp_c2_buf          [FAST_WDM_N_CP_SIG_MAX];
-    double amp_c3_buf          [FAST_WDM_N_CP_SIG_MAX];
-    double phase_y_buf         [FAST_WDM_N_CP_SIG_MAX];
-    double phase_c1_buf        [FAST_WDM_N_CP_SIG_MAX];
-    double phase_c2_buf        [FAST_WDM_N_CP_SIG_MAX];
-    double phase_c3_buf        [FAST_WDM_N_CP_SIG_MAX];
-    double dphi_ref_y_buf      [FAST_WDM_N_CP_SIG_MAX];
-    double dphi_ref_c1_buf     [FAST_WDM_N_CP_SIG_MAX];
-    double dphi_ref_c2_buf     [FAST_WDM_N_CP_SIG_MAX];
-    double dphi_ref_c3_buf     [FAST_WDM_N_CP_SIG_MAX];
-    double B_buf               [FAST_WDM_N_CP_SIG_MAX];
-    double pcr_scratch         [8 * FAST_WDM_N_CP_SIG_MAX];
-    // Un-het phi_ref scratch -- filled by get_tdi_raw[_cached] and read by
-    // per-channel new_extract_amplitude_and_phase (which needs the
-    // un-heterodyned phi_ref to keep its remainder(., 2*pi) unwrap
-    // decisions consistent with the OLD get_tdi convention). dphi_ref_y_buf
-    // holds the carrier-subtracted version that feeds the dphi_ref spline.
-    double phi_ref_un_het_buf  [FAST_WDM_N_CP_SIG_MAX];
-    cmplx  tdi_channels_cp_buf [FAST_WDM_NCHANNELS_MAX * FAST_WDM_N_CP_SIG_MAX];
-    char   extract_scratch_buf [21 * FAST_WDM_N_CP_SIG_MAX + 16];
-};
-
-// Compile-time size + alignment for the arena overlay.
-//
-// Why 16: cmplx is two doubles (16 B) and the strictest alignment of any
-// member across both structs is doubles' 8 -- 16 keeps us safely aligned
-// for cmplx loads/stores and gives nice 128-bit boundaries for the FFT
-// inner loops. CUDA allocates __shared__ to its declared alignment.
-#define WDM_HET_PATH_BYTES \
-    ((sizeof(WDMHetDirectBufs) > sizeof(WDMHetSplineBufs)) \
-     ? sizeof(WDMHetDirectBufs) : sizeof(WDMHetSplineBufs))
-#define WDM_HET_PATH_ALIGN 16
+// WDMHetDirectBufs + WDMHetSplineBufs + WDM_HET_PATH_BYTES /
+// WDM_HET_PATH_ALIGN moved to LAT at Phase 3L.7a slice 1 (2026-06-04);
+// see lisatools/cutils/lat_chunked_het_kernels.hh included near the
+// top of this file. The structs are file-static-only consumers
+// (chunked-het kernels) so no aliasing / pybind11 registration is
+// needed.
 
 
 // ============================================================================
