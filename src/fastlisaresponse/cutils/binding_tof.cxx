@@ -630,7 +630,7 @@ void GBComputationGroupWrap::gb_signal_het_get_ll(
     int m_active_half_width,
     double layer_df, double dt,
     int nchannels, int tdi_type,
-    int n_rfft)
+    int n_rfft, double max_r)
 {
     (void) Nt_layer;
     const size_t b_xyz = (size_t) num_data * nchannels * nchannels
@@ -674,7 +674,7 @@ void GBComputationGroupWrap::gb_signal_het_get_ll(
         m_active_half_width,
         layer_df, dt,
         nchannels, tdi_type,
-        n_rfft);
+        n_rfft, max_r);
 }
 
 
@@ -704,7 +704,7 @@ void GBComputationGroupWrap::gb_signal_het_get_ll_sparse(
     int m_active_half_width,
     double layer_df, double dt,
     int nchannels, int tdi_type,
-    int N_sparse_fd)
+    int N_sparse_fd, double max_r)
 {
     (void) Nt_layer;
     const size_t b_xyz = (size_t) num_data * nchannels * nchannels
@@ -747,7 +747,7 @@ void GBComputationGroupWrap::gb_signal_het_get_ll_sparse(
         m_active_half_width,
         layer_df, dt,
         nchannels, tdi_type,
-        N_sparse_fd);
+        N_sparse_fd, max_r);
 }
 
 
@@ -778,7 +778,7 @@ void GBComputationGroupWrap::gb_signal_het_get_ll_in_kernel(
     double layer_df, double dt,
     double T_obs, double t_start,
     int nchannels, int tdi_type,
-    int N_sparse_fd, double tukey_alpha)
+    int N_sparse_fd, double tukey_alpha, double max_r)
 {
     (void) Nt_layer;
     const size_t b_xyz  = (size_t) num_data * nchannels * nchannels
@@ -820,7 +820,7 @@ void GBComputationGroupWrap::gb_signal_het_get_ll_in_kernel(
         layer_df, dt,
         T_obs, t_start,
         nchannels, tdi_type,
-        N_sparse_fd, tukey_alpha);
+        N_sparse_fd, tukey_alpha, max_r);
 }
 
 
@@ -847,7 +847,7 @@ void GBComputationGroupWrap::gb_signal_het_fill_global_in_kernel(
     double layer_df, double dt,
     double T_obs, double t_start,
     int nchannels,
-    int N_sparse_fd, double tukey_alpha)
+    int N_sparse_fd, double tukey_alpha, double max_r)
 {
     (void) Nt_layer;
     gb_signal_het_fill_global_in_kernel_wrap(
@@ -880,7 +880,7 @@ void GBComputationGroupWrap::gb_signal_het_fill_global_in_kernel(
         layer_df, dt,
         T_obs, t_start,
         nchannels,
-        N_sparse_fd, tukey_alpha);
+        N_sparse_fd, tukey_alpha, max_r);
 }
 
 
@@ -912,7 +912,7 @@ void GBComputationGroupWrap::gb_signal_het_get_ll_grad_in_kernel(
     double layer_df, double dt,
     double T_obs, double t_start,
     int nchannels, int tdi_type,
-    int N_sparse_fd, double tukey_alpha)
+    int N_sparse_fd, double tukey_alpha, double max_r)
 {
     (void) Nt_layer;
     const size_t b_xyz  = (size_t) num_data * nchannels * nchannels
@@ -957,7 +957,7 @@ void GBComputationGroupWrap::gb_signal_het_get_ll_grad_in_kernel(
         layer_df, dt,
         T_obs, t_start,
         nchannels, tdi_type,
-        N_sparse_fd, tukey_alpha);
+        N_sparse_fd, tukey_alpha, max_r);
 }
 
 
@@ -1356,7 +1356,9 @@ void tdionthefly_part(py::module &m) {
          "tukey_alpha must be supplied by the caller and match the alpha "
          "used to window the dense rfft(Tukey*td) on the analysis side -- "
          "NO default is provided so the C++ and Python sides cannot fall "
-         "out of sync.")
+         "out of sync. max_r > 0 caps |r| per channel-cell to prevent "
+         "the positive-logL blowup at angle excursions; max_r <= 0 "
+         "disables the clip (preserves pre-fix behavior).")
     .def("gb_signal_het_fill_global_in_kernel",
          &GBComputationGroupWrap::gb_signal_het_fill_global_in_kernel,
          "Signal-het fill_global. Same FD + polyphase + r_sparse path as "

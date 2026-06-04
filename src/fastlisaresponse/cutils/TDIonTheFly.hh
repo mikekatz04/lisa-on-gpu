@@ -717,7 +717,7 @@ class GBComputationGroup{
         int     m_active_half_width,
         double  layer_df, double dt,
         int     nchannels, int tdi_type,
-        int     n_rfft);
+        int     n_rfft, double max_r);
 
     // Stage 2a: signal_het_get_ll consuming the SPARSE carrier-removed FD
     // (the output of GBTDIonTheFly::run_fd_wave_tdi -- length N_sparse_fd per
@@ -754,7 +754,7 @@ class GBComputationGroup{
         int     m_active_half_width,
         double  layer_df, double dt,
         int     nchannels, int tdi_type,
-        int     N_sparse_fd);
+        int     N_sparse_fd, double max_r);
 
     // Stage 2b -- in-kernel sparse-FD signal-het. Fuses the existing
     // ``gb_run_fd_wave_tdi`` (sparse heterodyned rfft) with the polyphase +
@@ -784,7 +784,7 @@ class GBComputationGroup{
         double  layer_df, double dt,
         double  T_obs, double t_start,
         int     nchannels, int tdi_type,
-        int     N_sparse_fd, double tukey_alpha);
+        int     N_sparse_fd, double tukey_alpha, double max_r);
 
     // Signal-het fill_global. Same FD + polyphase + r_sparse machinery as
     // get_ll, but reconstructs the dense template via the heterodyne
@@ -809,7 +809,7 @@ class GBComputationGroup{
         int     m_active_half_width,
         double  layer_df, double dt,
         int     nchannels,
-        int     N_sparse_fd);
+        int     N_sparse_fd, double max_r);
 
     void gb_signal_het_fill_global_in_kernel_wrap(
         GBTDIonTheFly *tdi_on_fly,
@@ -829,7 +829,7 @@ class GBComputationGroup{
         double  layer_df, double dt,
         double  T_obs, double t_start,
         int     nchannels,
-        int     N_sparse_fd, double tukey_alpha);
+        int     N_sparse_fd, double tukey_alpha, double max_r);
 
     // Signal-het central-difference gradient of logL = d_h - 0.5*h_h over
     // candidate params. param_eps[k] is the per-parameter finite-difference
@@ -856,7 +856,7 @@ class GBComputationGroup{
         double  layer_df, double dt,
         double  T_obs, double t_start,
         int     nchannels, int tdi_type,
-        int     N_sparse_fd, double tukey_alpha);
+        int     N_sparse_fd, double tukey_alpha, double max_r);
 };
 
 

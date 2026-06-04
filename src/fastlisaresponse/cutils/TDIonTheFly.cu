@@ -11366,7 +11366,7 @@ void GBComputationGroup::gb_signal_het_get_ll_wrap(
     int     m_active_half_width,
     double  layer_df, double dt,
     int     nchannels, int tdi_type,
-    int     n_rfft)
+    int     n_rfft, double max_r)
 {
     (void) params_ref_all;  // not used in bin-fold path (kept for future de-rotation)
     (void) fdot_idx;
@@ -11436,7 +11436,17 @@ void GBComputationGroup::gb_signal_het_get_ll_wrap(
                     const size_t r_idx = (size_t) c * M * N_sparse_t
                                        + (size_t) im * N_sparse_t + b;
                     if (gcmplx::abs(c0v) > floor_th) {
-                        r_sparse[r_idx] = c1v / c0v;
+                        cmplx r_val = c1v / c0v;
+                        // Amp/phase clip: cap |r| at max_r (channel-cell
+                        // direction preserved). Bounds the bin-fold sum
+                        // when c0 is small but nonzero. max_r <= 0 disables.
+                        if (max_r > 0.0) {
+                            const double abs_r = gcmplx::abs(r_val);
+                            if (abs_r > max_r) {
+                                r_val = r_val * (max_r / abs_r);
+                            }
+                        }
+                        r_sparse[r_idx] = r_val;
                     } else {
                         r_sparse[r_idx] = cmplx(0.0, 0.0);
                     }
@@ -11579,7 +11589,7 @@ void GBComputationGroup::gb_signal_het_get_ll_sparse_wrap(
     int     m_active_half_width,
     double  layer_df, double dt,
     int     nchannels, int tdi_type,
-    int     N_sparse_fd)
+    int     N_sparse_fd, double max_r)
 {
     (void) params_ref_all; (void) fdot_idx; (void) num_data; (void) Nt_active;
 
@@ -11692,8 +11702,17 @@ void GBComputationGroup::gb_signal_het_get_ll_sparse_wrap(
                         (size_t) c * M * N_sparse_t + (size_t) im * N_sparse_t + b];
                     const size_t r_idx = (size_t) c * M * N_sparse_t
                                        + (size_t) im * N_sparse_t + b;
-                    if (gcmplx::abs(c0v) > floor_th) r_sparse[r_idx] = c1v / c0v;
-                    else                              r_sparse[r_idx] = cmplx(0.0, 0.0);
+                    if (gcmplx::abs(c0v) > floor_th) {
+                        cmplx r_val = c1v / c0v;
+                        // Amp/phase clip: cap |r| at max_r (preserve dir).
+                        if (max_r > 0.0) {
+                            const double abs_r = gcmplx::abs(r_val);
+                            if (abs_r > max_r) r_val = r_val * (max_r / abs_r);
+                        }
+                        r_sparse[r_idx] = r_val;
+                    } else {
+                        r_sparse[r_idx] = cmplx(0.0, 0.0);
+                    }
                 }
             }
         }
@@ -11804,7 +11823,7 @@ void GBComputationGroup::gb_signal_het_get_ll_in_kernel_wrap(
     double  layer_df, double dt,
     double  T_obs, double t_start,
     int     nchannels, int tdi_type,
-    int     N_sparse_fd, double tukey_alpha)
+    int     N_sparse_fd, double tukey_alpha, double max_r)
 {
 #ifdef __CUDACC__
     std::fprintf(stderr, "[gb_signal_het_get_ll_in_kernel_wrap] GPU branch "
@@ -11868,7 +11887,7 @@ void GBComputationGroup::gb_signal_het_get_ll_in_kernel_wrap(
         m_active_half_width,
         layer_df, dt,
         nchannels, tdi_type,
-        N_sparse_fd);
+        N_sparse_fd, max_r);
 }
 
 
@@ -11913,7 +11932,7 @@ void GBComputationGroup::gb_signal_het_fill_global_sparse_wrap(
     int     m_active_half_width,
     double  layer_df, double dt,
     int     nchannels,
-    int     N_sparse_fd)
+    int     N_sparse_fd, double max_r)
 {
     (void) num_data;
 
@@ -12032,8 +12051,17 @@ void GBComputationGroup::gb_signal_het_fill_global_sparse_wrap(
                         (size_t) c * M * N_sparse_t + (size_t) im * N_sparse_t + b];
                     const size_t r_idx = (size_t) c * M * N_sparse_t
                                        + (size_t) im * N_sparse_t + b;
-                    if (gcmplx::abs(c0v) > floor_th) r_sparse[r_idx] = c1v / c0v;
-                    else                              r_sparse[r_idx] = cmplx(0.0, 0.0);
+                    if (gcmplx::abs(c0v) > floor_th) {
+                        cmplx r_val = c1v / c0v;
+                        // Amp/phase clip: cap |r| at max_r (preserve dir).
+                        if (max_r > 0.0) {
+                            const double abs_r = gcmplx::abs(r_val);
+                            if (abs_r > max_r) r_val = r_val * (max_r / abs_r);
+                        }
+                        r_sparse[r_idx] = r_val;
+                    } else {
+                        r_sparse[r_idx] = cmplx(0.0, 0.0);
+                    }
                 }
             }
         }
@@ -12124,7 +12152,7 @@ void GBComputationGroup::gb_signal_het_fill_global_in_kernel_wrap(
     double  layer_df, double dt,
     double  T_obs, double t_start,
     int     nchannels,
-    int     N_sparse_fd, double tukey_alpha)
+    int     N_sparse_fd, double tukey_alpha, double max_r)
 {
 #ifdef __CUDACC__
     std::fprintf(stderr, "[gb_signal_het_fill_global_in_kernel_wrap] GPU branch "
@@ -12175,7 +12203,7 @@ void GBComputationGroup::gb_signal_het_fill_global_in_kernel_wrap(
         m_active_half_width,
         layer_df, dt,
         nchannels,
-        N_sparse_fd);
+        N_sparse_fd, max_r);
 }
 
 
@@ -12212,7 +12240,7 @@ void GBComputationGroup::gb_signal_het_get_ll_grad_in_kernel_wrap(
     double  layer_df, double dt,
     double  T_obs, double t_start,
     int     nchannels, int tdi_type,
-    int     N_sparse_fd, double tukey_alpha)
+    int     N_sparse_fd, double tukey_alpha, double max_r)
 {
 #ifdef __CUDACC__
     std::fprintf(stderr, "[gb_signal_het_get_ll_grad_in_kernel_wrap] GPU branch "
@@ -12249,7 +12277,7 @@ void GBComputationGroup::gb_signal_het_get_ll_grad_in_kernel_wrap(
             layer_df, dt,
             T_obs, t_start,
             nchannels, tdi_type,
-            N_sparse_fd, tukey_alpha);
+            N_sparse_fd, tukey_alpha, max_r);
 
         d_h_central[bin] = d_h_C;
         h_h_central[bin] = h_h_C;
@@ -12282,7 +12310,7 @@ void GBComputationGroup::gb_signal_het_get_ll_grad_in_kernel_wrap(
                 layer_df, dt,
                 T_obs, t_start,
                 nchannels, tdi_type,
-                N_sparse_fd, tukey_alpha);
+                N_sparse_fd, tukey_alpha, max_r);
 
             // -eps
             params_priv[k] = saved - eps;
@@ -12302,7 +12330,7 @@ void GBComputationGroup::gb_signal_het_get_ll_grad_in_kernel_wrap(
                 layer_df, dt,
                 T_obs, t_start,
                 nchannels, tdi_type,
-                N_sparse_fd, tukey_alpha);
+                N_sparse_fd, tukey_alpha, max_r);
 
             params_priv[k] = saved;
 

@@ -390,7 +390,7 @@ class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBas
         int m_active_half_width,
         double layer_df, double dt,
         int nchannels, int tdi_type,
-        int n_rfft);
+        int n_rfft, double max_r);
 
     // Stage 2a -- sparse-FD entry: consumes X_het (length N_sparse_fd per
     // binary per channel) + per-binary k_f0 instead of the dense rfft.
@@ -418,7 +418,7 @@ class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBas
         int m_active_half_width,
         double layer_df, double dt,
         int nchannels, int tdi_type,
-        int N_sparse_fd);
+        int N_sparse_fd, double max_r);
 
     // Stage 2b -- in-kernel sparse-FD signal-het. Fuses gb_run_fd_wave_tdi
     // with polyphase + bin-fold using a transient buffer for X_het (no
@@ -448,7 +448,7 @@ class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBas
         double layer_df, double dt,
         double T_obs, double t_start,
         int nchannels, int tdi_type,
-        int N_sparse_fd, double tukey_alpha);
+        int N_sparse_fd, double tukey_alpha, double max_r);
 
     // Signal-het fill_global. Reuses Stage 2b's FD + polyphase machinery to
     // build r at sparse n, then linear-interpolates r to the dense WDM
@@ -478,7 +478,7 @@ class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBas
         double layer_df, double dt,
         double T_obs, double t_start,
         int nchannels,
-        int N_sparse_fd, double tukey_alpha);
+        int N_sparse_fd, double tukey_alpha, double max_r);
 
     // Signal-het central-difference gradient of logL = d_h - 0.5*h_h. Per
     // binary, performs 1 central + 2*nparams perturbed get_ll_in_kernel
@@ -510,7 +510,7 @@ class GBComputationGroupWrap: public GBComputationGroup, public ReturnPointerBas
         double layer_df, double dt,
         double T_obs, double t_start,
         int nchannels, int tdi_type,
-        int N_sparse_fd, double tukey_alpha);
+        int N_sparse_fd, double tukey_alpha, double max_r);
 };
 
 
