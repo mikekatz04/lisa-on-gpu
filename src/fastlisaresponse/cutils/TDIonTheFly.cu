@@ -2,12 +2,14 @@
 #include "Detector.hpp"
 #include "LISAResponse.hh"
 #include "Interpolate.hh"
-// LAT-owned chunked-het ABI constants + WDMHet*Bufs shared-memory PODs
-// (Phase 3L.7a slice 1, 2026-06-04). Macros + structs that used to live
-// in this file are now consumed here. FAST_WDM_K_PER_THREAD_MAX is still
-// defined locally below because it references NUM_THREADS_HERE
-// (file-scoped); it moves to LAT in Slice 2 alongside the templated
-// chunked-het kernels.
+// LAT-owned chunked-het primitives header (Phase 3L.7a, 2026-06-04+).
+// Slices 1, 2a, 2b, 3-prep all consumed from here:
+// - FAST_WDM_* macros + WDMHet*Bufs PODs + arena macros (slice 1)
+// - WDM FFT machinery via lat_wdm_fft.hh (slice 2a)
+// - chunked-het helpers (wdm_fit_cubic_spline,
+//   populate_orbit_spline_cache, fast_wdm_inner_heterodyne_*,
+//   gb_chunk_fd_to_wdm) (slice 2b)
+// - NUM_THREADS_HERE + FAST_WDM_K_PER_THREAD_MAX (slice 3-prep)
 #include "lat_chunked_het_kernels.hh"
 #define WDM_SPLINE_HELPERS_IMPLEMENTATION
 #include "WDMSplineHelpers.hh"
@@ -20,20 +22,11 @@
 // TODO: GET RID OF THIS ??!!!
 #define C_SI 299792458.;
 
-// NUM_THREADS_HERE = blockDim.x for all our CUDA kernels. Should be a
-// power of 2 and a multiple of 32 (warp size). At Nt_sub=256, this also
-// sets the per-thread iteration count for stride loops:
-//   K_PER_THREAD = ceil(Nt_sub / NUM_THREADS_HERE)
-// (64 -> 4 iters/thread, 128 -> 2 iters/thread, 256 -> 1 iter/thread).
-// Larger NUM_THREADS_HERE gives the FFT/iFFT more cooperative parallelism
-// per transform at the cost of per-SM block count (each block holds the
-// same shared mem regardless of thread count). 128 is the empirical
-// sweet spot on A100 for our shared-mem footprint.
-#ifdef __CUDACC__
-#define NUM_THREADS_HERE 128
-#else
-#define NUM_THREADS_HERE 1
-#endif
+// NUM_THREADS_HERE block-size knob moved to LAT at Phase 3L.7a slice
+// 3-prep (2026-06-04); see lat_chunked_het_kernels.hh included near
+// the top of this file. Definition is preserved as 128 (GPU) / 1
+// (CPU) -- same value used by every chunked-het + spline-path kernel
+// in this file.
 
 // === LISATDIonTheFly method bodies moved to LAT at Phase 3L.5 (2026-06-03) ===
 // All ~26 method bodies now live in
@@ -1437,13 +1430,9 @@ CUDA_DEVICE
 // `lisatools/cutils/lat_chunked_het_kernels.hh`, already included near
 // the top of this file.
 
-// FAST_WDM_K_PER_THREAD_MAX stays here for now: it references
-// `NUM_THREADS_HERE`, the file-scoped chunked-het block-size knob (see
-// the macro definition near the top of this file). It will move to LAT
-// in Slice 2 alongside the templated chunked-het kernel bodies, since
-// those are the only consumers.
-#define FAST_WDM_K_PER_THREAD_MAX \
-    ((FAST_WDM_NT_SUB_MAX + NUM_THREADS_HERE - 1) / NUM_THREADS_HERE)
+// FAST_WDM_K_PER_THREAD_MAX moved to LAT at Phase 3L.7a slice 3-prep
+// (2026-06-04); see lat_chunked_het_kernels.hh included near the top
+// of this file.
 
 // ---------------------------------------------------------------------------
 // Threading model notes for upcoming gb_wdm_het_* kernels
