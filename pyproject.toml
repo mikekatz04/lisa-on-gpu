@@ -57,6 +57,12 @@ dependencies = [
   # source GB Wraps directly from gbgpu, this dep moves with the rest
   # of the shim chain.
   "gbgpu>=1.2.4",
+  # Phase 3L.8 (2026-06-04): runtime dep on bbhx so that the same backend
+  # resolver can route SOBBHTDIonTheFlyWrap + SOBBHComputationGroupWrap
+  # through `bbhx_backend_*.cbbhx`. With this dep added, lisa-on-gpu's
+  # tdionthefly module no longer hosts any source-class wrappers (GB and
+  # SOBBH families both now live in their owning waveform packages).
+  "bbhx>=1.1.10",
   #@DEPS_CUPYCUDA@,
   #@DEPS_FASTLISACORE@,
 ]

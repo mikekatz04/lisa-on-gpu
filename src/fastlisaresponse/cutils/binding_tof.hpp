@@ -18,18 +18,11 @@ namespace py = pybind11;
 
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
 #include "pybind11_cuda_array_interface.hpp"
-// GBTDIonTheFlyWrap + GBComputationGroupWrap aliases moved to GBGPU at Phase 3L.7g (2026-06-04).
-#define SOBBHTDIonTheFlyWrap SOBBHTDIonTheFlyWrapGPU
-// FDSplineTDIWaveformWrap + TDSplineTDIWaveformWrap aliases moved to LAT at Phase 3L.6.
-// WaveletLookupTableWrap disabled at Phase 3L (2026-06-02) -- lookup-table path retiring.
-#define SOBBHComputationGroupWrap SOBBHComputationGroupWrapGPU
-#else
-// GBTDIonTheFlyWrap + GBComputationGroupWrap aliases moved to GBGPU at Phase 3L.7g (2026-06-04).
-#define SOBBHTDIonTheFlyWrap SOBBHTDIonTheFlyWrapCPU
-// FDSplineTDIWaveformWrap + TDSplineTDIWaveformWrap aliases moved to LAT at Phase 3L.6.
-// WaveletLookupTableWrap disabled at Phase 3L (2026-06-02) -- lookup-table path retiring.
-#define SOBBHComputationGroupWrap SOBBHComputationGroupWrapCPU
 #endif
+// GBTDIonTheFlyWrap + GBComputationGroupWrap aliases moved to GBGPU at Phase 3L.7g (2026-06-04).
+// SOBBHTDIonTheFlyWrap + SOBBHComputationGroupWrap aliases moved to BBHx at Phase 3L.8 (2026-06-04).
+// FDSplineTDIWaveformWrap + TDSplineTDIWaveformWrap aliases moved to LAT at Phase 3L.6.
+// WaveletLookupTableWrap disabled at Phase 3L (2026-06-02) -- lookup-table path retiring.
 // Phase 3L (2026-06-02): FDDomainWrap + WDMSettingsWrap + WDMDomainWrap moved
 // to LAT. The class definitions + CPU/GPU aliases now live in
 // binding_fd_domain.hpp / binding_wdm_settings.hpp / binding_wdm_domain.hpp.
@@ -63,33 +56,10 @@ namespace py = pybind11;
 // in binding_tof.cxx still enforces single-registrant for the LAT-owned base.
 
 
-// Pybind11 wrapper for SOBBHTDIonTheFly. Mirrors GBTDIonTheFlyWrap but
-// exposes only the time-domain run_wave_tdi path; SOBBH currently has no
-// WDM-lookup / heterodyne-FD counterparts.
-class SOBBHTDIonTheFlyWrap : public LISATDIonTheFlyWrap {
-  public:
-    SOBBHTDIonTheFly *waveform;
-    double T;
-    double t_ref;
-
-    SOBBHTDIonTheFlyWrap(OrbitsWrap_responselisa *orbits_, TDIConfigWrap *tdi_config_, double T_, double t_ref_): LISATDIonTheFlyWrap(orbits_, tdi_config_)
-    {
-        T = T_;
-        t_ref = t_ref_;
-        waveform = new SOBBHTDIonTheFly(orbits_->orbits, tdi_config_->tdi_config, T_, t_ref_);
-    };
-    ~SOBBHTDIonTheFlyWrap(){
-        delete waveform;
-    };
-
-    void run_wave_tdi_wrap(
-        array_type<std::complex<double>>tdi_channels_arr,
-        array_type<double>tdi_amp, array_type<double>tdi_phase, array_type<double>phi_ref,
-        array_type<double>params, array_type<double>t_arr, int N, int num_bin, int n_params, int nchannels
-    );
-
-    int get_buffer_size(int N){return waveform->get_sobbh_buffer_size(N);};
-};
+// class SOBBHTDIonTheFlyWrap moved to BBHx at Phase 3L.8 (2026-06-04). Definition
+// + run_wave_tdi_wrap method body live in
+// BBHx/src/bbhx/cutils/binding_bbhx.{hpp,cxx}; pybind11 registration moved
+// to BBHx's cbbhx module.
 
 
 #if 0  // === WaveletLookupTableWrap disabled at Phase 3L (2026-06-02) -- lookup-table path retiring ===
@@ -165,88 +135,10 @@ class WaveletLookupTableWrap : public ReturnPointerBase {
 
 
 
-// Parallel SOBBH API. Same chunked-het methods, sobbh_ prefix; routes
-// to the templated kernel with SourceT = SOBBHTDIonTheFly via
-// SOBBHComputationGroup. Pybind exposure mirrors GBComputationGroupWrap.
-class SOBBHComputationGroupWrap: public SOBBHComputationGroup, public ReturnPointerBase {
-  public:
-    void sobbh_wdm_het_fill_global(
-        array_type<double> template_fill,
-        OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
-        WDMSettingsWrap *wdm_settings_wrap,
-        array_type<double> params_all, array_type<double> factors_all,
-        array_type<double> chunk_t_starts,
-        array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
-        array_type<int> chunk_n_global_offset,
-        array_type<double> wdm_window,
-        int n_chunks, int num_bin, int nparams,
-        int Nt_sub, int log2_Nt_sub,
-        int N_sparse, int log2_N_sparse,
-        int nchannels, int n_rfft_chunk,
-        double T_chunk, double dt, double T, double t_ref,
-        double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit);
+// class SOBBHComputationGroupWrap moved to BBHx at Phase 3L.8 (2026-06-04).
+// Definition + sobbh_wdm_het_* method bodies live in
+// BBHx/src/bbhx/cutils/binding_bbhx.{hpp,cxx}; pybind11 registration moved
+// to BBHx's cbbhx module.
 
-    void sobbh_wdm_het_get_ll(
-        array_type<double> d_h_out, array_type<double> h_h_out,
-        OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
-        WDMSettingsWrap *wdm_settings_wrap,
-        array_type<double> params_all,
-        array_type<int> data_index_all, array_type<int> noise_index_all,
-        array_type<double> chunk_t_starts,
-        array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
-        array_type<int> chunk_n_global_offset,
-        array_type<double> wdm_window,
-        array_type<double> data_d, array_type<double> invC,
-        int n_chunks, int num_bin, int nparams,
-        int Nt_sub, int log2_Nt_sub,
-        int N_sparse, int log2_N_sparse,
-        int nchannels, int n_rfft_chunk,
-        double T_chunk, double dt, double T, double t_ref, int tdi_type,
-        double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
-        array_type<int> binary_perm, array_type<int> group_starts, array_type<int> group_ends,
-        array_type<int> group_m_lo, array_type<int> group_m_hi, int n_groups);
-
-    void sobbh_wdm_het_swap_ll(
-        array_type<double> d_h_add_out, array_type<double> d_h_remove_out,
-        array_type<double> add_add_out, array_type<double> remove_remove_out,
-        array_type<double> add_remove_out,
-        OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
-        WDMSettingsWrap *wdm_settings_wrap,
-        array_type<double> params_add_all, array_type<double> params_remove_all,
-        array_type<int> data_index_all, array_type<int> noise_index_all,
-        array_type<double> chunk_t_starts,
-        array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
-        array_type<int> chunk_n_global_offset,
-        array_type<double> wdm_window,
-        array_type<double> data_d, array_type<double> invC,
-        int n_chunks, int num_bin, int nparams,
-        int Nt_sub, int log2_Nt_sub,
-        int N_sparse, int log2_N_sparse,
-        int nchannels, int n_rfft_chunk,
-        double T_chunk, double dt, double T, double t_ref, int tdi_type,
-        double tukey_alpha, int grid_dim, int N_cp_sig, int N_cp_orbit,
-        array_type<int> binary_perm, array_type<int> group_starts, array_type<int> group_ends,
-        array_type<int> group_m_lo, array_type<int> group_m_hi, int n_groups,
-        array_type<int> pair_m_lo_b, array_type<int> pair_m_hi_b);
-
-    void sobbh_wdm_het_get_fstat_ll(
-        array_type<double> N_arr_re_out, array_type<double> N_arr_im_out,
-        array_type<double> M_mat_re_out, array_type<double> M_mat_im_out,
-        OrbitsWrap_responselisa *orbits_wrap, TDIConfigWrap *tdi_config_wrap,
-        WDMSettingsWrap *wdm_settings_wrap,
-        array_type<double> params_all,
-        array_type<int> data_index_all, array_type<int> noise_index_all,
-        array_type<double> chunk_t_starts,
-        array_type<int> chunk_keep_lo, array_type<int> chunk_keep_hi,
-        array_type<int> chunk_n_global_offset,
-        array_type<double> wdm_window,
-        array_type<double> data_d, array_type<double> invC,
-        int n_chunks, int num_bin, int nparams,
-        int Nt_sub, int log2_Nt_sub,
-        int N_sparse, int log2_N_sparse,
-        int nchannels, int n_rfft_chunk,
-        double T_chunk, double dt, double T, double t_ref, int tdi_type,
-        double tukey_alpha, int grid_dim, int m_band_half_width);
-};
 
 #endif // __BINDING_TOF_HPP__

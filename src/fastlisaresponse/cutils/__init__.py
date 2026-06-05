@@ -93,10 +93,13 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
             import lisatools_backend_cpu.pycppdetector as _lat_pd
             # Phase 3L.7g (2026-06-04): GBTDIonTheFlyWrap +
             # GBComputationGroupWrap moved from lisa-on-gpu's tdionthefly
-            # module to GBGPU's cgbgpu module. SOBBH equivalents stay in
-            # tdionthefly until Phase 3L.8 (BBHx).
+            # module to GBGPU's cgbgpu module.
             import gbgpu_backend_cpu.cgbgpu as _gbgpu_cgbgpu
-            import fastlisaresponse_backend_cpu.tdionthefly
+            # Phase 3L.8 (2026-06-04): SOBBHTDIonTheFlyWrap +
+            # SOBBHComputationGroupWrap moved from lisa-on-gpu's tdionthefly
+            # module to BBHx's cbbhx module. With this, lisa-on-gpu's
+            # tdionthefly module no longer hosts any source-class wrappers.
+            import bbhx_backend_cpu.cbbhx as _bbhx_cbbhx
 
         except (ModuleNotFoundError, ImportError) as e:
             raise BackendUnavailableException(
@@ -106,15 +109,15 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
         numpy = FastLISAResponseCpuBackend.check_numpy()
 
         tmp = {
-            "XYZ": fastlisaresponse_backend_cpu.tdionthefly.TDI_XYZ,
-            "AET": fastlisaresponse_backend_cpu.tdionthefly.TDI_AET,
-            "AE": fastlisaresponse_backend_cpu.tdionthefly.TDI_AE,
+            "XYZ": _bbhx_cbbhx.TDI_XYZ,
+            "AET": _bbhx_cbbhx.TDI_AET,
+            "AE": _bbhx_cbbhx.TDI_AE,
         }
         return FastLISAResponseBackendMethods(
             TDSplineTDIWaveformWrap=_lat_pd.TDSplineTDIWaveformWrapCPU,
             FDSplineTDIWaveformWrap=_lat_pd.FDSplineTDIWaveformWrapCPU,
             GBTDIonTheFlyWrap=_gbgpu_cgbgpu.GBTDIonTheFlyWrapCPU,
-            SOBBHTDIonTheFlyWrap=fastlisaresponse_backend_cpu.tdionthefly.SOBBHTDIonTheFlyWrapCPU,
+            SOBBHTDIonTheFlyWrap=_bbhx_cbbhx.SOBBHTDIonTheFlyWrapCPU,
             LISAResponseWrap=_lat_pd.LISAResponseWrapCPU,
             LISAResponse=_lat_pd.LISAResponseCPU,
             OrbitsWrap=_lat_pd.OrbitsWrapCPU_responselisa,
@@ -126,7 +129,7 @@ class FastLISAResponseCpuBackend(CpuBackend, FastLISAResponseBackend):
             FDDomainWrap=_lat_pd.FDDomainWrapCPU,
             WaveletLookupTableWrap=None,  # Phase 3L (2026-06-02): lookup-table path retired.
             GBComputationGroupWrap=_gbgpu_cgbgpu.GBComputationGroupWrapCPU,
-            SOBBHComputationGroupWrap=fastlisaresponse_backend_cpu.tdionthefly.SOBBHComputationGroupWrapCPU,
+            SOBBHComputationGroupWrap=_bbhx_cbbhx.SOBBHComputationGroupWrapCPU,
             TDITypeDict=tmp,
             xp=numpy,
         )
@@ -149,7 +152,8 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
             import lisatools_backend_cuda11x.pycppdetector as _lat_pd
             # Phase 3L.7g: GB Wraps moved to gbgpu_backend_cuda11x.cgbgpu.
             import gbgpu_backend_cuda11x.cgbgpu as _gbgpu_cgbgpu
-            import fastlisaresponse_backend_cuda11x.tdionthefly
+            # Phase 3L.8: SOBBH Wraps moved to bbhx_backend_cuda11x.cbbhx.
+            import bbhx_backend_cuda11x.cbbhx as _bbhx_cbbhx
 
         except (ModuleNotFoundError, ImportError) as e:
             raise BackendUnavailableException(
@@ -164,15 +168,15 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
             ) from e
 
         tmp = {
-            "XYZ": fastlisaresponse_backend_cuda11x.tdionthefly.TDI_XYZ,
-            "AET": fastlisaresponse_backend_cuda11x.tdionthefly.TDI_AET,
-            "AE": fastlisaresponse_backend_cuda11x.tdionthefly.TDI_AE,
+            "XYZ": _bbhx_cbbhx.TDI_XYZ,
+            "AET": _bbhx_cbbhx.TDI_AET,
+            "AE": _bbhx_cbbhx.TDI_AE,
         }
         return FastLISAResponseBackendMethods(
             TDSplineTDIWaveformWrap=_lat_pd.TDSplineTDIWaveformWrapGPU,
             FDSplineTDIWaveformWrap=_lat_pd.FDSplineTDIWaveformWrapGPU,
             GBTDIonTheFlyWrap=_gbgpu_cgbgpu.GBTDIonTheFlyWrapGPU,
-            SOBBHTDIonTheFlyWrap=fastlisaresponse_backend_cuda11x.tdionthefly.SOBBHTDIonTheFlyWrapGPU,
+            SOBBHTDIonTheFlyWrap=_bbhx_cbbhx.SOBBHTDIonTheFlyWrapGPU,
             LISAResponseWrap=_lat_pd.LISAResponseWrapGPU,
             LISAResponse=_lat_pd.LISAResponseGPU,
             OrbitsWrap=_lat_pd.OrbitsWrapGPU_responselisa,
@@ -184,7 +188,7 @@ class FastLISAResponseCuda11xBackend(Cuda11xBackend, FastLISAResponseBackend):
             FDDomainWrap=_lat_pd.FDDomainWrapGPU,
             WaveletLookupTableWrap=None,  # Phase 3L (2026-06-02): lookup-table path retired.
             GBComputationGroupWrap=_gbgpu_cgbgpu.GBComputationGroupWrapGPU,
-            SOBBHComputationGroupWrap=fastlisaresponse_backend_cuda11x.tdionthefly.SOBBHComputationGroupWrapGPU,
+            SOBBHComputationGroupWrap=_bbhx_cbbhx.SOBBHComputationGroupWrapGPU,
             TDITypeDict=tmp,
             xp=cupy,
         )
@@ -205,7 +209,8 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
             import lisatools_backend_cuda12x.pycppdetector as _lat_pd
             # Phase 3L.7g: GB Wraps moved to gbgpu_backend_cuda12x.cgbgpu.
             import gbgpu_backend_cuda12x.cgbgpu as _gbgpu_cgbgpu
-            import fastlisaresponse_backend_cuda12x.tdionthefly
+            # Phase 3L.8: SOBBH Wraps moved to bbhx_backend_cuda12x.cbbhx.
+            import bbhx_backend_cuda12x.cbbhx as _bbhx_cbbhx
 
         except (ModuleNotFoundError, ImportError) as e:
             raise BackendUnavailableException(
@@ -219,15 +224,15 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
                 "'cuda12x' backend requires cupy", pip_deps=["cupy-cuda12x"]
             ) from e
         tmp = {
-            "XYZ": fastlisaresponse_backend_cuda12x.tdionthefly.TDI_XYZ,
-            "AET": fastlisaresponse_backend_cuda12x.tdionthefly.TDI_AET,
-            "AE": fastlisaresponse_backend_cuda12x.tdionthefly.TDI_AE,
+            "XYZ": _bbhx_cbbhx.TDI_XYZ,
+            "AET": _bbhx_cbbhx.TDI_AET,
+            "AE": _bbhx_cbbhx.TDI_AE,
         }
         return FastLISAResponseBackendMethods(
             TDSplineTDIWaveformWrap=_lat_pd.TDSplineTDIWaveformWrapGPU,
             FDSplineTDIWaveformWrap=_lat_pd.FDSplineTDIWaveformWrapGPU,
             GBTDIonTheFlyWrap=_gbgpu_cgbgpu.GBTDIonTheFlyWrapGPU,
-            SOBBHTDIonTheFlyWrap=fastlisaresponse_backend_cuda12x.tdionthefly.SOBBHTDIonTheFlyWrapGPU,
+            SOBBHTDIonTheFlyWrap=_bbhx_cbbhx.SOBBHTDIonTheFlyWrapGPU,
             LISAResponseWrap=_lat_pd.LISAResponseWrapGPU,
             LISAResponse=_lat_pd.LISAResponseGPU,
             OrbitsWrap=_lat_pd.OrbitsWrapGPU_responselisa,
@@ -239,7 +244,7 @@ class FastLISAResponseCuda12xBackend(Cuda12xBackend, FastLISAResponseBackend):
             FDDomainWrap=_lat_pd.FDDomainWrapGPU,
             WaveletLookupTableWrap=None,  # Phase 3L (2026-06-02): lookup-table path retired.
             GBComputationGroupWrap=_gbgpu_cgbgpu.GBComputationGroupWrapGPU,
-            SOBBHComputationGroupWrap=fastlisaresponse_backend_cuda12x.tdionthefly.SOBBHComputationGroupWrapGPU,
+            SOBBHComputationGroupWrap=_bbhx_cbbhx.SOBBHComputationGroupWrapGPU,
             TDITypeDict=tmp,
             xp=cupy,
         )
