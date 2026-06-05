@@ -261,7 +261,7 @@ if(FASTLISA_WITH_CPU)
                         ${GBT_LAPACKE_EXTRA_LIBS})
 
   # Phase 3E: binding_flr.cxx now lives in LAT.
-  pybind11_add_module(fastlisaresponse_cpu_tdionthefly "${LISATOOLS_DIR}/cutils/binding.cxx" "${GBT_DIR}/cutils/gbt_binding.cxx" "${LISATOOLS_DIR}/cutils/binding_flr.cxx" binding_tof.cxx)
+  nanobind_add_module(fastlisaresponse_cpu_tdionthefly "${LISATOOLS_DIR}/cutils/binding.cxx" "${GBT_DIR}/cutils/gbt_binding.cxx" "${LISATOOLS_DIR}/cutils/binding_flr.cxx" binding_tof.cxx)
   apply_cpu_backend_common_options(tdionthefly fastlisaresponse fastlisaresponse false)
   
   # Link your target to the imported target name
@@ -306,7 +306,7 @@ contain include/cufftdx.hpp -- cufftdx will NOT be enabled.")
   endif()
 
   # Phase 3E: binding_flr.cxx now lives in LAT.
-  pybind11_add_module(fastlisaresponse_gpu_tdionthefly "${LISATOOLS_DIR}/cutils/binding.cxx" "${GBT_DIR}/cutils/gbt_binding.cxx" "${LISATOOLS_DIR}/cutils/binding_flr.cxx" binding_tof.cxx)
+  nanobind_add_module(fastlisaresponse_gpu_tdionthefly "${LISATOOLS_DIR}/cutils/binding.cxx" "${GBT_DIR}/cutils/gbt_binding.cxx" "${LISATOOLS_DIR}/cutils/binding_flr.cxx" binding_tof.cxx)
   apply_gpu_backend_common_options(tdionthefly fastlisaresponse fastlisaresponse false)
 
   # Link your target to the imported target name

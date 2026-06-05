@@ -6,18 +6,18 @@
 #include "Detector.hpp"
 #include <string>
 #include <iostream>
-#include <pybind11/pybind11.h>
-#include <pybind11/numpy.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
+#include <nanobind/stl/string.h>
 #include "binding.hpp"
 #include "gbt_binding.hpp"
 #include "gbt_global.h"
 #include "binding_flr.hpp"
 
-namespace py = pybind11;
+namespace nb = nanobind;
 
 
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
-#include "pybind11_cuda_array_interface.hpp"
 #endif
 // GBTDIonTheFlyWrap + GBComputationGroupWrap aliases moved to GBGPU at Phase 3L.7g (2026-06-04).
 // SOBBHTDIonTheFlyWrap + SOBBHComputationGroupWrap aliases moved to BBHx at Phase 3L.8 (2026-06-04).

@@ -7,7 +7,7 @@ requires = [
   "gpubackendtools>=0.1.1", # @ file:///home/mlkatz/GPUBackendTools", 
   "scikit_build_core",
   "gpubackendtools",  # @ file:///home/mlkatz/GPUBackendTools",
-  "pybind11",
+  "nanobind>=2.4.0,<3",
   #@FASTLISA_CUDA@,
   "lisaanalysistools>=1.2.8",  #  @ file:///home/mlkatz/LISAanalysistools",  # /Users/mlkatz/Research/LISAanalysistools
   #@LISATOOLS_CUDA@,

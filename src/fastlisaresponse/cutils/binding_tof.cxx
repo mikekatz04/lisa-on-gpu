@@ -3,8 +3,9 @@
 #include "Detector.hpp"
 #include <string>
 #include <iostream>
-#include <pybind11/pybind11.h>
-#include <pybind11/numpy.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
+#include <nanobind/stl/string.h>
 #include "binding.hpp"
 #include "gbt_binding.hpp"
 #include "gbt_global.h"
@@ -26,10 +27,9 @@ static_assert(!LISATOOLS_IS_WRAPPER_OWNER,
     "memory project_phase3_efg_shipped for context.");
 
 #if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
-#include "pybind11_cuda_array_interface.hpp"
 #endif
 
-namespace py = pybind11;
+namespace nb = nanobind;
 
 // GBTDIonTheFlyWrap::run_*_wrap method bodies moved to GBGPU at
 // Phase 3L.7g (2026-06-04). See GBGPU/src/gbgpu/cutils/binding_gbgpu.cxx.
@@ -46,22 +46,22 @@ namespace py = pybind11;
 
 std::string get_module_path_tdionthefly() {
     // Acquire the GIL if it's not already held (safe to call multiple times)
-    py::gil_scoped_acquire acquire;
+    nb::gil_scoped_acquire acquire;
     // Import the module by its name
-    py::object module = py::module::import("tdionthefly");
+    nb::object module = nb::module_::import_("tdionthefly");
     try {
-        std::string path = module.attr("__file__").cast<std::string>();
+        std::string path = nb::cast<std::string>(module.attr("__file__"));
         return path;
-    } catch (const py::error_already_set& e) {
+    } catch (const nb::python_error& e) {
         std::cerr << "Error getting __file__ attribute: " << e.what() << std::endl;
         return "";
     }
 }
 
 
-// PYBIND11_MODULE creates the entry point for the Python module
+// NB_MODULE creates the entry point for the Python module
 // The module name here must match the one used in CMakeLists.txt
-void tdionthefly_part(py::module &m) {
+void tdionthefly_part(nb::module_ &m) {
 
     m.attr("TDI_XYZ") = TDI_XYZ;
     m.attr("TDI_AET") = TDI_AET;
@@ -74,12 +74,12 @@ void tdionthefly_part(py::module &m) {
     // guards against any future re-registration here.
 
 
-// py::class_<GBTDIonTheFlyWrap> + py::class_<GBTDIonTheFly> registrations
+// nb::class_<GBTDIonTheFlyWrap> + nb::class_<GBTDIonTheFly> registrations
 
 // moved to GBGPU's cgbgpu module at Phase 3L.7g (2026-06-04).
 
 
-// py::class_<SOBBHTDIonTheFlyWrap> + py::class_<SOBBHTDIonTheFly>
+// nb::class_<SOBBHTDIonTheFlyWrap> + nb::class_<SOBBHTDIonTheFly>
 // registrations moved to BBHx's cbbhx module at Phase 3L.8 (2026-06-04).
 
 
@@ -100,18 +100,18 @@ void tdionthefly_part(py::module &m) {
     // response_part(m)). The static_assert(!LISATOOLS_IS_WRAPPER_OWNER, ...)
     // at the top of this TU guards against any future re-registration here.
 
-// py::class_<GBComputationGroupWrap> registration moved to GBGPU's
+// nb::class_<GBComputationGroupWrap> registration moved to GBGPU's
 
 // cgbgpu module at Phase 3L.7g (2026-06-04).
 
-// py::class_<SOBBHComputationGroupWrap> registration moved to BBHx's cbbhx
+// nb::class_<SOBBHComputationGroupWrap> registration moved to BBHx's cbbhx
 // module at Phase 3L.8 (2026-06-04).
 
 }
 
 
 
-PYBIND11_MODULE(tdionthefly, m) {
+NB_MODULE(tdionthefly, m) {
      m.doc() = "TDI on the Fly."; // Optional module docstring
 
     // Call initialization functions from other files
@@ -124,10 +124,10 @@ PYBIND11_MODULE(tdionthefly, m) {
     // might not be fully set during the initial call if the module is loaded in
     // a specific way (e.g., via pythonw or as a namespace package).
     try {
-        std::string path_at_init = m.attr("__file__").cast<std::string>();
+        std::string path_at_init = nb::cast<std::string>(m.attr("__file__"));
         // std::cout << "Module loaded from: " << path_at_init << std::endl;
-        m.attr("module_dir") = py::cast(path_at_init.substr(0, path_at_init.find_last_of("/\\")));
-    } catch (py::error_already_set &e) {
+        m.attr("module_dir") = nb::cast(path_at_init.substr(0, path_at_init.find_last_of("/\\")));
+    } catch (nb::python_error &e) {
          // Handle potential error here, e.g., by logging or setting a default value
         std::cerr << "Could not capture __file__ at init time." << std::endl;
         e.restore(); // Restore exception state for proper Python handling
