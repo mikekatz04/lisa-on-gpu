@@ -1,5 +1,6 @@
-# Add subdirectories which contain compiled sources
-add_subdirectory(cutils)
+# Phase 3L.7n (2026-06-04): cutils/ no longer contains compiled sources --
+# just a retirement-notice docstring (__init__.py). add_subdirectory(cutils)
+# dropped; the install rules below only emit the git_version metadata file.
 
 # Handle Git Metadata
 get_target_property(_FASTLISA_WITH_CPU fastlisaresponse WITH_CPU)
