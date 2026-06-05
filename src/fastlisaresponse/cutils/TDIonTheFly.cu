@@ -869,33 +869,10 @@ void WDMDomain::add_swap_grad_contrib_one_side(
 #define N_PARAMS_MAX 20
 
 
-#ifdef __CUDACC__
-CUDA_DEVICE
-double block_reduce(double *array)
-{
-     // Specialize BlockReduce for a 1D block of 128 threads of type int
-    using BlockReduce = cub::BlockReduce<double, NUM_THREADS_HERE>;
-    int tid = threadIdx.x;
-    // Allocate shared memory for BlockReduce
-    CUDA_SHARED typename BlockReduce::TempStorage temp_storage;
-    CUDA_SYNC_THREADS;
-    double thread_data = array[tid];
-    double output = BlockReduce(temp_storage).Sum(thread_data);
-    return output;
-}
-
-// Scalar-input variant of block_reduce: reduces a per-thread register value
-// without going through a NUM_THREADS_HERE shared staging array. Only the cub
-// TempStorage stays in __shared__, which is smaller than the staging array.
-CUDA_DEVICE
-double block_reduce_scalar(double thread_data)
-{
-    using BlockReduce = cub::BlockReduce<double, NUM_THREADS_HERE>;
-    CUDA_SHARED typename BlockReduce::TempStorage temp_storage;
-    CUDA_SYNC_THREADS;
-    return BlockReduce(temp_storage).Sum(thread_data);
-}
-#endif
+// block_reduce / block_reduce_scalar moved to
+// LISAanalysistools/src/lisatools/cutils/lat_chunked_het_kernels.hh
+// (Phase 3L.7a gap-fill, 2026-06-04) so GBGPU's gb_tdi_on_the_fly.cu
+// can use them through the existing include chain.
 
 // =============================================================================
 // Spline-based WDM kernels
