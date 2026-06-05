@@ -18,11 +18,8 @@ extensions = [
     "sphinx.ext.mathjax",
     "IPython.sphinxext.ipython_console_highlighting",
 ]
-import shutil
-shutil.copy(
-    "../../examples/fast_LISA_response_tutorial.ipynb",
-    "fast_LISA_response_tutorial.ipynb",
-)
+# fast_LISA_response_tutorial.ipynb moved to LISAanalysistools at Phase
+# 3L.7 (2026-06-05); see LISAanalysistools/examples/lisa_response_tutorial.ipynb.
 
 source_suffix = [".rst"]
 
