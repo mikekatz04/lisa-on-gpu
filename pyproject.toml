@@ -49,6 +49,14 @@ dependencies = [
   "scipy",
   "tqdm",
   "wrapt",
+  # Phase 3L.7g (2026-06-04): runtime dep on gbgpu so that
+  # `fastlisaresponse.cutils.__init__` can route GBTDIonTheFlyWrap +
+  # GBComputationGroupWrap through `gbgpu_backend_*.cgbgpu` (where they
+  # now live after the carve-out from lisa-on-gpu's tdionthefly module).
+  # Transitional dep: when lisa-on-gpu is fully retired and consumers
+  # source GB Wraps directly from gbgpu, this dep moves with the rest
+  # of the shim chain.
+  "gbgpu>=1.2.4",
   #@DEPS_CUPYCUDA@,
   #@DEPS_FASTLISACORE@,
 ]
