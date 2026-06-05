@@ -44,12 +44,48 @@ release cycle, after which this package retires entirely.
 - `fastlisaresponse.jax.tdi_on_the_fly` (`gb_run_wave_tdi`, `sobbh_run_wave_tdi`).
 - `fastlisaresponse.jax.wrappers` (mixed Jax wrappers).
 
-Phase 3L.7 + 3L.8 blocker: GBGPU and BBHx currently use Cython bindings
-(`.pyx`), so the destination packages need pybind11 module infrastructure
-equivalent to LAT's `pycppdetector` before the GB/SOBBH `*TDIonTheFly`
-machinery can move. Until then, those classes stay registered in this
-repo's `tdionthefly` module — the Phase 3J/3K enforcement keeps anything
-else from accidentally re-registering them elsewhere.
+**3L.7 + 3L.8 shipped 2026-06-04.** GBGPU + BBHx now have their
+nanobind pybind11-equivalent modules (`cgbgpu` / `cbbhx`); the GB and
+SOBBH `*TDIonTheFly` classes + their Wraps + the GBComputationGroup /
+SOBBHComputationGroup Wraps moved at 3L.7g and 3L.8 respectively (see
+[[project_phase3l7gh_shipped]] + [[project_phase3l8_shipped]]).
+
+**3L.7k shipped 2026-06-04**: the `fastlisaresponse_<flavor>` backend
+family was deleted entirely. LAT's `lisatools_<flavor>` carries all
+LISA-response Wraps directly; GBGPU's `gbgpu_<flavor>` and BBHx's
+`bbhx_<flavor>` compose LAT-side + their source-class Wraps. See
+[[project_phase3l7k_shipped]].
+
+**3L.7l shipped 2026-06-04** (LAT side): ~89 LAT consumer files swept
+off `fastlisaresponse.*` shim imports onto canonical `lisatools.*` /
+`gbgpu.*` / `bbhx.*` paths. LAT commit `495f113`.
+
+**3L.7m shipped 2026-06-04** (this repo): the entire Python shim chain
+(`gbcomps`, `jax/*`, `response`, `tdionfly`, `tdiconfig`, `utils/*`)
+was deleted. `import fastlisaresponse` now exposes only `__version__`
+/ `__version_tuple__` / `_is_editable` / `cutils` (the latter just
+a retirement-notice docstring). lisa-on-gpu commit `2518a8c`.
+
+**3L.7a gap-fill shipped 2026-06-04**: `block_reduce` and
+`block_reduce_scalar` helpers (used by both this repo's residual kernels
+and GBGPU's `gb_fd_get_ll_kernel`) hoisted into LAT's
+`lat_chunked_het_kernels.hh` so the cluster CUDA build resolves them
+through the existing include chain. LAT commit `cd6a57f`, lisa-on-gpu
+commit `abdd1a3`.
+
+## Still here (Phase 3L.7n + 3L.7o targets)
+
+- The C++ build: `cutils/CMakeLists.txt` still produces
+  `fastlisaresponse_backend_<flavor>.tdionthefly` modules that bind to
+  `binding_tof.cxx`. The binding shell only exposes `TDI_XYZ`,
+  `TDI_AET`, `TDI_AE` attrs and the `get_module_path_cpp` /
+  `module_dir` helpers -- LAT's `pycppdetector` already carries the
+  `TDI_*` macros (see Phase 3L.7k) so nothing imports this module
+  anymore. **Phase 3L.7n target**: drop the binding + the build path.
+- `cutils/TDIonTheFly.cu` (~6200 lines) + `TDIonTheFly.hh` +
+  `WDMSplineHelpers.hh`. Once the binding stub is gone, no Python
+  entry point reaches the methods these files compile. **Phase 3L.7o
+  target**: delete with the rest of the package.
 
 ## Backend implementation hierarchy (sprint-wide rule)
 
