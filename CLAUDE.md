@@ -73,19 +73,34 @@ and GBGPU's `gb_fd_get_ll_kernel`) hoisted into LAT's
 through the existing include chain. LAT commit `cd6a57f`, lisa-on-gpu
 commit `abdd1a3`.
 
-## Still here (Phase 3L.7n + 3L.7o targets)
+**3L.7n shipped 2026-06-04**: deleted the entire C++ surface
+(`TDIonTheFly.{cu,hh}` ~6500 lines, `WDMSplineHelpers.hh` 636 lines,
+`binding_tof.{cxx,hpp}`, `cutils/CMakeLists.txt`,
+`lisatdionthefly.pyx`). Collapsed top-level `CMakeLists.txt` from
+~200 lines of CUDA/Fortran/LAPACKE setup down to ~30 lines of
+`project(... LANGUAGES NONE)`. `pyproject.toml` `[build-system].requires`
+dropped from 8 entries to just `scikit_build_core`; `[project].dependencies`
+cleared. Editable rebuild produces a **6.4 KB pure-Python wheel** (was
+215 KB). lisa-on-gpu commit `fead915`.
 
-- The C++ build: `cutils/CMakeLists.txt` still produces
-  `fastlisaresponse_backend_<flavor>.tdionthefly` modules that bind to
-  `binding_tof.cxx`. The binding shell only exposes `TDI_XYZ`,
-  `TDI_AET`, `TDI_AE` attrs and the `get_module_path_cpp` /
-  `module_dir` helpers -- LAT's `pycppdetector` already carries the
-  `TDI_*` macros (see Phase 3L.7k) so nothing imports this module
-  anymore. **Phase 3L.7n target**: drop the binding + the build path.
-- `cutils/TDIonTheFly.cu` (~6200 lines) + `TDIonTheFly.hh` +
-  `WDMSplineHelpers.hh`. Once the binding stub is gone, no Python
-  entry point reaches the methods these files compile. **Phase 3L.7o
-  target**: delete with the rest of the package.
+## Still here (Phase 3L.7o target)
+
+After 3L.7n the package is a deprecation husk. One release cycle from
+now, **Phase 3L.7o** deletes the whole `lisa-on-gpu/` directory.
+What remains until then:
+
+- `src/fastlisaresponse/__init__.py` -- DeprecationWarning on
+  `import fastlisaresponse` pointing at `lisatools.response` / `gbgpu`
+  / `bbhx`. Exposes only `__version__`, `__version_tuple__`,
+  `_is_editable`, `cutils` (the docstring stub).
+- `src/fastlisaresponse/cutils/__init__.py` -- 25-line
+  retirement-notice docstring with the canonical-homes table.
+- `src/fastlisaresponse/{_version,_editable}.py` -- packaging hooks.
+- Top-level `CMakeLists.txt` (LANGUAGES NONE) + `pyproject.toml` +
+  the `src/CMakeLists.txt` chain -- enough to let `pip install`
+  produce the husk wheel.
+- Historical artifacts (tests/, README.md, examples/, docs/) kept for
+  reference until the directory itself is deleted.
 
 ## Backend implementation hierarchy (sprint-wide rule)
 
