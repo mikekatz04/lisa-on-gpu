@@ -48,7 +48,10 @@ _warnings.warn(
 )
 del _warnings
 
-from . import cutils, utils
+from . import cutils  # retirement-notice docstring only
+
+# Phase 3L.7m (2026-06-04): the `utils/` subpackage was deleted in this
+# pass -- nothing in the sprint imported `fastlisaresponse.utils.*`.
 
 # Phase 3L.7k (2026-06-04): the fastlisaresponse_<flavor> backend family
 # has been retired. The LISA-response wraps it used to bundle now live
@@ -67,20 +70,15 @@ from . import cutils, utils
 # above for the full migration table.
 
 
-from .response import pyResponseTDI, ResponseWrapper
-
-
-from .response import pyResponseTDI, ResponseWrapper
+# Phase 3L.7m (2026-06-04): the Python shim chain was deleted in this
+# repo as part of the lisa-on-gpu full-retirement work. ResponseWrapper
+# and pyResponseTDI now live at lisatools.response.directresponse.
+# `from fastlisaresponse import ResponseWrapper` no longer works -- update
+# your import to `from lisatools.response.directresponse import ResponseWrapper`.
 
 
 __all__ = [
     "__version__",
     "__version_tuple__",
     "_is_editable",
-    "pyResponseTDI",
-    "ResponseWrapper",
-    "get_logger",
-    "get_config",
-    "get_config_setter",
-    "get_file_manager",
 ]
