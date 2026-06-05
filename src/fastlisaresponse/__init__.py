@@ -50,61 +50,24 @@ del _warnings
 
 from . import cutils, utils
 
-from gpubackendtools import Globals
-from .cutils import FastLISAResponseCpuBackend, FastLISAResponseCuda11xBackend, FastLISAResponseCuda12xBackend, FastLISAResponseCuda13xBackend
+# Phase 3L.7k (2026-06-04): the fastlisaresponse_<flavor> backend family
+# has been retired. The LISA-response wraps it used to bundle now live
+# directly on LAT's LISAToolsBackend; the GB- and SOBBH-specific wraps
+# live on the gbgpu and bbhx backends respectively. Code that used to
+# `fastlisaresponse.get_backend("cpu")` should now do one of:
+#   * `lisatools.get_backend("cpu")` -- LAT response wraps + Orbits +
+#     WDM/FD/Spline + TDITypeDict.
+#   * `gbgpu.get_backend("cpu")` -- everything above PLUS GBTDIonTheFlyWrap +
+#     GBComputationGroupWrap + GBGPUComputationWrap.
+#   * `bbhx.get_backend("cpu")` -- everything LAT-side PLUS SOBBHTDIonTheFlyWrap +
+#     SOBBHComputationGroupWrap + BBHxComputationWrap.
+# This module deliberately no longer registers backends or provides
+# `get_backend` shortcuts so import sites that still call them surface
+# a clear `AttributeError` and migrate. See the deprecation notice
+# above for the full migration table.
 
 
-# Backend registry. The cutils-side (C++/CUDA) backends are always
-# registered. The JAX backend is added on top if jax is importable, so
-# users without jax can keep using the C++ path without paying any cost.
-add_backends = {
-    "fastlisaresponse_cpu": FastLISAResponseCpuBackend,
-    "fastlisaresponse_cuda11x": FastLISAResponseCuda11xBackend,
-    "fastlisaresponse_cuda12x": FastLISAResponseCuda12xBackend,
-    "fastlisaresponse_cuda13x": FastLISAResponseCuda13xBackend,
-}
-
-try:
-    # Importing the .jax subpackage gates on `import jax`; the symbol
-    # is None if jax is missing.
-    from .jax import FastLISAResponseJaxBackend as _FastLISAResponseJaxBackend
-    if _FastLISAResponseJaxBackend is not None:
-        add_backends["fastlisaresponse_jax"] = _FastLISAResponseJaxBackend
-except (ImportError, ModuleNotFoundError):
-    pass
-
-Globals().backends_manager.add_backends(add_backends)
-
-
-
-from gpubackendtools import get_backend as _get_backend
-from gpubackendtools import has_backend as _has_backend
-from gpubackendtools import get_first_backend as _get_first_backend
-from gpubackendtools.gpubackendtools import Backend
-
-
-def get_backend(backend: str) -> Backend:
-    __doc__ = _get_backend.__doc__
-    if "fastlisaresponse_" not in backend:
-        return _get_backend("fastlisaresponse_" + backend)
-    else:
-        return _get_backend(backend)
-
-
-def has_backend(backend: str) -> Backend:
-    __doc__ = _has_backend.__doc__
-    if "fastlisaresponse_" not in backend:
-        return _has_backend("fastlisaresponse_" + backend)
-    else:
-        return _has_backend(backend)
-
-        
-def get_first_backend(backend: str) -> Backend:
-    __doc__ = _get_first_backend.__doc__
-    if "fastlisaresponse_" not in backend:
-        return _get_first_backend("fastlisaresponse_" + backend)
-    else:
-        return _get_first_backend(backend)
+from .response import pyResponseTDI, ResponseWrapper
 
 
 from .response import pyResponseTDI, ResponseWrapper
@@ -119,7 +82,5 @@ __all__ = [
     "get_logger",
     "get_config",
     "get_config_setter",
-    "get_backend",
     "get_file_manager",
-    "has_backend",
 ]
