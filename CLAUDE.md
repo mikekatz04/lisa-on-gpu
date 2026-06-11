@@ -20,7 +20,7 @@ release cycle, after which this package retires entirely.
 | `fastlisaresponse.jax.{base,projection,tdi_config,amp_phase_extract}` | `lisatools.jax.response.*` | 3D | Moved, shim re-exports |
 | `fastlisaresponse.jax.wdm.{wavelet_lookup,wdm_settings,wdm_domain,fast_inner}` | `lisatools.jax.wdm.*` | 3D | Moved, shim re-exports |
 | `cutils/LISAResponse.cu`, `cutils/binding_flr.{cxx,hpp}` | `LISAanalysistools/src/lisatools/cutils/` | 3E | **Deleted from this repo**; CMake references `${LISATOOLS_DIR}` |
-| `responselisa` pybind11 module + `OrbitsWrap_responselisa` / `CubicSplineWrap_responselisa` / `TDIConfigWrap` / `LISAResponseWrap` registrations | LAT's `pycppdetector` module via `response_part(m)` | 3E | **Module retired**; lisa-on-gpu's `cutils/__init__.py` sources these from `lisatools_backend_*.pycppdetector` |
+| `responselisa` pybind11 module + `OrbitsWrap` / `CubicSplineWrap` / `TDIConfigWrap` / `LISAResponseWrap` registrations | LAT's `pycppdetector` module via `response_part(m)` | 3E | **Module retired**; lisa-on-gpu's `cutils/__init__.py` sources these from `lisatools_backend_*.pycppdetector` |
 | `fastlisaresponse.jax.sources.ucb`, `fastlisaresponse.jax.wdm.{kernels,heterodyne_kernels,fast_inner_heterodyne}` | `gbgpu.jax.{sources,wdm}.*` | 3F | Moved, shim re-exports |
 | `fastlisaresponse.jax.sources.sobbh` | `bbhx.jax.sources.sobbh` | 3G | Moved, shim re-exports |
 | `FDDomain[Wrap]`, `WDMSettings[Wrap]`, `WDMDomain[Wrap]` (in `TDIonTheFly.{hh,cu}` + `binding_tof.{hpp,cxx}`) | LAT's `cutils/{fd_domain,wdm_settings,wdm_domain}.hh` + `binding_{fd_domain,wdm_settings,wdm_domain}.hpp` | 3L.1/.2/.4 | Header-inline; Wraps in LAT's `pycppdetector` via `response_part(m)`; `_lat_pd`-routed in `cutils/__init__.py` |
@@ -166,15 +166,15 @@ not a shared method-level flag.
 
 ## Host→device upload of class-wrapper objects (sprint-wide rule)
 
-Pybind11 wrapper classes in this codebase (``OrbitsWrap_responselisa``,
+Pybind11 wrapper classes in this codebase (``OrbitsWrap``,
 ``TDIConfigWrap``, ``WDMSettingsWrap``, ``WDMDomainWrap``,
 ``FDDomainWrap``, ``AnalysisContainerArrayWrap``, …) store their
 underlying C++ instance via plain ``new`` on the **host** heap, e.g.
 
 ```cpp
-class OrbitsWrap_responselisa : public ReturnPointerBase {
+class OrbitsWrap : public ReturnPointerBase {
     Orbits *orbits;
-    OrbitsWrap_responselisa(...) {
+    OrbitsWrap(...) {
         orbits = new Orbits(..., _ltt_arr_device_ptr, ...);
         //       ^^^^^^^^^^ host allocation; pointer fields inside
         //                  may already point to device memory.
