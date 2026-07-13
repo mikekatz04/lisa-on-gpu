@@ -3,349 +3,47 @@
 This file provides guidance to Claude Code (claude.ai/code) when working
 with code in this repository.
 
-## ⚠️ Deprecation notice (Phase 3, 2026-06-02)
+## ⚠️ Deprecated — pure-Python husk (Phase 3L.7n, 2026-06-04)
 
-`fastlisaresponse` is being deprecated in favor of three target packages.
-**Do not add new code here**; new functionality goes into the target
-package directly. Existing imports still work (deprecation shims +
-DeprecationWarnings telling users where the new home is) for one
-release cycle, after which this package retires entirely.
+`fastlisaresponse` has been fully deprecated. **Do not add code here.** All
+functionality moved to `lisatools.response` / `lisatools.jax` / `gbgpu` /
+`bbhx`; the entire C++ surface and the Python shim chain were deleted.
+`import fastlisaresponse` now only emits a `DeprecationWarning` and exposes
+`__version__` / `__version_tuple__` / `_is_editable` / `cutils` (a
+retirement-notice stub). An editable install builds a ~6.4 KB pure-Python
+wheel: `CMakeLists.txt` is `LANGUAGES NONE`, and there are **zero**
+`.cu`/`.cxx`/`.hpp`/`.hh`/`.pyx` files under `src/`.
 
-| Old location (this repo) | New home | Phase | Status |
-|---|---|---|---|
-| `fastlisaresponse.response` (was `pyResponseTDI`, `ResponseWrapper`, `ecliptic_to_icrs`) | `lisatools.response.directresponse` | 3C | Moved, shim re-exports |
-| `fastlisaresponse.tdionfly` (TDIonTheFly Python frontend) | `lisatools.response.tdionfly` | 3C | Moved, shim re-exports |
-| `fastlisaresponse.tdiconfig` (`TDIConfig`) | `lisatools.response.tdiconfig` | 3C | Moved, shim re-exports |
-| `fastlisaresponse.utils.parallelbase` (`FastLISAResponseParallelModule`) | `lisatools.response.parallelbase` | 3C | Moved, shim re-exports |
-| `fastlisaresponse.jax.{base,projection,tdi_config,amp_phase_extract}` | `lisatools.jax.response.*` | 3D | Moved, shim re-exports |
-| `fastlisaresponse.jax.wdm.{wavelet_lookup,wdm_settings,wdm_domain,fast_inner}` | `lisatools.jax.wdm.*` | 3D | Moved, shim re-exports |
-| `cutils/LISAResponse.cu`, `cutils/binding_flr.{cxx,hpp}` | `LISAanalysistools/src/lisatools/cutils/` | 3E | **Deleted from this repo**; CMake references `${LISATOOLS_DIR}` |
-| `responselisa` pybind11 module + `OrbitsWrap` / `CubicSplineWrap` / `TDIConfigWrap` / `LISAResponseWrap` registrations | LAT's `pycppdetector` module via `response_part(m)` | 3E | **Module retired**; lisa-on-gpu's `cutils/__init__.py` sources these from `lisatools_backend_*.pycppdetector` |
-| `fastlisaresponse.jax.sources.ucb`, `fastlisaresponse.jax.wdm.{kernels,heterodyne_kernels,fast_inner_heterodyne}` | `gbgpu.jax.{sources,wdm}.*` | 3F | Moved, shim re-exports |
-| `fastlisaresponse.jax.sources.sobbh` | `bbhx.jax.sources.sobbh` | 3G | Moved, shim re-exports |
-| `FDDomain[Wrap]`, `WDMSettings[Wrap]`, `WDMDomain[Wrap]` (in `TDIonTheFly.{hh,cu}` + `binding_tof.{hpp,cxx}`) | LAT's `cutils/{fd_domain,wdm_settings,wdm_domain}.hh` + `binding_{fd_domain,wdm_settings,wdm_domain}.hpp` | 3L.1/.2/.4 | Header-inline; Wraps in LAT's `pycppdetector` via `response_part(m)`; `_lat_pd`-routed in `cutils/__init__.py` |
-| `WaveletLookupTable` + `gb_wdm_spline_*` kernels (lookup-table spline path) | RETIRED | 3L.3 | Commented `#if 0` in-place (per user direction); chunked-heterodyne `gb_wdm_het_*` is the sole WDM path |
-| `LISATDIonTheFly` base + `OrbitsSplineCache` + cache eval helpers (TDIonTheFly.{hh,cu}) | LAT's `cutils/lat_tdi_on_the_fly.{hh,cu}` | 3L.5 | `.hh + .cu` split; this repo's CMake copy-compiles the `.cu` in-place same as `LISAResponse.cu` since Phase 3E |
-| `FDSplineTDIWaveform`, `TDSplineTDIWaveform` + their `*Wrap` + `LISATDIonTheFlyWrap` base | LAT's `cutils/lat_spline_tdi_waveform.{hh,cu}` + `binding_lat_spline_tdi.hpp` | 3L.6 | Same split pattern; wraps registered in LAT's `pycppdetector`; the still-here `GBTDIonTheFlyWrap` + `SOBBHTDIonTheFlyWrap` inherit from the LAT-owned `LISATDIonTheFlyWrap` |
+**Phase 3L.7o** (one release cycle out) deletes the `lisa-on-gpu/` directory
+entirely.
 
-**Still here (Phase 3L.7 + 3L.8 — pending GBGPU/BBHx pybind11 infra prereq):**
-- `cutils/TDIonTheFly.cu` + `.hh` + `binding_tof.{cxx,hpp}` — the
-  GBTDIonTheFly + GBComputationGroup + their `*Wrap` + the gb_wdm_het_*
-  kernels (Phase 3L.7 target -> GBGPU) and SOBBHTDIonTheFly +
-  SOBBHComputationGroup (Phase 3L.8 -> BBHx). Generic LISATDIonTheFly +
-  spline/WDM/FD pieces have already been carved out (Phase 3L.1-3L.6,
-  see deprecation table above); the remaining content is the
-  source-class-specific machinery. Many `#if 0` blocks mark the carved-
-  out historical bodies as reference; remove after full validation.
-- `fastlisaresponse.gbcomps` (GBWDMComputations, GBFDComputations Python
-  frontends) — Phase 3L.7 target.
-- `fastlisaresponse.jax.wdm.computation_group` (GBComputationGroupWrapJAX +
-  SOBBHComputationGroupWrapJAX).
-- `fastlisaresponse.jax.tdi_on_the_fly` (`gb_run_wave_tdi`, `sobbh_run_wave_tdi`).
-- `fastlisaresponse.jax.wrappers` (mixed Jax wrappers).
+## Where the old API went
 
-**3L.7 + 3L.8 shipped 2026-06-04.** GBGPU + BBHx now have their
-nanobind pybind11-equivalent modules (`cgbgpu` / `cbbhx`); the GB and
-SOBBH `*TDIonTheFly` classes + their Wraps + the GBComputationGroup /
-SOBBHComputationGroup Wraps moved at 3L.7g and 3L.8 respectively (see
-[[project_phase3l7gh_shipped]] + [[project_phase3l8_shipped]]).
+| Old (`fastlisaresponse.*`) | New home |
+|---|---|
+| `response` (`pyResponseTDI`, `ResponseWrapper`, `ecliptic_to_icrs`) | `lisatools.response.directresponse` |
+| `tdionfly`, `tdiconfig`, `utils.parallelbase` | `lisatools.response.{tdionfly,tdiconfig,parallelbase}` |
+| `jax.{base,projection,tdi_config,amp_phase_extract}`, `jax.wdm.*` | `lisatools.jax.response.*`, `lisatools.jax.wdm.*` |
+| `cutils` C++ (`LISAResponse`, `TDIonTheFly`, WDM/FD/spline, bindings) | `lisatools/cutils/` (GB parts → `gbgpu/cutils/`, SOBBH → `bbhx/cutils/`) |
+| `jax.sources.ucb`, `jax.wdm.{kernels,heterodyne_kernels,fast_inner_heterodyne}` | `gbgpu.jax.{sources,wdm}.*` |
+| `jax.sources.sobbh` | `bbhx.jax.sources.sobbh` |
 
-**3L.7k shipped 2026-06-04**: the `fastlisaresponse_<flavor>` backend
-family was deleted entirely. LAT's `lisatools_<flavor>` carries all
-LISA-response Wraps directly; GBGPU's `gbgpu_<flavor>` and BBHx's
-`bbhx_<flavor>` compose LAT-side + their source-class Wraps. See
-[[project_phase3l7k_shipped]].
+## What still lives here (until 3L.7o)
 
-**3L.7l shipped 2026-06-04** (LAT side): ~89 LAT consumer files swept
-off `fastlisaresponse.*` shim imports onto canonical `lisatools.*` /
-`gbgpu.*` / `bbhx.*` paths. LAT commit `495f113`.
+`src/fastlisaresponse/__init__.py` (the DeprecationWarning),
+`cutils/__init__.py` (retirement-notice docstring), `{_version,_editable}.py`
+packaging hooks, `CMakeLists.txt` (`LANGUAGES NONE`) + `pyproject.toml`, and
+historical `tests/` / `README.md` / `examples/` / `docs/` kept for reference.
 
-**3L.7m shipped 2026-06-04** (this repo): the entire Python shim chain
-(`gbcomps`, `jax/*`, `response`, `tdionfly`, `tdiconfig`, `utils/*`)
-was deleted. `import fastlisaresponse` now exposes only `__version__`
-/ `__version_tuple__` / `_is_editable` / `cutils` (the latter just
-a retirement-notice docstring). lisa-on-gpu commit `2518a8c`.
+## LISA Analysis Tools–wide rules
 
-**3L.7a gap-fill shipped 2026-06-04**: `block_reduce` and
-`block_reduce_scalar` helpers (used by both this repo's residual kernels
-and GBGPU's `gb_fd_get_ll_kernel`) hoisted into LAT's
-`lat_chunked_het_kernels.hh` so the cluster CUDA build resolves them
-through the existing include chain. LAT commit `cd6a57f`, lisa-on-gpu
-commit `abdd1a3`.
-
-**3L.7n shipped 2026-06-04**: deleted the entire C++ surface
-(`TDIonTheFly.{cu,hh}` ~6500 lines, `WDMSplineHelpers.hh` 636 lines,
-`binding_tof.{cxx,hpp}`, `cutils/CMakeLists.txt`,
-`lisatdionthefly.pyx`). Collapsed top-level `CMakeLists.txt` from
-~200 lines of CUDA/Fortran/LAPACKE setup down to ~30 lines of
-`project(... LANGUAGES NONE)`. `pyproject.toml` `[build-system].requires`
-dropped from 8 entries to just `scikit_build_core`; `[project].dependencies`
-cleared. Editable rebuild produces a **6.4 KB pure-Python wheel** (was
-215 KB). lisa-on-gpu commit `fead915`.
-
-## Still here (Phase 3L.7o target)
-
-After 3L.7n the package is a deprecation husk. One release cycle from
-now, **Phase 3L.7o** deletes the whole `lisa-on-gpu/` directory.
-What remains until then:
-
-- `src/fastlisaresponse/__init__.py` -- DeprecationWarning on
-  `import fastlisaresponse` pointing at `lisatools.response` / `gbgpu`
-  / `bbhx`. Exposes only `__version__`, `__version_tuple__`,
-  `_is_editable`, `cutils` (the docstring stub).
-- `src/fastlisaresponse/cutils/__init__.py` -- 25-line
-  retirement-notice docstring with the canonical-homes table.
-- `src/fastlisaresponse/{_version,_editable}.py` -- packaging hooks.
-- Top-level `CMakeLists.txt` (LANGUAGES NONE) + `pyproject.toml` +
-  the `src/CMakeLists.txt` chain -- enough to let `pip install`
-  produce the husk wheel.
-- Historical artifacts (tests/, README.md, examples/, docs/) kept for
-  reference until the directory itself is deleted.
-
-## Backend implementation hierarchy (sprint-wide rule)
-
-When implementing or modifying an algorithm that exists across multiple
-backends (GPU C++ / CPU C++ / JAX), follow this hierarchy:
-
-1. **GPU C++ (CUDA) leads.** This is the canonical performance target
-   and reference implementation. New algorithms and optimizations are
-   designed for the GPU first; CPU and JAX paths follow.
-
-2. **CPU C++ mirrors GPU C++ as closely as possible.** Same kernel
-   structure, same algorithm, same data flow — use `#ifdef __CUDACC__`
-   or shared compile-time macros (`CUDA_SHARED`, `THREAD_START_X`,
-   `BLOCK_INCR_X`, …) to bridge platform differences. The CPU path
-   exists primarily for testing and CPU-only environments; it must
-   not diverge in algorithm or output beyond floating-point order of
-   operations.
-
-3. **CPU C++ must reproduce the overall lisatools computation.**
-   Against the lisatools reference (e.g. `FDSignal.transform`,
-   `TDSignal.transform`, `XYZ2SensitivityMatrix`), match to machine
-   precision (≤ 1e-15 mismatch) in direct modes; cache/approximation
-   modes have documented per-feature error budgets.
-
-4. **JAX may diverge internally** — design it to be JAX-efficient.
-   JAX-CPU and JAX-GPU compilation targets may even differ. Use
-   JAX-native idioms (`jax.lax.scan`, `jax.vmap`, static-shape
-   `dynamic_slice` + masks, functional carries) rather than
-   mechanically translating CUDA shared memory / register caches.
-
-5. **JAX must match C++ inner-product outputs.** End-to-end
-   likelihood quantities (`<d|h>`, `<h|h>`, swap_ll 5 terms) must
-   match the C++ to floating-point precision (reldiff ≲ 1e-12) on
-   representative test cases. Intermediate quantities (raw templates,
-   per-chunk WDM coefficients) may differ at FP precision due to
-   summation order — validate at the inner-product level.
-
-**Workflow for a new feature.** GPU C++ → CPU C++ via `#ifdef` → JAX
-with JAX-native idioms → cross-backend inner-product validation.
-
-
-## No backend strings as function kwargs (sprint-wide rule)
-
-Backend selection MUST happen at instantiation, not in method
-signatures. Subclass :class:`FastLISAResponseParallelModule` (or
-equivalent ParallelModuleBase descendant) with ``force_backend=...``;
-all methods dispatch via ``self.backend`` / ``self.backend.xp`` /
-``self.backend.name``.
-
-- **Allowed:** ``GBWDMHeterodyne(force_backend="cpu")``,
-  ``GBFDComputations(force_backend="jax")``.
-- **Forbidden in method signatures:** ``backend="jax"``,
-  ``backend="cpp"``, ``use_cpp=True``, ``use_jax=True``.
-- Method names MAY carry a backend suffix (e.g. ``get_ll_grad_jax``)
-  when the implementation is intrinsically tied to that backend, but
-  the caller picks which method to call -- not a runtime kwarg.
-
-One instance = one backend keeps ``xp`` arrays, kernels, and dispatch
-consistent. Cross-backend usage (e.g. evaluating gradients on a CPU
-instance via a separate JAX setup) belongs to a separate instance,
-not a shared method-level flag.
-
-
-## Host→device upload of class-wrapper objects (sprint-wide rule)
-
-Pybind11 wrapper classes in this codebase (``OrbitsWrap``,
-``TDIConfigWrap``, ``WDMSettingsWrap``, ``WDMDomainWrap``,
-``FDDomainWrap``, ``AnalysisContainerArrayWrap``, …) store their
-underlying C++ instance via plain ``new`` on the **host** heap, e.g.
-
-```cpp
-class OrbitsWrap : public ReturnPointerBase {
-    Orbits *orbits;
-    OrbitsWrap(...) {
-        orbits = new Orbits(..., _ltt_arr_device_ptr, ...);
-        //       ^^^^^^^^^^ host allocation; pointer fields inside
-        //                  may already point to device memory.
-    }
-};
-```
-
-The pointer fields inside the struct (``Orbits::ltt_arr``,
-``WDMDomain::wdm_data``, ``TDIConfig::unit_starts``) are device
-pointers extracted from cupy arrays via
-``return_pointer_and_check_length``. But **the struct itself lives on
-the host**.
-
-A CUDA kernel parameter of type ``Orbits *`` therefore cannot be the
-host pointer ``orbits_wrap->orbits`` directly. Dereferencing it from
-device code (``orbits->ltt_t0``) reads garbage and triggers an illegal
-memory access -- typically with a faulting address in the canonical
-Linux PIE/heap range (``0x55555...``) and a sanitizer message of the
-form "X bytes after the nearest allocation" with a wildly OOB delta
-(tens of TB). That delta is **not** an off-by-one; it means the device
-dereferenced a host address.
-
-The required upload pattern (mirrors
-``LISAResponse.cu:419-433``):
-
-```cpp
-#ifdef __CUDACC__
-    Orbits *orbits_gpu = nullptr;
-    gpuErrchk(cudaMalloc(&orbits_gpu, sizeof(Orbits)));
-    gpuErrchk(cudaMemcpy(orbits_gpu, orbits, sizeof(Orbits),
-                         cudaMemcpyHostToDevice));
-
-    TDIConfig *tdi_config_gpu = nullptr;
-    gpuErrchk(cudaMalloc(&tdi_config_gpu, sizeof(TDIConfig)));
-    gpuErrchk(cudaMemcpy(tdi_config_gpu, tdi_config, sizeof(TDIConfig),
-                         cudaMemcpyHostToDevice));
-
-    // ...repeat for every host-side wrapper struct accessed on device:
-    //    WDMSettings, WDMDomain, FDDomain, etc.
-
-    my_kernel<<<...>>>(orbits_gpu, tdi_config_gpu, ...);
-    cudaDeviceSynchronize();
-    gpuErrchk(cudaGetLastError());
-
-    gpuErrchk(cudaFree(orbits_gpu));
-    gpuErrchk(cudaFree(tdi_config_gpu));
-#else
-    // CPU branch keeps the host pointers unchanged.
-    my_kernel(orbits, tdi_config, ...);
-#endif
-```
-
-Rules:
-
-1. **Every** struct constructed via ``new`` on the host that the kernel
-   dereferences (i.e. reads scalar fields or pointer fields off of
-   ``this``) must be copied to device with ``cudaMalloc`` +
-   ``cudaMemcpy(..., cudaMemcpyHostToDevice)`` before the kernel
-   launch.
-2. The device-side pointer fields *inside* the uploaded struct survive
-   the shallow copy; do **not** also try to upload those.
-3. Free the device-side struct copies after the kernel sync, before
-   returning.
-4. The CPU branch (``#else``) does not copy -- it passes the host
-   pointer directly into the (host-compiled) kernel.
-5. This applies to every CUDA wrapper across the sprint tree --
-   existing legacy kernels in ``LISAResponse.cu`` and ``Detector.cu``
-   already follow it; new chunked-het / chunked-FD / WDM impl
-   wrappers must do the same.
-
-When debugging an IMA whose faulting address starts with
-``0x55555...`` and whose "nearest allocation" delta is in the TB
-range, the first hypothesis should be a missing wrapper upload --
-not an indexing bug in the kernel.
-
-
-## CPU/GPU class-name aliasing (sprint-wide rule)
-
-Every C++ class that is compiled into **both** the CPU and the GPU
-shared object (one per backend wheel) MUST have a per-backend
-``#define`` alias at the top of the header that declares it, so the
-two builds emit **distinct C++ type names** for the same logical
-class. This applies to **two** layers:
-
-**(a) The pybind11 wrapper classes** -- anything passed to
-``py::class_<...>(m, "...")``. Block lives at the top of
-``src/fastlisaresponse/cutils/binding_tof.hpp``:
-
-```cpp
-#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)
-#include "pybind11_cuda_array_interface.hpp"
-#define GBTDIonTheFlyWrap         GBTDIonTheFlyWrapGPU
-#define SOBBHTDIonTheFlyWrap      SOBBHTDIonTheFlyWrapGPU
-#define FDSplineTDIWaveformWrap   FDSplineTDIWaveformWrapGPU
-#define TDSplineTDIWaveformWrap   TDSplineTDIWaveformWrapGPU
-#define WaveletLookupTableWrap    WaveletLookupTableWrapGPU
-#define WDMSettingsWrap           WDMSettingsWrapGPU
-#define WDMDomainWrap             WDMDomainWrapGPU
-#define FDDomainWrap              FDDomainWrapGPU
-#define GBComputationGroupWrap    GBComputationGroupWrapGPU
-#define SOBBHComputationGroupWrap SOBBHComputationGroupWrapGPU
-#else
-// ...CPU suffixes...
-#endif
-```
-
-**(b) The underlying C++ classes** that the wrappers hold a pointer
-to -- ``Orbits``, ``WDMSettings``, ``WDMDomain``, ``TDIConfig``,
-``GBTDIonTheFly``, ``GBComputationGroup``, etc. Same block pattern,
-at the top of each header that declares them:
-
-- ``Detector.hpp`` (in LISAanalysistools) aliases ``Orbits`` →
-  ``OrbitsGPU`` / ``OrbitsCPU``.
-- ``src/fastlisaresponse/cutils/TDIonTheFly.hh`` aliases
-  ``GBTDIonTheFly``, ``SOBBHTDIonTheFly``, ``FDSplineTDIWaveform``,
-  ``TDSplineTDIWaveform``, ``WaveletLookupTable``, ``WDMSettings``,
-  ``WDMDomain``, ``FDDomain``, ``GBComputationGroup``
-  (``SOBBHComputationGroup`` should be added when next touched).
-
-After preprocessing, the GPU build defines ``class WDMSettingsGPU``
-and the CPU build defines ``class WDMSettingsCPU``: distinct C++
-types with distinct ``typeid``s and distinct mangled symbol names.
-
-Rules:
-
-1. **Every class -- wrapper or underlying -- that ends up in both
-   shared objects must appear in the relevant header's ``#define``
-   block, with both GPU and CPU branches.** When you add a new
-   class to a backend-shared header, add it to the block in the same
-   commit.
-2. **Both branches of the ``#if/#else`` must have the same set of
-   entries.** A missing CPU- or GPU-branch entry (e.g. an alias
-   present only on the GPU side) silently produces a backend-asymmetric
-   class name, which is exactly the situation the rule prevents.
-3. The pybind11 registration line ``py::class_<FooWrap>(m, "FooWrapGPU"
-   / "FooWrapCPU")`` in the ``.cxx`` binding source must be guarded by
-   the same ``#if defined(__CUDA_COMPILATION__) || defined(__CUDACC__)``
-   toggle so the Python-visible name tracks the C++ alias.
-4. **Inheritance only works through the alias if both the base and
-   derived class names are in the ``#define`` block.** Example:
-   ``class WDMDomain : public WDMSettings`` works correctly only when
-   *both* ``WDMSettings`` and ``WDMDomain`` are aliased; otherwise the
-   GPU build links ``WDMDomainGPU`` against the (still-unaliased)
-   ``WDMSettings``, while the CPU build links ``WDMDomainCPU`` against
-   the same ``WDMSettings`` -- the base type collides across the two
-   shared objects even though the derived names differ.
-5. Plain helper structs that never escape a single translation unit
-   (e.g. a file-static ``OrbitsSplineCache``) do NOT need aliasing --
-   only types whose symbols end up in the .so's exported interface
-   (held by wrappers, referenced by pybind11, instantiated by
-   templates exported from the shared object) need it.
-
-**Rationale: ensures we do not duplicate imported symbols across the
-CPU and GPU imports.** Both backends ship as separate plugin wheels
-(``lisaanalysistools-cuda12x``, ``-cpu``, …) that load into the same
-Python interpreter. If both shared objects declare ``class
-WDMSettings``, they emit the same mangled C++ symbols and the same
-``typeid``. Effects:
-
-- pybind11's global type registry, keyed by ``typeid``, sees a
-  collision: the second registration is rejected or silently shadows
-  the first.
-- The dynamic linker may resolve one shared object's call to
-  ``WDMSettings::method`` against the *other* shared object's vtable,
-  producing wrong-arch device calls or stack corruption.
-- Inheritance edges registered with pybind11 reference the wrong
-  base typeid, breaking ``isinstance`` / downcasts at the Python
-  layer.
-
-Aliasing forces every backend-specific symbol to be distinct end to
-end, so the CPU and GPU plugin wheels are ABI-independent and
-side-loadable in the same process. This is what allows
-``has_backend("cpu")`` and ``has_backend("cuda12x")`` to both be true
-simultaneously.
+This repo has **no native code**, so the C++/CUDA conventions shared across
+LISA Analysis Tools (backend-implementation hierarchy, no-backend-strings,
+host→device wrapper upload, CPU/GPU class-name aliasing, deepcopy/pickle
+safety) do not apply here — they live in
+[`../LISAanalysistools/docs/conventions.md`](../LISAanalysistools/docs/conventions.md)
+(canonical) and govern the repos that still own native code
+(`LISAanalysistools`, `GBGPU`, `BBHx`, `GPUBackendTools`,
+`FastEMRIWaveforms`). See
+[`../LISAanalysistools/docs/architecture-map.md`](../LISAanalysistools/docs/architecture-map.md)
+for the cross-repo map.
