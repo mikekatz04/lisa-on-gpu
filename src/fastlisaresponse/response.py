@@ -687,7 +687,6 @@ class ResponseWrapper(FastLISAResponseParallelModule):
     Args:
         waveform_gen (obj): Function or class (with a :code:`__call__` function) that takes parameters and produces
             :math:`h_+ \pm h_x`.
-        Tobs (double): Observation time in years.
         dt (double): Time between time samples in seconds. The inverse of the sampling frequency.
         index_lambda (int): The user will input parameters. The code will read these in
             with the :code:`*args` formalism producing a list. :code:`index_lambda`
@@ -716,10 +715,6 @@ class ResponseWrapper(FastLISAResponseParallelModule):
         remove_garbage (bool or str, optional): If True, it removes everything before ``t_buffer``
             and after the end time - ``t_buffer``. If ``str``, it must be ``"zero"``. If ``"zero"``,
             it will not remove the points, but set them to zero. This is ideal for PE. (Default: ``True``)
-        n_overide (int, optional): If not ``None``, this will override the determination of
-            the number of points, ``n``, from ``int(T/dt)`` to the ``n_overide``. This is used
-            if there is an issue matching points between the waveform generator and the response
-            model.
         orbits (:class:`Orbits`, optional): Orbits class from LISA Analysis Tools. Works with LISA Orbits
             outputs: ``lisa-simulation.pages.in2p3.fr/orbits/``.
             (default: :class:`EqualArmlengthOrbits`)
@@ -730,7 +725,6 @@ class ResponseWrapper(FastLISAResponseParallelModule):
     def __init__(
         self,
         waveform_gen,
-        Tobs,
         dt,
         index_lambda,
         index_beta,
@@ -741,7 +735,6 @@ class ResponseWrapper(FastLISAResponseParallelModule):
         is_ecliptic_latitude=True,
         force_backend=None,
         remove_garbage=True,
-        n_overide=None,
         orbits: Optional[Orbits] = EqualArmlengthOrbits,
         **kwargs,
     ):
@@ -754,49 +747,29 @@ class ResponseWrapper(FastLISAResponseParallelModule):
         self.t0 = t0
         self.t_buffer = t_buffer
         self.sampling_frequency = 1.0 / dt
+        self.force_backend = force_backend
+        self.orbits = orbits
+        self.kwargs = kwargs
         super().__init__(force_backend=force_backend)
 
         if orbits is None:
             orbits = EqualArmlengthOrbits()
 
         assert isinstance(orbits, Orbits)
-
-        if Tobs * YRSID_SI > orbits.t_base.max():  # Tobs * YRSID_SI > (orbits.ltt_t.max() - orbits.ltt_t.min()):
-            warnings.warn(
-                f"Tobs is larger than available orbital information time array. Reducing Tobs to {orbits.t_base.max()}"
-                # f"Tobs is larger than available orbital information time array. Reducing Tobs to {orbits.ltt_t.max() - orbits.ltt_t.min()}"
-            )
-            Tobs = orbits.t_base.max() / YRSID_SI
-            # Tobs = (orbits.ltt_t.max() - orbits.ltt_t.min()) / YRSID_SI
-        if n_overide is not None:
-            if not isinstance(n_overide, int):
-                raise ValueError("n_overide must be an integer if not None.")
-            self.n = n_overide
-
-        else:
-            self.n = int(Tobs * YRSID_SI / dt)
-
-        self.Tobs = self.n * dt
+        
         self.is_ecliptic_latitude = is_ecliptic_latitude
         self.remove_sky_coords = remove_sky_coords
         self.flip_hx = flip_hx
         self.remove_garbage = remove_garbage
-
-        # initialize response function class
-        self.response_model = pyResponseTDI(
-            self.sampling_frequency, self.n, orbits=orbits, force_backend=force_backend, **kwargs
-        )
-
-        self.Tobs = (self.n * self.response_model.dt) / YRSID_SI
-
+    
     @property
     def xp(self) -> object:
         return self.backend.xp
-
+    
     @property
     def citation(self):
         """Get citations for use of this code"""
-
+    
         return """
         # TODO add
         """
@@ -804,7 +777,7 @@ class ResponseWrapper(FastLISAResponseParallelModule):
     @classmethod
     def supported_backends(cls):
         return ["fastlisaresponse_" + _tmp for _tmp in cls.GPU_RECOMMENDED()]
-
+    
     def __call__(self, *args, **kwargs):
         """Run the waveform and response generation
 
@@ -817,47 +790,57 @@ class ResponseWrapper(FastLISAResponseParallelModule):
             list: TDI Channels.
 
         """
-
+        
         args = list(args)
-
+        
         # get sky coords
         beta = args[self.index_beta]
         lam = args[self.index_lambda]
-
+        
         # remove them from the list if waveform generator does not take them
         if self.remove_sky_coords:
             args.pop(self.index_beta)
             args.pop(self.index_lambda)
-
+        
         # transform polar angle
         if not self.is_ecliptic_latitude:
             beta = np.pi / 2.0 - beta
-
-        # add the new Tobs and dt info to the waveform generator kwargs
-        kwargs["T"] = self.Tobs
-        kwargs["dt"] = self.dt
-
+        
         # get the waveform
         h = self.waveform_gen(*args, **kwargs)
-
+        
         if self.flip_hx:
             h = h.real - 1j * h.imag
-
+        
+        # check length of h and slice if necessary
+        if len(h) * self.dt > self.orbits.t_base.max():
+            self.n = int(self.orbits.t_base.max() / self.dt)
+            h = h[:self.n]
+            warnings.warn(
+                f"Tobs is larger than available orbital information time array. Reducing Tobs to {self.n * self.dt} s."
+            )
+        else:
+            self.n = len(h)
+        
+        # update reseponse model as needed if not instantiated or len(h) is different
+        if (not hasattr(self, "response_model")) or self.response_model.num_pts != self.n:  # shout out to short-circuit evaluation
+            self.response_model = pyResponseTDI(self.sampling_frequency, self.n, orbits = self.orbits, force_backend = self.force_backend, **self.kwargs)
+        
         self.response_model.get_projections(h, lam, beta, t0=self.t0, t_buffer=self.t_buffer)
         tdi_out = self.response_model.get_tdi_delays()  # will take care of t0 automatically to match projections
-
+        
         out = list(tdi_out)
         if self.remove_garbage is True:  # bool
             for i in range(len(out)):
                 out[i] = out[i][
                     self.response_model.tdi_start_ind : -self.response_model.tdi_start_ind
                 ]
-
+        
         elif isinstance(self.remove_garbage, str):  # bool
             if self.remove_garbage != "zero":
                 raise ValueError("remove_garbage must be True, False, or 'zero'.")
             for i in range(len(out)):
                 out[i][: self.response_model.tdi_start_ind] = 0.0
                 out[i][-self.response_model.tdi_start_ind :] = 0.0
-
+        
         return out
