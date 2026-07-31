@@ -815,7 +815,7 @@ class ResponseWrapper(FastLISAResponseParallelModule):
         # check length of h and slice if necessary
         if len(h) * self.dt > self.orbits.t_base.max():
             self.n = int(self.orbits.t_base.max() / self.dt)
-            h = h[:self.n]
+            h = h[len(h) - self.n:]
             warnings.warn(
                 f"Tobs is larger than available orbital information time array. Reducing Tobs to {self.n * self.dt} s."
             )
